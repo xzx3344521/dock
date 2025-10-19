@@ -19,3 +19,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/ru)
 ```
+nginx
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/nginx)
+```
