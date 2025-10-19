@@ -18,5 +18,5 @@ services:
 
 " > "$file_path"
 sleep 1
-docker compose -p my_rustdesk_project -f /boot/脚本/ru.yaml up -d
+docker compose -p nginx -f /boot/脚本/ru.yaml up -d
 echo "端口81"
