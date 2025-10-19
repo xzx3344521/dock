@@ -42,9 +42,9 @@ while true; do
     if docker ps | grep -q "my_rustdesk_project-rustdesk-1"; then
        
         docker exec -it my_rustdesk_project-rustdesk-1 sh -c './apimain reset-admin-pwd 3459635287'
-        stdbuf -oL sudo ip -4 addr show scope global | grep -oP 'inet \K[\d.]+' | head -n 1 | sed 's/^/访问地址: /;s/$/:21114/' | tr -d '\r'
-        echo "RustDesk管理员账号: admin"
-        echo "RustDesk管理员密码: 3459635287"
+        stdbuf -oL sudo ip -4 addr show scope global | grep -oP 'inet \K[\d.]+' | head -n 1 | sed 's/^/访问地址: \033[32m/;s/$/\033[0m:21114/' | tr -d '\r'
+        echo -e "\033[32mRustDesk管理员账号: admin\033[0m"
+        echo -e "\033[32mRustDesk管理员密码: 3459635287\033[0m"
         break
     else
         sleep 1
