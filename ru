@@ -1,5 +1,5 @@
 #!/bin/bash
-file_path="/boot/脚本/1.yaml"
+file_path="/boot/ru.yaml"
 echo "# 方便检查的备注
 #./apimain reset-admin-pwd <pwd>
 networks:
@@ -17,7 +17,7 @@ services:
       - 21119:21119
     image: lejianwen/rustdesk-server-s6:latest
     environment:
-      - RELAY=<relay_server[:port]>
+      - RELAY=127.0.0.1
       - ENCRYPTED_ONLY=1
       - MUST_LOGIN=y
       - TZ=Asia/Shanghai
@@ -25,7 +25,7 @@ services:
       - RUSTDESK_API_RUSTDESK_RELAY_SERVER=127.0.0.1:21117
       - RUSTDESK_API_RUSTDESK_API_SERVER=http://127.0.0.1:21114
       - RUSTDESK_API_KEY_FILE=/data/id_ed25519.pub
-      - RUSTDESK_API_JWT_KEY=xxx3344 # jwt key
+      - RUSTDESK_API_JWT_KEY=xxx23344 # jwt key
     volumes:
       - /data/rustdesk/server:/data
       - /data/rustdesk/api:/app/data #将数据库挂载
@@ -36,4 +36,4 @@ services:
 
 " > "$file_path"
 sleep 1
-docker compose -p my_rustdesk_project -f /boot/脚本/1.yaml up -d
+docker compose -p my_rustdesk_project -f /boot/1.yaml up -d
