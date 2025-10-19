@@ -1,0 +1,21 @@
+sudo mkdir -p /data
+sudo mkdir -p /boot/脚本
+file_path="/boot/脚本/ru.yaml"
+echo "# 方便检查的备注
+services:
+  app:
+    image: 'docker.io/jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+      #Email:    admin@example.com
+#Password: changeme     http://127.0.0.1:81
+
+" > "$file_path"
+sleep 1
+docker compose -p my_rustdesk_project -f /boot/脚本/ru.yaml up -d
