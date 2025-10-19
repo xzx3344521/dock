@@ -15,3 +15,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/1.sh)
 ```
+一键配置rustdesk
+```
+https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/ru
+```
