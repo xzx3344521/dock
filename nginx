@@ -20,6 +20,6 @@ services:
 sleep 1
 docker compose -p nginx -f /boot/脚本/ru.yaml up -d
 sleep 2
-echo "端口81"
+echo "端口81             初始账号：admin@example.com          初始密码：changeme"
 echo "初始账号：admin@example.com"
 echo "初始密码：changeme"
