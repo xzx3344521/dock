@@ -1,3 +1,7 @@
+#!/bin/bash
+sudo mkdir -p /data
+sudo mkdir -p /boot/脚本
+file_path="/boot/脚本/nginx.yaml"
 services:
   app:
     image: 'docker.io/jc21/nginx-proxy-manager:latest'
@@ -12,4 +16,7 @@ services:
       #Email:    admin@example.com
 #Password: changeme     http://127.0.0.1:81
 
+" > "$file_path"
+sleep 1
+docker compose -p my_rustdesk_project -f /boot/脚本/nginx.yaml up -d
 echo "$端口81"
