@@ -19,13 +19,13 @@ services:
       - 21119:21119
     image: lejianwen/rustdesk-server-s6:latest
     environment:
-      - RELAY=<relay_server[:port]>
+      - RELAY=154.82.137.207
       - ENCRYPTED_ONLY=1
       - MUST_LOGIN=y
       - TZ=Asia/Shanghai
-      - RUSTDESK_API_RUSTDESK_ID_SERVER=127.0.0.1:21116
-      - RUSTDESK_API_RUSTDESK_RELAY_SERVER=127.0.0.1:21117
-      - RUSTDESK_API_RUSTDESK_API_SERVER=http://127.0.0.1:21114
+      - RUSTDESK_API_RUSTDESK_ID_SERVER=154.82.137.207:21116
+      - RUSTDESK_API_RUSTDESK_RELAY_SERVER=154.82.137.207:21117
+      - RUSTDESK_API_RUSTDESK_API_SERVER=http://154.82.137.207:21114
       - RUSTDESK_API_KEY_FILE=/data/id_ed25519.pub
       - RUSTDESK_API_JWT_KEY=xxx23344 # jwt key
     volumes:
