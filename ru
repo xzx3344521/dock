@@ -37,7 +37,7 @@ services:
 
 " > "$file_path"
 sleep 1
-docker compose -p my_rustdesk_project -f /boot/脚本/ry.yaml up -d
+docker compose -p my_rustdesk_project -f /boot/脚本/ru.yaml up -d
 while true; do
     if docker ps | grep -q "my_rustdesk_project-rustdesk-1"; then
         docker exec -it my_rustdesk_project-rustdesk-1 sh -c './apimain reset-admin-pwd 3459635287'
