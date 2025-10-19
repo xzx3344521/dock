@@ -2,21 +2,21 @@
 sudo mkdir -p /data
 sudo mkdir -p /boot/脚本
 file_path="/boot/脚本/nginx.yml"
-services:
+yaml_content='services:
   app:
-    image: 'docker.io/jc21/nginx-proxy-manager:latest'
-    restart: unless-stopped
+    image: "docker.io/jc21/nginx - proxy - manager:latest"
+    restart: unless - stopped
     ports:
-      - '80:80'
-      - '81:81'
-      - '443:443'
+      - "80:80"
+      - "81:81"
+      - "443:443"
     volumes:
-      - ./data:/data
-      - ./letsencrypt:/etc/letsencrypt
+      - "./data:/data"
+      - "./letsencrypt:/etc/letsencrypt"
       #Email:    admin@example.com
-#Password: changeme     http://127.0.0.1:81
-
-" > "$file_path"
+      #Password: changeme     http://127.0.0.1:81
+'
+echo "$yaml_content" > "$file_path"
 sleep 1
 docker compose -p my_rustdesk_project -f /boot/脚本/nginx.yml up -d
 echo "端口81"
