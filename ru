@@ -37,12 +37,12 @@ services:
 
 " > "$file_path"
 sleep 1
+ip=$(ip -4 addr show scope global | grep -oP 'inet \K[\d.]+' | head -n 1)
+        printf "访问地址: %s:3344\n" "$ip"
 docker compose -p my_rustdesk_project -f /boot/脚本/ru.yaml up -d
 while true; do
     if docker ps | grep -q "my_rustdesk_project-rustdesk-1"; then
-        ip=$(ip -4 addr show scope global | grep -oP 'inet \K[\d.]+' | head -n 1)
-        printf "访问地址: %s:3344\n" "$ip"
-        rintf "访问地址: %s:21114\n" "$ip"
+       
         docker exec -it my_rustdesk_project-rustdesk-1 sh -c './apimain reset-admin-pwd 3459635287'
         
         echo "RustDesk管理员账号: admin"
