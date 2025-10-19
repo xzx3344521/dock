@@ -19,7 +19,7 @@ services:
       - 21119:21119
     image: lejianwen/rustdesk-server-s6:latest
     environment:
-      - RELAY=127.0.0.1
+      - RELAY=<relay_server[:port]>
       - ENCRYPTED_ONLY=1
       - MUST_LOGIN=y
       - TZ=Asia/Shanghai
