@@ -1,6 +1,6 @@
 #!/bin/bash
-mkdir -p /data
-mkdir -p /boot/脚本
+sudo mkdir -p /data
+sudo mkdir -p /boot/脚本
 file_path="/boot/脚本/ru.yaml"
 echo "# 方便检查的备注
 #./apimain reset-admin-pwd <pwd>
