@@ -23,3 +23,7 @@ nginx
 ```
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/nginx)
 ```
+GitHub 文件加速
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/ghproxy)
+```
