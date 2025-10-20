@@ -1,0 +1,18 @@
+sudo mkdir -p /data
+sudo mkdir -p /boot/脚本
+file_path="/boot/脚本/ghproxy.yaml"
+echo "# 方便检查的备注
+version: '3.9'
+services:
+    ghproxy:
+        image: 'wjqserver/ghproxy:latest'
+        restart: always
+        volumes:
+            - './ghproxy/log:/data/ghproxy/log'
+            - './ghproxy/config:/data/ghproxy/config'
+        ports:
+            - '7210:8080'
+" > "$file_path"
+sleep 1
+docker compose -f /boot/脚本/ghproxy.yaml up -d
+echo -e "\033[32m  7210   \033[0m"
