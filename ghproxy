@@ -1,16 +1,43 @@
-file_path="/boot/脚本/ghproxy.yaml"  # 路径中去掉空格，避免解析错误
-# 写入配置文件（YAML严格缩进，避免多余空格）
-echo 'version: "3.9"  # 版本号用双引号，符合YAML字符串规范
+#!/bin/bash
+
+# 固定路径（不允许修改）
+yaml_path="/boot/脚本/ghproxy.yaml"
+
+# 定义默认值（强制兜底，确保不为空）
+default_project="ghproxy"
+default_port="7210"
+
+# 读取用户输入
+read -p "请输入项目名称（默认: $default_project）: " input_project
+read -p "请输入映射端口（默认: $default_port）: " input_port
+
+# 处理输入：空值/纯空格则用默认值（关键优化）
+project_name=$(echo "$input_project" | xargs)  # 去除首尾空格
+project_name=${project_name:-$default_project}  # 若为空则用默认值
+
+port=$(echo "$input_port" | xargs)
+port=${port:-$default_port}
+
+# 再次强制校验项目名（确保绝对不为空）
+if [ -z "$project_name" ]; then
+    project_name="$default_project"
+    echo "警告：项目名不能为空，已自动使用默认值 '$default_project'"
+fi
+
+# 写入配置文件
+echo "version: '3.9'
 services:
-  ghproxy:  # 缩进统一为2空格，更规范
-    image: wjqserver/ghproxy:latest  # 镜像名可省略引号（无特殊字符时）
-    restart: always  # 容器退出自动重启
+  $project_name:
+    image: wjqserver/ghproxy:latest
+    restart: always
     volumes:
-      - ./ghproxy/log:/data/ghproxy/log  # 本地路径可省略引号
+      - ./ghproxy/log:/data/ghproxy/log
       - ./ghproxy/config:/data/ghproxy/config
     ports:
-      - "7210:8080"  # 端口映射用双引号，避免YAML解析歧义
-' > "$file_path"
+      - \"$port:8080\"
+" > "$yaml_path"
 
-# 启动服务（使用变量引用路径，避免硬编码和空格问题）
-docker compose -f "$file_path" up -d
+# 启动服务
+docker compose -p "$project_name" -f "$yaml_path" up -d
+
+echo "服务启动成功！项目名: $project_name，端口: $port，配置路径: $yaml_path"
