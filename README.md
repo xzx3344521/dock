@@ -29,5 +29,5 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 # Docker容器管理面板
 ```
-bash <(curl -sSLhttps://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/Docker%E5%AE%B9%E5%99%A8%E7%AE%A1%E7%90%86%E9%9D%A2%E6%9D%BF)
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/Docker%E5%AE%B9%E5%99%A8%E7%AE%A1%E7%90%86%E9%9D%A2%E6%9D%BF)
 ```
