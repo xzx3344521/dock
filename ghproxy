@@ -14,7 +14,7 @@ services:
             - '7210:8080'
 
 " > "$file_path"
-docker compose -p my_rustdesk_project -f /boot/脚本/ ghproxy.yaml up -d
+docker compose -f /boot/脚本/ ghproxy.yaml up -d
 
 # 输出成功信息
 echo -e "\033[32m 服务启动成功！GHProxy 监听端口：7210 \033[0m"
