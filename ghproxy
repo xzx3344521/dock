@@ -1,46 +1,20 @@
-bash -c "$(echo '
-#!/bin/bash
+sudo mkdir -p /data
+sudo mkdir -p /boot/脚本
+file_path="/boot/脚本/ ghproxy.yaml"
 
-# 创建数据目录和脚本目录（添加容错判断）
-sudo mkdir -p /data || { echo "创建/data目录失败"; exit 1; }
-sudo mkdir -p /boot/脚本 || { echo "创建/boot/脚本目录失败"; exit 1; }
-
-# 定义配置文件路径
-yaml_file="/boot/脚本/ghproxy.yaml"
-
-# 备份现有文件（若存在）
-if [ -f "$yaml_file" ]; then
-    sudo cp "$yaml_file" "${yaml_file}.bak-$(date +%Y%m%d%H%M%S)" || { echo "备份现有文件失败"; exit 1; }
-fi
-
-# 写入配置内容
-sudo tee "$yaml_file" > /dev/null <<EOF
-# GHProxy 配置文件（GitHub 代理服务）
-# 版本：v3.9
 version: '3.9'
 services:
-  ghproxy:
-    image: 'wjqserver/ghproxy:latest'
-    restart: always
-    volumes:
-      - './ghproxy/log:/data/ghproxy/log'
-      - './ghproxy/config:/data/ghproxy/config'
-    ports:
-      - '7210:8080'
-EOF
+    ghproxy:
+        image: 'wjqserver/ghproxy:latest'
+        restart: always
+        volumes:
+            - './ghproxy/log:/data/ghproxy/log'
+            - './ghproxy/config:/data/ghproxy/config'
+        ports:
+            - '7210:8080'
 
-# 检查配置文件是否生成
-if [ ! -f "$yaml_file" ]; then
-    echo -e "\033[31m 配置文件创建失败，请检查权限 \033[0m"
-    exit 1
-fi
-
-# 启动服务
-echo "正在启动 ghproxy 服务..."
-sudo docker compose -f "$yaml_file" up -d || {
-    echo -e "\033[31m 服务启动失败，请检查配置文件 \033[0m"
-    exit 1
-}
+" > "$file_path"
+docker compose -p my_rustdesk_project -f /boot/脚本/ ghproxy.yaml up -d
 
 # 输出成功信息
 echo -e "\033[32m 服务启动成功！GHProxy 监听端口：7210 \033[0m"
