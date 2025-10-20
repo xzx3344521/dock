@@ -18,7 +18,7 @@ docker stop $CONTAINER_NAME 2>/dev/null || true
 docker rm $CONTAINER_NAME 2>/dev/null || true
 
 # 交互式配置
-read -p "请输入 HTTP 端口 (默认: 80): " custom_port
+read -p "请输入 HTTP 端口 (默认: 801): " custom_port
 if [ -n "$custom_port" ]; then
     HTTP_PORT=$custom_port
 fi
