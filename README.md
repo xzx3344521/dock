@@ -31,3 +31,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/Docker%E5%AE%B9%E5%99%A8%E7%AE%A1%E7%90%86%E9%9D%A2%E6%9D%BF)
 ```
+# 测速软件
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E6%B5%8B%E9%80%9F%E8%BD%AF%E4%BB%B6)
+```
+
