@@ -39,4 +39,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%85%B3%E9%97%AD%E9%98%B2%E7%81%AB%E5%A2%99de12)
 ```
-
+# 实时 history 监控
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7)
+```
