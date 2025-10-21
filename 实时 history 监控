@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 优化版实时命令监控脚本 - 中文显示 + 多IP查询源
-# 版本: 3.3
+# 版本: 3.4
 
 set -e
 
@@ -14,12 +14,6 @@ MEMORY_LIMIT="512M"
 CHECK_INTERVAL=300
 BACKUP_DAYS=7
 CLEANUP_INTERVAL=3600
-
-### IP地理位置配置 - 多个备用源 ###
-IP_API_SERVICES=("ipapi" "ipapi.co" "ipinfo.io" "ip-api.com" "whois.pconline.com.cn")
-CACHE_IP_INFO=true
-IP_CACHE_FILE="/tmp/ip_geo_cache.txt"
-CACHE_EXPIRE=86400
 
 ### 颜色定义 ###
 RED='\033[0;31m'
@@ -36,6 +30,7 @@ MONITOR_PID=""
 LAST_CLEANUP=0
 LAST_ROTATION=0
 CURRENT_LOG=""
+LATEST_LOG=""
 DAEMON_MODE=false
 
 # 获取时间戳
@@ -64,128 +59,180 @@ log_message() {
     fi
 }
 
-# 英文转中文函数
+# 英文转中文函数（修复语法错误）
 english_to_chinese() {
     local text="$1"
-    text=$(echo "$text" | sed \
-        -e 's/China/中国/g' \
-        -e 's/United States/美国/g' \
-        -e 's/Japan/日本/g' \
-        -e 's/Korea/韩国/g' \
-        -e 's/Russia/俄罗斯/g' \
-        -e 's/Germany/德国/g' \
-        -e 's/France/法国/g' \
-        -e 's/UK/英国/g' \
-        -e 's/Canada/加拿大/g' \
-        -e 's/Australia/澳大利亚/g' \
-        -e 's/Brazil/巴西/g' \
-        -e 's/India/印度/g' \
-        -e 's/Beijing/北京/g' \
-        -e 's/Shanghai/上海/g' \
-        -e 's/Guangzhou/广州/g' \
-        -e 's/Shenzhen/深圳/g' \
-        -e 's/Hangzhou/杭州/g' \
-        -e 's/Nanjing/南京/g' \
-        -e 's/Wuhan/武汉/g' \
-        -e 's/Chengdu/成都/g' \
-        -e 's/Xi'an/西安/g' \
-        -e 's/Chongqing/重庆/g' \
-        -e 's/Tianjin/天津/g' \
-        -e 's/Suzhou/苏州/g' \
-        -e 's/Zhengzhou/郑州/g' \
-        -e 's/Changsha/长沙/g' \
-        -e 's/Hefei/合肥/g' \
-        -e 's/Nanchang/南昌/g' \
-        -e 's/Fuzhou/福州/g' \
-        -e 's/Jinan/济南/g' \
-        -e 's/Taiyuan/太原/g' \
-        -e 's/Hohhot/呼和浩特/g' \
-        -e 's/Shijiazhuang/石家庄/g' \
-        -e 's/Harbin/哈尔滨/g' \
-        -e 's/Changchun/长春/g' \
-        -e 's/Jilin/吉林/g' \
-        -e 's/Dalian/大连/g' \
-        -e 's/Qingdao/青岛/g' \
-        -e 's/Ningbo/宁波/g' \
-        -e 's/Xiamen/厦门/g' \
-        -e 's/Kunming/昆明/g' \
-        -e 's/Guiyang/贵阳/g' \
-        -e 's/Nanning/南宁/g' \
-        -e 's/Haikou/海口/g' \
-        -e 's/Urumqi/乌鲁木齐/g' \
-        -e 's/Lanzhou/兰州/g' \
-        -e 's/Xining/西宁/g' \
-        -e 's/Yinchuan/银川/g' \
-        -e 's/Lhasa/拉萨/g' \
-        -e 's/Hong Kong/香港/g' \
-        -e 's/Macau/澳门/g' \
-        -e 's/Taiwan/台湾/g' \
-        -e 's/Jiangxi/江西/g' \
-        -e 's/Zhejiang/浙江/g' \
-        -e 's/Jiangsu/江苏/g' \
-        -e 's/Guangdong/广东/g' \
-        -e 's/Fujian/福建/g' \
-        -e 's/Hunan/湖南/g' \
-        -e 's/Hubei/湖北/g' \
-        -e 's/Henan/河南/g' \
-        -e 's/Hebei/河北/g' \
-        -e 's/Shandong/山东/g' \
-        -e 's/Shanxi/山西/g' \
-        -e 's/Shaanxi/陕西/g' \
-        -e 's/Sichuan/四川/g' \
-        -e 's/Yunnan/云南/g' \
-        -e 's/Guizhou/贵州/g' \
-        -e 's/Liaoning/辽宁/g' \
-        -e 's/Jilin/吉林/g' \
-        -e 's/Heilongjiang/黑龙江/g' \
-        -e 's/Anhui/安徽/g' \
-        -e 's/Gansu/甘肃/g' \
-        -e 's/Qinghai/青海/g' \
-        -e 's/Telecom/电信/g' \
-        -e 's/Unicom/联通/g' \
-        -e 's/Mobile/移动/g' \
-        -e 's/Network/网络/g' \
-        -e 's/Communications/通信/g' \
-        -e 's/Company/公司/g' \
-        -e 's/Corporation/集团/g' \
-        -e 's/Limited/有限公司/g' \
-        -e 's/CHINA169/中国联通/g' \
-        -e 's/ChinaNet/中国电信/g' \
-        -e 's/CMNET/中国移动/g')
+    # 使用多个sed命令避免语法错误
+    text=$(echo "$text" | sed 's/China/中国/g')
+    text=$(echo "$text" | sed 's/United States/美国/g')
+    text=$(echo "$text" | sed 's/Japan/日本/g')
+    text=$(echo "$text" | sed 's/Korea/韩国/g')
+    text=$(echo "$text" | sed 's/Russia/俄罗斯/g')
+    text=$(echo "$text" | sed 's/Germany/德国/g')
+    text=$(echo "$text" | sed 's/France/法国/g')
+    text=$(echo "$text" | sed 's/UK/英国/g')
+    text=$(echo "$text" | sed 's/Canada/加拿大/g')
+    text=$(echo "$text" | sed 's/Australia/澳大利亚/g')
+    text=$(echo "$text" | sed 's/Brazil/巴西/g')
+    text=$(echo "$text" | sed 's/India/印度/g')
+    text=$(echo "$text" | sed 's/Beijing/北京/g')
+    text=$(echo "$text" | sed 's/Shanghai/上海/g')
+    text=$(echo "$text" | sed 's/Guangzhou/广州/g')
+    text=$(echo "$text" | sed 's/Shenzhen/深圳/g')
+    text=$(echo "$text" | sed 's/Hangzhou/杭州/g')
+    text=$(echo "$text" | sed 's/Nanjing/南京/g')
+    text=$(echo "$text" | sed 's/Wuhan/武汉/g')
+    text=$(echo "$text" | sed 's/Chengdu/成都/g')
+    text=$(echo "$text" | sed 's/Xi'"'"'an/西安/g')
+    text=$(echo "$text" | sed 's/Chongqing/重庆/g')
+    text=$(echo "$text" | sed 's/Tianjin/天津/g')
+    text=$(echo "$text" | sed 's/Suzhou/苏州/g')
+    text=$(echo "$text" | sed 's/Zhengzhou/郑州/g')
+    text=$(echo "$text" | sed 's/Changsha/长沙/g')
+    text=$(echo "$text" | sed 's/Hefei/合肥/g')
+    text=$(echo "$text" | sed 's/Nanchang/南昌/g')
+    text=$(echo "$text" | sed 's/Fuzhou/福州/g')
+    text=$(echo "$text" | sed 's/Jinan/济南/g')
+    text=$(echo "$text" | sed 's/Taiyuan/太原/g')
+    text=$(echo "$text" | sed 's/Hohhot/呼和浩特/g')
+    text=$(echo "$text" | sed 's/Shijiazhuang/石家庄/g')
+    text=$(echo "$text" | sed 's/Harbin/哈尔滨/g')
+    text=$(echo "$text" | sed 's/Changchun/长春/g')
+    text=$(echo "$text" | sed 's/Dalian/大连/g')
+    text=$(echo "$text" | sed 's/Qingdao/青岛/g')
+    text=$(echo "$text" | sed 's/Ningbo/宁波/g')
+    text=$(echo "$text" | sed 's/Xiamen/厦门/g')
+    text=$(echo "$text" | sed 's/Kunming/昆明/g')
+    text=$(echo "$text" | sed 's/Guiyang/贵阳/g')
+    text=$(echo "$text" | sed 's/Nanning/南宁/g')
+    text=$(echo "$text" | sed 's/Haikou/海口/g')
+    text=$(echo "$text" | sed 's/Urumqi/乌鲁木齐/g')
+    text=$(echo "$text" | sed 's/Lanzhou/兰州/g')
+    text=$(echo "$text" | sed 's/Xining/西宁/g')
+    text=$(echo "$text" | sed 's/Yinchuan/银川/g')
+    text=$(echo "$text" | sed 's/Lhasa/拉萨/g')
+    text=$(echo "$text" | sed 's/Hong Kong/香港/g')
+    text=$(echo "$text" | sed 's/Macau/澳门/g')
+    text=$(echo "$text" | sed 's/Taiwan/台湾/g')
+    text=$(echo "$text" | sed 's/Jiangxi/江西/g')
+    text=$(echo "$text" | sed 's/Zhejiang/浙江/g')
+    text=$(echo "$text" | sed 's/Jiangsu/江苏/g')
+    text=$(echo "$text" | sed 's/Guangdong/广东/g')
+    text=$(echo "$text" | sed 's/Fujian/福建/g')
+    text=$(echo "$text" | sed 's/Hunan/湖南/g')
+    text=$(echo "$text" | sed 's/Hubei/湖北/g')
+    text=$(echo "$text" | sed 's/Henan/河南/g')
+    text=$(echo "$text" | sed 's/Hebei/河北/g')
+    text=$(echo "$text" | sed 's/Shandong/山东/g')
+    text=$(echo "$text" | sed 's/Shanxi/山西/g')
+    text=$(echo "$text" | sed 's/Shaanxi/陕西/g')
+    text=$(echo "$text" | sed 's/Sichuan/四川/g')
+    text=$(echo "$text" | sed 's/Yunnan/云南/g')
+    text=$(echo "$text" | sed 's/Guizhou/贵州/g')
+    text=$(echo "$text" | sed 's/Liaoning/辽宁/g')
+    text=$(echo "$text" | sed 's/Jilin/吉林/g')
+    text=$(echo "$text" | sed 's/Heilongjiang/黑龙江/g')
+    text=$(echo "$text" | sed 's/Anhui/安徽/g')
+    text=$(echo "$text" | sed 's/Gansu/甘肃/g')
+    text=$(echo "$text" | sed 's/Qinghai/青海/g')
+    text=$(echo "$text" | sed 's/Telecom/电信/g')
+    text=$(echo "$text" | sed 's/Unicom/联通/g')
+    text=$(echo "$text" | sed 's/Mobile/移动/g')
+    text=$(echo "$text" | sed 's/Network/网络/g')
+    text=$(echo "$text" | sed 's/Communications/通信/g')
+    text=$(echo "$text" | sed 's/Company/公司/g')
+    text=$(echo "$text" | sed 's/Corporation/集团/g')
+    text=$(echo "$text" | sed 's/Limited/有限公司/g')
+    text=$(echo "$text" | sed 's/CHINA169/中国联通/g')
+    text=$(echo "$text" | sed 's/ChinaNet/中国电信/g')
+    text=$(echo "$text" | sed 's/CMNET/中国移动/g')
     
     echo "$text"
 }
 
-# 获取IP地理位置
-get_ip_location() {
+# 在线IP地理位置查询
+get_ip_location_online() {
     local ip="$1"
     local location_info=""
+    
+    # 方法1: ip-api.com (国际)
+    location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp" 2>/dev/null || true)
+    if [ -n "$location_info" ] && echo "$location_info" | grep -q '"status":"success"'; then
+        local country=$(echo "$location_info" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
+        local region=$(echo "$location_info" | grep -o '"regionName":"[^"]*"' | cut -d'"' -f4)
+        local city=$(echo "$location_info" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
+        local isp=$(echo "$location_info" | grep -o '"isp":"[^"]*"' | cut -d'"' -f4)
+        
+        if [ -n "$country" ]; then
+            local result="$country"
+            [ -n "$region" ] && result="$result-$region"
+            [ -n "$city" ] && result="$result-$city"
+            [ -n "$isp" ] && result="$result($isp)"
+            echo "$result"
+            return 0
+        fi
+    fi
+    
+    # 方法2: 国内IP查询接口
+    location_info=$(curl -s -m 3 "https://whois.pconline.com.cn/ipJson.jsp?ip=$ip&json=true" 2>/dev/null || true)
+    if [ -n "$location_info" ]; then
+        local addr=$(echo "$location_info" | grep -o '"addr":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$addr" ] && [ "$addr" != "保留地址" ]; then
+            echo "$addr"
+            return 0
+        fi
+    fi
+    
+    # 方法3: ipapi.co
+    location_info=$(curl -s -m 3 "https://ipapi.co/$ip/json/" 2>/dev/null || true)
+    if [ -n "$location_info" ]; then
+        local country=$(echo "$location_info" | grep -o '"country_name":"[^"]*"' | cut -d'"' -f4)
+        local region=$(echo "$location_info" | grep -o '"region":"[^"]*"' | cut -d'"' -f4)
+        local city=$(echo "$location_info" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
+        local isp=$(echo "$location_info" | grep -o '"org":"[^"]*"' | cut -d'"' -f4)
+        
+        if [ -n "$country" ]; then
+            local result="$country"
+            [ -n "$region" ] && result="$result-$region"
+            [ -n "$city" ] && result="$result-$city"
+            [ -n "$isp" ] && result="$result($isp)"
+            echo "$result"
+            return 0
+        fi
+    fi
+    
+    return 1
+}
 
+# 主IP地理位置查询函数
+get_ip_location() {
+    local ip="$1"
+    
+    # 检查内网IP
+    if [[ "$ip" == "192.168."* ]] || [[ "$ip" == "10."* ]] || [[ "$ip" == "172."* ]]; then
+        echo "内网IP"
+        return 0
+    fi
+    
     if [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]] || [[ "$ip" == "unknown" ]]; then
         echo "本机"
         return 0
     fi
-
-    # 查询缓存
-    if [ "$CACHE_IP_INFO" = true ] && [ -f "$IP_CACHE_FILE" ]; then
-        location_info=$(grep "^$ip|" "$IP_CACHE_FILE" | head -1 | cut -d'|' -f3-)
-        if [ -n "$location_info" ]; then
-            echo "$location_info"
-            return 0
-        fi
+    
+    # 在线查询
+    local location_info=""
+    if command -v curl &> /dev/null; then
+        location_info=$(get_ip_location_online "$ip")
     fi
-
-    # 查询在线API
-    location_info=$(get_ip_location_online "$ip")
-    if [ -z "$location_info" ]; then
+    
+    # 如果查询失败，使用简单判断
+    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
         location_info="未知位置"
     fi
-
-    # 缓存结果
-    if [ "$CACHE_IP_INFO" = true ]; then
-        echo "$ip|$(date +%s)|$location_info" >> "$IP_CACHE_FILE"
-    fi
-
+    
+    # 转换为中文
+    location_info=$(english_to_chinese "$location_info")
+    
     echo "$location_info"
 }
 
@@ -199,6 +246,9 @@ get_client_ip() {
         ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
     else
         ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
+        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
+            ip="localhost"
+        fi
     fi
     
     echo "$ip"
@@ -207,52 +257,300 @@ get_client_ip() {
 # 初始化日志系统
 init_log_system() {
     mkdir -p "$LOG_DIR"
-    CURRENT_LOG="$LOG_DIR/monitor_$(date '+%Y%m%d_%H%M%S').log"
+    
+    local client_ip=$(get_client_ip | sed 's/\./_/g')
+    local log_date=$(date '+%Y%m%d_%H%M%S')
+    CURRENT_LOG="$LOG_DIR/monitor_${client_ip}_${log_date}.log"
+    LATEST_LOG="$LOG_DIR/latest.log"
+    
+    ln -sf "$CURRENT_LOG" "$LATEST_LOG" 2>/dev/null || true
+    
     log_message "INFO" "监控脚本启动 - PID: $$"
+    
+    local client_ip_original=$(get_client_ip)
+    log_message "INFO" "客户端IP: $client_ip_original"
+    
+    local location_info=$(get_ip_location "$client_ip_original")
+    log_message "INFO" "地理位置: $location_info"
+    log_message "INFO" "日志文件: $CURRENT_LOG"
 }
 
-# 后台监控启动
-start_background_monitor() {
-    log_message "INFO" "启动后台监控进程..."
-    # 启动日志监控进程
-    monitor_resources &
-    # 启动命令监控
-    start_main_monitor
-}
+# 配置实时history记录
+configure_realtime_history() {
+    log_message "INFO" "配置实时命令记录..."
+    
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            local user=$(basename "$user_dir")
+            local bashrc="$user_dir/.bashrc"
+            
+            if [ -f "$bashrc" ] && ! grep -q "REAL_TIME_HISTORY" "$bashrc"; then
+                cat >> "$bashrc" << 'EOF'
 
-# 启动命令监控
-start_main_monitor() {
-    log_message "INFO" "命令监控启动..."
-    while true; do
-        sleep 1
-        local ip=$(get_client_ip)
-        local location_info=$(get_ip_location "$ip")
-        log_message "COMMAND" "客户端IP: $ip | 位置: $location_info"
+# REAL_TIME_HISTORY - 实时命令记录配置
+export PROMPT_COMMAND='history -a; history -c; history -r'
+export HISTTIMEFORMAT='%F %T '
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+shopt -s histappend
+export HISTCONTROL=ignoredups:erasedups
+
+EOF
+                log_message "SUCCESS" "已为用户 $user 配置实时命令记录"
+            fi
+        fi
     done
 }
 
-# 显示帮助信息
+# 监控命令历史文件变化
+monitor_history_files() {
+    log_message "INFO" "启动命令历史监控..."
+    
+    declare -A file_sizes
+    declare -A last_commands
+    
+    # 初始化文件大小
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            local user=$(basename "$user_dir")
+            local history_file="$user_dir/.bash_history"
+            if [ -f "$history_file" ]; then
+                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_commands["$user"]=""
+            fi
+        fi
+    done
+    
+    # 监控循环
+    while true; do
+        for user_dir in /home/* /root; do
+            if [ -d "$user_dir" ]; then
+                local user=$(basename "$user_dir")
+                local history_file="$user_dir/.bash_history"
+                
+                if [ -f "$history_file" ]; then
+                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    local last_size=${file_sizes["$user"]}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        local new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null | tr -d '\0')
+                        
+                        if [ -n "$new_content" ]; then
+                            while IFS= read -r line; do
+                                line=$(echo "$line" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                                
+                                # 过滤无用命令
+                                if [ -n "$line" ] && [ "${#line}" -gt 1 ] && \
+                                   [[ ! "$line" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|echo|date|whoami)$ ]] && \
+                                   [[ ! "$line" =~ ^#[0-9]+$ ]] && \
+                                   [ "$line" != "${last_commands["$user"]}" ]; then
+                                    
+                                    local client_ip=$(get_client_ip)
+                                    local location_info=$(get_ip_location "$client_ip")
+                                    
+                                    log_message "COMMAND" "用户: $user | 命令: $line | 来源: $client_ip [$location_info]"
+                                    last_commands["$user"]="$line"
+                                fi
+                            done <<< "$new_content"
+                        fi
+                        
+                        file_sizes["$user"]=$current_size
+                    fi
+                fi
+            fi
+        done
+        sleep 1
+    done
+}
+
+# 资源监控函数
+monitor_resources() {
+    while true; do
+        sleep 60
+        
+        # 检查日志文件大小
+        if [ -f "$CURRENT_LOG" ]; then
+            local log_size=$(stat -c%s "$CURRENT_LOG" 2>/dev/null || echo 0)
+            if [ "$log_size" -gt 1048576 ]; then  # 1MB
+                log_rotation
+            fi
+        fi
+        
+        # 检查内存使用
+        local mem_usage=$(free 2>/dev/null | awk 'NR==2{printf "%.2f", $3*100/$2}' || echo "0")
+        if (( $(echo "$mem_usage > 90" | bc -l 2>/dev/null) )); then
+            log_message "WARN" "内存使用率过高: ${mem_usage}%"
+        fi
+    done
+}
+
+# 日志轮转
+log_rotation() {
+    log_message "INFO" "执行日志轮转"
+    init_log_system
+    log_message "INFO" "新日志文件已创建"
+}
+
+# 后台运行监控
+start_background_monitor() {
+    echo -e "${GREEN}启动后台监控服务...${NC}"
+    
+    # 检查是否已经在运行
+    if [ -f "/tmp/command_monitor.pid" ]; then
+        local old_pid=$(cat "/tmp/command_monitor.pid" 2>/dev/null)
+        if ps -p "$old_pid" >/dev/null 2>&1; then
+            echo -e "${YELLOW}监控服务已经在运行 (PID: $old_pid)${NC}"
+            return 1
+        fi
+    fi
+    
+    (
+        setsid >/dev/null 2>&1
+        DAEMON_MODE=true
+        init_log_system
+        configure_realtime_history
+        
+        log_message "INFO" "后台监控进程启动 - PID: $$"
+        echo $$ > "/tmp/command_monitor.pid"
+        
+        # 启动资源监控
+        monitor_resources &
+        
+        # 启动命令监控
+        monitor_history_files
+        
+        rm -f "/tmp/command_monitor.pid"
+        
+    ) >/dev/null 2>&1 &
+    
+    local main_pid=$!
+    sleep 2
+    
+    if ps -p $main_pid >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 后台监控已启动!${NC}"
+        echo -e "主进程PID: $main_pid"
+        echo -e "日志文件: $LATEST_LOG"
+        echo -e "查看日志: ${GREEN}tail -f $LATEST_LOG${NC}"
+        echo -e "停止监控: ${RED}kill $main_pid${NC}"
+    else
+        echo -e "${RED}✗ 后台监控启动失败${NC}"
+        return 1
+    fi
+}
+
+# 前台运行监控
+start_foreground_monitor() {
+    echo -e "${YELLOW}前台运行模式 (Ctrl+C 停止)${NC}"
+    init_log_system
+    configure_realtime_history
+    monitor_history_files
+}
+
+# 查看监控状态
+check_monitor_status() {
+    local pid_file="/tmp/command_monitor.pid"
+    local main_pid=""
+    
+    if [ -f "$pid_file" ]; then
+        main_pid=$(cat "$pid_file" 2>/dev/null)
+    fi
+    
+    if [ -z "$main_pid" ] || ! ps -p "$main_pid" >/dev/null 2>&1; then
+        echo -e "${RED}✗ 监控服务未运行${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ 监控服务运行中${NC}"
+    echo "主进程PID: $main_pid"
+    echo "日志目录: $LOG_DIR"
+    
+    if [ -f "$LATEST_LOG" ]; then
+        local log_size=$(du -h "$LATEST_LOG" 2>/dev/null | cut -f1 || echo "未知")
+        echo "当前日志大小: $log_size"
+        echo
+        echo -e "${YELLOW}最近3条记录:${NC}"
+        tail -3 "$LATEST_LOG" 2>/dev/null | while read line; do
+            echo "  $line"
+        done || echo "  无法读取日志"
+    fi
+}
+
+# 停止监控进程
+stop_monitor() {
+    local pid_file="/tmp/command_monitor.pid"
+    local main_pid=""
+    
+    if [ -f "$pid_file" ]; then
+        main_pid=$(cat "$pid_file")
+        rm -f "$pid_file"
+    fi
+    
+    if [ -z "$main_pid" ]; then
+        main_pid=$(pgrep -f "command_monitor" | head -1)
+    fi
+    
+    if [ -z "$main_pid" ]; then
+        echo -e "${YELLOW}没有找到运行的监控进程${NC}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}正在停止监控进程 (PID: $main_pid)...${NC}"
+    kill "$main_pid" 2>/dev/null || true
+    sleep 2
+    
+    if ps -p "$main_pid" >/dev/null 2>&1; then
+        echo -e "${RED}强制停止监控进程...${NC}"
+        kill -9 "$main_pid" 2>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}✓ 监控进程已停止${NC}"
+}
+
+# 显示使用说明
 show_usage() {
-    echo -e "${GREEN}实时命令监控系统 v3.3${NC}"
+    echo -e "${GREEN}实时命令监控系统 v3.4${NC}"
     echo "用法: $0 [选项]"
+    echo
+    echo "选项:"
     echo "  -d, --daemon    后台运行模式"
     echo "  -s, --status    查看监控状态"
     echo "  -k, --kill      停止监控进程"
-    echo "  -h, --help      显示帮助"
+    echo "  -h, --help      显示此帮助信息"
+    echo
+    echo "示例:"
+    echo "  $0 -d          # 后台运行监控"
+    echo "  $0 -s          # 查看监控状态"
+    echo "  $0 -k          # 停止监控"
 }
 
-# 主程序
+### 主程序 ###
 main() {
     local command="${1:-}"
     
     case "$command" in
-        -d|--daemon) start_background_monitor ;;
-        -s|--status) check_monitor_status ;;
-        -k|--kill) stop_monitor ;;
-        -h|--help|"") show_usage ;;
-        *) echo -e "${RED}未知选项: $command${NC}"; show_usage; exit 1 ;;
+        -d|--daemon)
+            start_background_monitor
+            ;;
+        -s|--status)
+            check_monitor_status
+            ;;
+        -k|--kill)
+            stop_monitor
+            ;;
+        -h|--help|"")
+            show_usage
+            ;;
+        *)
+            echo -e "${RED}未知选项: $command${NC}"
+            show_usage
+            return 1
+            ;;
     esac
 }
 
-# 执行主程序
-main "$1"
+# 直接运行模式
+if [ $# -eq 0 ]; then
+    start_foreground_monitor
+else
+    main "$1"
+fi
