@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 交互式实时命令监控脚本 - 清理安装版
-# 版本: 4.3
+# 交互式实时命令监控脚本 - 修复版
+# 版本: 4.4
 
 set -e
 
@@ -22,6 +22,14 @@ NC='\033[0m'
 CURRENT_LOG=""
 LATEST_LOG=""
 DAEMON_MODE=false
+
+# 检查TO命令
+check_to_command() {
+    if [ "$1" = "TO" ] || [ "$1" = "to" ]; then
+        echo -e "${GREEN}切换到监控控制界面...${NC}"
+        exec bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7)
+    fi
+}
 
 # 清理所有残留文件和进程
 cleanup_all() {
@@ -53,17 +61,8 @@ cleanup_all() {
         sed -i '/command_monitor.sh/d' "/etc/rc.d/rc.local" 2>/dev/null || true
     fi
     
-    # 清理日志文件（保留最新的3个）
-    echo -e "${BLUE}清理日志文件...${NC}"
-    if [ -d "$LOG_DIR" ]; then
-        # 保留最新的3个日志文件
-        ls -t "$LOG_DIR"/*.log 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
-        echo -e "${GREEN}日志文件清理完成${NC}"
-    fi
-    
-    # 删除旧版本脚本
-    rm -f "/usr/local/bin/command_monitor" 2>/dev/null || true
-    rm -f "/usr/bin/command_monitor" 2>/dev/null || true
+    # 清理crontab
+    crontab -l 2>/dev/null | grep -v "command_monitor.sh" | crontab -
     
     echo -e "${GREEN}✓ 所有残留已清理完成${NC}"
 }
@@ -106,7 +105,34 @@ log_message() {
     fi
 }
 
-# 获取IP地理位置
+# 获取客户端IP（修复版）
+get_client_ip() {
+    local ip="unknown"
+    
+    # 方法1: 从SSH连接获取
+    if [ -n "$SSH_CLIENT" ]; then
+        ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    elif [ -n "$SSH_CONNECTION" ]; then
+        ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    fi
+    
+    # 方法2: 从who命令获取
+    if [ "$ip" = "unknown" ]; then
+        ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
+        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
+            ip="localhost"
+        fi
+    fi
+    
+    # 方法3: 从网络连接获取
+    if [ "$ip" = "unknown" ] || [ "$ip" = "localhost" ]; then
+        ip=$(netstat -tn 2>/dev/null | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | head -1)
+    fi
+    
+    echo "$ip"
+}
+
+# 获取IP地理位置（修复版）
 get_ip_location() {
     local ip="$1"
     
@@ -139,24 +165,6 @@ get_ip_location() {
     fi
     
     echo "未知位置"
-}
-
-# 获取客户端IP
-get_client_ip() {
-    local ip="unknown"
-    
-    if [ -n "$SSH_CLIENT" ]; then
-        ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-    elif [ -n "$SSH_CONNECTION" ]; then
-        ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
-    else
-        ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
-        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
-            ip="localhost"
-        fi
-    fi
-    
-    echo "$ip"
 }
 
 # 初始化日志系统
@@ -195,64 +203,7 @@ EOF
     done
 }
 
-# 监控命令历史文件变化
-monitor_history_files() {
-    declare -A file_sizes
-    declare -A last_commands
-    
-    # 初始化文件大小
-    for user_dir in /home/* /root; do
-        if [ -d "$user_dir" ]; then
-            local user=$(basename "$user_dir")
-            local history_file="$user_dir/.bash_history"
-            if [ -f "$history_file" ]; then
-                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                last_commands["$user"]=""
-            fi
-        fi
-    done
-    
-    # 监控循环
-    while true; do
-        for user_dir in /home/* /root; do
-            if [ -d "$user_dir" ]; then
-                local user=$(basename "$user_dir")
-                local history_file="$user_dir/.bash_history"
-                
-                if [ -f "$history_file" ]; then
-                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    local last_size=${file_sizes["$user"]}
-                    
-                    if [ "$current_size" -gt "$last_size" ]; then
-                        local new_content=$(tail -n 1 "$history_file" 2>/dev/null | tr -d '\0')
-                        
-                        if [ -n "$new_content" ]; then
-                            local line=$(echo "$new_content" | sed 's/^[ \t]*//;s/[ \t]*$//')
-                            
-                            # 过滤无用命令
-                            if [ -n "$line" ] && [ "${#line}" -gt 1 ] && \
-                               [[ ! "$line" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|echo|date|whoami)$ ]] && \
-                               [[ ! "$line" =~ ^#[0-9]+$ ]] && \
-                               [ "$line" != "${last_commands["$user"]}" ]; then
-                                
-                                local client_ip=$(get_client_ip)
-                                local location_info=$(get_ip_location "$client_ip")
-                                
-                                log_message "COMMAND" "用户: $user | 命令: $line | 来源: $client_ip [$location_info]"
-                                last_commands["$user"]="$line"
-                            fi
-                        fi
-                        
-                        file_sizes["$user"]=$current_size
-                    fi
-                fi
-            fi
-        done
-        sleep 1
-    done
-}
-
-# 安装脚本到系统（优化版）
+# 安装脚本到系统（修复版）
 install_script() {
     echo -e "${GREEN}正在安装脚本到系统...${NC}"
     
@@ -265,20 +216,59 @@ install_script() {
     # 先清理残留
     cleanup_all
     
-    # 创建简化版脚本
+    # 创建修复版脚本
     cat > "$SCRIPT_PATH" << 'EOF'
 #!/bin/bash
-# 简化版命令监控脚本
+# 修复版命令监控脚本
 
 LOG_DIR="/root/command_monitor_logs"
 PID_FILE="/tmp/command_monitor.pid"
 LOG_FILE="$LOG_DIR/command_monitor.log"
+
+# 获取客户端IP
+get_client_ip() {
+    local ip="unknown"
+    if [ -n "$SSH_CLIENT" ]; then
+        ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    elif [ -n "$SSH_CONNECTION" ]; then
+        ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    else
+        ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
+    fi
+    echo "$ip"
+}
 
 start_daemon() {
     mkdir -p "$LOG_DIR"
     
     # 后台监控进程
     (
+        # 配置实时history
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            user=$(basename "$user_dir")
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            
+            if ! grep -q "REAL_TIME_HISTORY" "$bashrc"; then
+                cat >> "$bashrc" << 'EOS'
+
+# REAL_TIME_HISTORY - 实时命令记录配置
+export PROMPT_COMMAND='history -a; history -c; history -r'
+export HISTTIMEFORMAT='%F %T '
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+shopt -s histappend
+export HISTCONTROL=ignoredups:erasedups
+
+EOS
+            fi
+        done
+        
+        # 主监控循环
+        declare -A last_sizes
+        declare -A last_commands
+        
         while true; do
             for user_dir in /home/* /root; do
                 [ -d "$user_dir" ] || continue
@@ -287,16 +277,20 @@ start_daemon() {
                 [ -f "$history_file" ] || continue
                 
                 current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                last_size_file="/tmp/last_size_$user"
-                last_size=$(cat "$last_size_file" 2>/dev/null || echo 0)
+                last_size=${last_sizes["$user"]:-0}
                 
                 if [ "$current_size" -gt "$last_size" ]; then
                     new_command=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                    if [ -n "$new_command" ] && [ ${#new_command} -gt 2 ] && [[ ! "$new_command" =~ ^(ls|cd|pwd|history|exit|clear)$ ]]; then
-                        client_ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
+                    if [ -n "$new_command" ] && [ ${#new_command} -gt 2 ] && \
+                       [[ ! "$new_command" =~ ^(ls|cd|pwd|history|exit|clear|TO|to)$ ]] && \
+                       [[ ! "$new_command" =~ ^#[0-9]+$ ]] && \
+                       [ "$new_command" != "${last_commands["$user"]}" ]; then
+                        
+                        client_ip=$(get_client_ip)
                         echo "[$(date "+%Y-%m-%d %H:%M:%S")] 用户: $user | 命令: $new_command | 来源: $client_ip" >> "$LOG_FILE"
+                        last_commands["$user"]="$new_command"
                     fi
-                    echo "$current_size" > "$last_size_file"
+                    last_sizes["$user"]=$current_size
                 fi
             done
             sleep 1
@@ -305,6 +299,8 @@ start_daemon() {
     
     echo $! > "$PID_FILE"
     echo "监控已启动 (PID: $!)"
+    echo "日志文件: $LOG_FILE"
+    echo "输入 'TO' 进入控制界面"
 }
 
 stop_daemon() {
@@ -312,11 +308,16 @@ stop_daemon() {
         pid=$(cat "$PID_FILE")
         kill "$pid" 2>/dev/null && echo "监控已停止" || echo "停止失败"
         rm -f "$PID_FILE"
-        rm -f /tmp/last_size_* 2>/dev/null
     else
         echo "监控未运行"
     fi
 }
+
+# 检查TO命令
+if [ "$1" = "TO" ] || [ "$1" = "to" ]; then
+    echo "切换到监控控制界面..."
+    exec bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7)
+fi
 
 case "$1" in
     start) start_daemon ;;
@@ -324,12 +325,18 @@ case "$1" in
     status)
         if [ -f "$PID_FILE" ] && ps -p $(cat "$PID_FILE") >/dev/null 2>&1; then
             echo "监控运行中 (PID: $(cat "$PID_FILE"))"
-            [ -f "$LOG_FILE" ] && echo "最新日志:" && tail -1 "$LOG_FILE" 2>/dev/null || true
+            if [ -f "$LOG_FILE" ]; then
+                echo "最新日志:"
+                tail -1 "$LOG_FILE" 2>/dev/null || echo "无日志记录"
+            fi
         else
             echo "监控未运行"
         fi
         ;;
-    *) echo "使用: $0 {start|stop|status}" ;;
+    *) 
+        echo "使用: $0 {start|stop|status}"
+        echo "或者: $0 TO 进入控制界面"
+        ;;
 esac
 EOF
 
@@ -339,6 +346,7 @@ EOF
     echo -e "  ${CYAN}command_monitor.sh start${NC}   # 启动监控"
     echo -e "  ${CYAN}command_monitor.sh stop${NC}    # 停止监控"  
     echo -e "  ${CYAN}command_monitor.sh status${NC}  # 查看状态"
+    echo -e "  ${CYAN}command_monitor.sh TO${NC}      # 进入控制界面"
     return 0
 }
 
@@ -348,7 +356,7 @@ setup_auto_start() {
         install_script
     fi
     
-    # 使用crontab实现自启动（更可靠）
+    # 使用crontab实现自启动
     (crontab -l 2>/dev/null | grep -v "command_monitor.sh"; echo "@reboot $SCRIPT_PATH start > /dev/null 2>&1") | crontab -
     
     echo -e "${GREEN}✓ 已设置开机自启动${NC}"
@@ -428,23 +436,69 @@ start_foreground_monitor() {
     echo -e "地理位置: $location_info"
     echo -e "输入 ${CYAN}TO${NC} 切换到后台模式"
     
-    monitor_history_files &
-    local monitor_pid=$!
+    # 监控命令历史文件变化
+    declare -A file_sizes
+    declare -A last_commands
     
+    # 初始化文件大小
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            local user=$(basename "$user_dir")
+            local history_file="$user_dir/.bash_history"
+            if [ -f "$history_file" ]; then
+                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_commands["$user"]=""
+            fi
+        fi
+    done
+    
+    # 监控循环
     while true; do
-        if read -t 1 user_input; then
+        # 检查用户输入
+        if read -t 0.1 -n 2 user_input 2>/dev/null; then
             if [ "$user_input" = "TO" ] || [ "$user_input" = "to" ]; then
                 echo -e "\n${GREEN}切换到后台模式...${NC}"
-                kill $monitor_pid 2>/dev/null || true
                 start_background_monitor
                 exit 0
             fi
         fi
         
-        if ! ps -p $monitor_pid >/dev/null 2>&1; then
-            echo -e "${RED}监控进程异常退出${NC}"
-            break
-        fi
+        # 监控命令历史
+        for user_dir in /home/* /root; do
+            if [ -d "$user_dir" ]; then
+                local user=$(basename "$user_dir")
+                local history_file="$user_dir/.bash_history"
+                
+                if [ -f "$history_file" ]; then
+                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    local last_size=${file_sizes["$user"]}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        local new_content=$(tail -n 1 "$history_file" 2>/dev/null | tr -d '\0')
+                        
+                        if [ -n "$new_content" ]; then
+                            local line=$(echo "$new_content" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                            
+                            # 过滤无用命令
+                            if [ -n "$line" ] && [ "${#line}" -gt 1 ] && \
+                               [[ ! "$line" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|echo|date|whoami|TO|to)$ ]] && \
+                               [[ ! "$line" =~ ^#[0-9]+$ ]] && \
+                               [ "$line" != "${last_commands["$user"]}" ]; then
+                                
+                                local client_ip=$(get_client_ip)
+                                local location_info=$(get_ip_location "$client_ip")
+                                
+                                log_message "COMMAND" "用户: $user | 命令: $line | 来源: $client_ip [$location_info]"
+                                last_commands["$user"]="$line"
+                            fi
+                        fi
+                        
+                        file_sizes["$user"]=$current_size
+                    fi
+                fi
+            fi
+        done
+        sleep 1
     done
 }
 
@@ -494,7 +548,7 @@ stop_monitor() {
 show_interactive_menu() {
     clear
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}       实时命令监控系统 v4.3${NC}"
+    echo -e "${GREEN}       实时命令监控系统 v4.4${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo
     echo -e "${YELLOW}请选择操作:${NC}"
@@ -512,7 +566,7 @@ show_interactive_menu() {
     echo -e "${GREEN}========================================${NC}"
     echo -e "${YELLOW}提示:${NC}"
     echo -e "  - 前台模式下输入 ${CYAN}TO${NC} 可切换到后台"
-    echo -e "  - 建议先选择8清理残留，再选择7安装"
+    echo -e "  - 任何时候输入 ${CYAN}command_monitor.sh TO${NC} 进入控制界面"
     echo -e "${GREEN}========================================${NC}"
     echo
 }
@@ -542,6 +596,9 @@ handle_user_choice() {
 ### 主程序 ###
 main() {
     local command="${1:-}"
+    
+    # 检查TO命令
+    check_to_command "$command"
     
     case "$command" in
         -d|--daemon) start_background_monitor ;;
