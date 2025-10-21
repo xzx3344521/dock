@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 优化版实时命令监控脚本 - 中文显示 + 多IP查询源
-# 版本: 3.4
+# 交互式实时命令监控脚本 - 中文显示 + 多IP查询源
+# 版本: 4.0
 
 set -e
 
@@ -32,6 +32,7 @@ LAST_ROTATION=0
 CURRENT_LOG=""
 LATEST_LOG=""
 DAEMON_MODE=false
+AUTO_START_FILE="/etc/profile.d/command_monitor_auto.sh"
 
 # 获取时间戳
 timestamp() {
@@ -59,7 +60,7 @@ log_message() {
     fi
 }
 
-# 英文转中文函数（修复语法错误）
+# 英文转中文函数
 english_to_chinese() {
     local text="$1"
     # 使用多个sed命令避免语法错误
@@ -179,24 +180,6 @@ get_ip_location_online() {
         local addr=$(echo "$location_info" | grep -o '"addr":"[^"]*"' | cut -d'"' -f4)
         if [ -n "$addr" ] && [ "$addr" != "保留地址" ]; then
             echo "$addr"
-            return 0
-        fi
-    fi
-    
-    # 方法3: ipapi.co
-    location_info=$(curl -s -m 3 "https://ipapi.co/$ip/json/" 2>/dev/null || true)
-    if [ -n "$location_info" ]; then
-        local country=$(echo "$location_info" | grep -o '"country_name":"[^"]*"' | cut -d'"' -f4)
-        local region=$(echo "$location_info" | grep -o '"region":"[^"]*"' | cut -d'"' -f4)
-        local city=$(echo "$location_info" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
-        local isp=$(echo "$location_info" | grep -o '"org":"[^"]*"' | cut -d'"' -f4)
-        
-        if [ -n "$country" ]; then
-            local result="$country"
-            [ -n "$region" ] && result="$result-$region"
-            [ -n "$city" ] && result="$result-$city"
-            [ -n "$isp" ] && result="$result($isp)"
-            echo "$result"
             return 0
         fi
     fi
@@ -375,12 +358,6 @@ monitor_resources() {
                 log_rotation
             fi
         fi
-        
-        # 检查内存使用
-        local mem_usage=$(free 2>/dev/null | awk 'NR==2{printf "%.2f", $3*100/$2}' || echo "0")
-        if (( $(echo "$mem_usage > 90" | bc -l 2>/dev/null) )); then
-            log_message "WARN" "内存使用率过高: ${mem_usage}%"
-        fi
     done
 }
 
@@ -389,6 +366,26 @@ log_rotation() {
     log_message "INFO" "执行日志轮转"
     init_log_system
     log_message "INFO" "新日志文件已创建"
+}
+
+# 设置开机自启动
+setup_auto_start() {
+    cat > "$AUTO_START_FILE" << 'EOF'
+#!/bin/bash
+# 命令监控自动启动脚本
+
+if [ ! -f "/tmp/command_monitor.pid" ] || ! ps -p $(cat "/tmp/command_monitor.pid") >/dev/null 2>&1; then
+    nohup /bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7) -d" >/dev/null 2>&1 &
+fi
+EOF
+    chmod +x "$AUTO_START_FILE"
+    echo -e "${GREEN}✓ 已设置开机自动启动${NC}"
+}
+
+# 取消开机自启动
+remove_auto_start() {
+    rm -f "$AUTO_START_FILE" 2>/dev/null
+    echo -e "${YELLOW}✓ 已取消开机自动启动${NC}"
 }
 
 # 后台运行监控
@@ -432,6 +429,8 @@ start_background_monitor() {
         echo -e "日志文件: $LATEST_LOG"
         echo -e "查看日志: ${GREEN}tail -f $LATEST_LOG${NC}"
         echo -e "停止监控: ${RED}kill $main_pid${NC}"
+        echo -e "切换前台: 输入 ${CYAN}TO${NC} 然后回车"
+        return 0
     else
         echo -e "${RED}✗ 后台监控启动失败${NC}"
         return 1
@@ -440,10 +439,37 @@ start_background_monitor() {
 
 # 前台运行监控
 start_foreground_monitor() {
-    echo -e "${YELLOW}前台运行模式 (Ctrl+C 停止)${NC}"
+    echo -e "${YELLOW}前台运行模式 (输入 TO 切换后台，Ctrl+C 停止)${NC}"
+    DAEMON_MODE=false
     init_log_system
     configure_realtime_history
-    monitor_history_files
+    
+    # 启动后台监控进程
+    (
+        monitor_history_files
+    ) &
+    local monitor_pid=$!
+    
+    # 等待用户输入
+    while true; do
+        echo -e "\n${CYAN}输入 'TO' 切换到后台模式: ${NC}"
+        read -t 1 user_input 2>/dev/null || true
+        
+        if [ "$user_input" = "TO" ] || [ "$user_input" = "to" ]; then
+            echo -e "${GREEN}切换到后台模式...${NC}"
+            kill $monitor_pid 2>/dev/null || true
+            start_background_monitor
+            break
+        fi
+        
+        # 检查监控进程是否还在运行
+        if ! ps -p $monitor_pid >/dev/null 2>&1; then
+            echo -e "${RED}监控进程异常退出${NC}"
+            break
+        fi
+        
+        sleep 1
+    done
 }
 
 # 查看监控状态
@@ -506,9 +532,71 @@ stop_monitor() {
     echo -e "${GREEN}✓ 监控进程已停止${NC}"
 }
 
+# 显示交互式菜单
+show_interactive_menu() {
+    clear
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}       实时命令监控系统 v4.0${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo
+    echo -e "${YELLOW}请选择操作:${NC}"
+    echo
+    echo -e "  ${CYAN}1${NC}. 启动后台监控模式"
+    echo -e "  ${CYAN}2${NC}. 启动前台监控模式"
+    echo -e "  ${CYAN}3${NC}. 查看监控状态"
+    echo -e "  ${CYAN}4${NC}. 停止监控服务"
+    echo -e "  ${CYAN}5${NC}. 设置开机自启动"
+    echo -e "  ${CYAN}6${NC}. 取消开机自启动"
+    echo -e "  ${CYAN}0${NC}. 退出"
+    echo
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${YELLOW}提示:${NC}"
+    echo -e "  - 前台模式下输入 ${CYAN}TO${NC} 可切换到后台"
+    echo -e "  - 重启后会自动在后台运行"
+    echo -e "${GREEN}========================================${NC}"
+    echo
+}
+
+# 处理用户选择
+handle_user_choice() {
+    local choice
+    read -p "请输入选择 [0-6]: " choice
+    
+    case $choice in
+        1)
+            start_background_monitor
+            ;;
+        2)
+            start_foreground_monitor
+            ;;
+        3)
+            check_monitor_status
+            ;;
+        4)
+            stop_monitor
+            ;;
+        5)
+            setup_auto_start
+            ;;
+        6)
+            remove_auto_start
+            ;;
+        0)
+            echo -e "${GREEN}再见!${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}无效选择，请重新输入${NC}"
+            ;;
+    esac
+    
+    echo
+    read -p "按回车键继续..."
+}
+
 # 显示使用说明
 show_usage() {
-    echo -e "${GREEN}实时命令监控系统 v3.4${NC}"
+    echo -e "${GREEN}实时命令监控系统 v4.0${NC}"
     echo "用法: $0 [选项]"
     echo
     echo "选项:"
@@ -527,30 +615,42 @@ show_usage() {
 main() {
     local command="${1:-}"
     
-    case "$command" in
-        -d|--daemon)
+    # 如果没有参数，显示交互式菜单
+    if [ $# -eq 0 ]; then
+        # 检查是否设置了开机自启动
+        if [ -f "$AUTO_START_FILE" ] && [ ! -f "/tmp/command_monitor.pid" ]; then
+            echo -e "${GREEN}检测到开机自启动配置，正在启动后台监控...${NC}"
             start_background_monitor
-            ;;
-        -s|--status)
-            check_monitor_status
-            ;;
-        -k|--kill)
-            stop_monitor
-            ;;
-        -h|--help|"")
-            show_usage
-            ;;
-        *)
-            echo -e "${RED}未知选项: $command${NC}"
-            show_usage
-            return 1
-            ;;
-    esac
+            sleep 2
+        fi
+        
+        while true; do
+            show_interactive_menu
+            handle_user_choice
+        done
+    else
+        # 命令行参数模式
+        case "$command" in
+            -d|--daemon)
+                start_background_monitor
+                ;;
+            -s|--status)
+                check_monitor_status
+                ;;
+            -k|--kill)
+                stop_monitor
+                ;;
+            -h|--help|"")
+                show_usage
+                ;;
+            *)
+                echo -e "${RED}未知选项: $command${NC}"
+                show_usage
+                return 1
+                ;;
+        esac
+    fi
 }
 
-# 直接运行模式
-if [ $# -eq 0 ]; then
-    start_foreground_monitor
-else
-    main "$1"
-fi
+# 启动主程序
+main "$@"
