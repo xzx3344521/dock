@@ -1,19 +1,14 @@
 #!/bin/bash
 
-# 交互式实时命令监控脚本 - 中文显示 + 多IP查询源
-# 版本: 4.0
+# 交互式实时命令监控脚本 - 修复版
+# 版本: 4.1
 
 set -e
 
 ### 配置区域 ###
 LOG_DIR="/root/command_monitor_logs"
-MAX_LOG_SIZE="1M"
-MAX_LOG_FILES=50
-LOG_ROTATE_INTERVAL=1800
-MEMORY_LIMIT="512M"
-CHECK_INTERVAL=300
-BACKUP_DAYS=7
-CLEANUP_INTERVAL=3600
+SCRIPT_NAME="command_monitor.sh"
+SCRIPT_PATH="/usr/local/bin/$SCRIPT_NAME"
 
 ### 颜色定义 ###
 RED='\033[0;31m'
@@ -25,14 +20,9 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ### 全局变量 ###
-SCRIPT_PID=$$
-MONITOR_PID=""
-LAST_CLEANUP=0
-LAST_ROTATION=0
 CURRENT_LOG=""
 LATEST_LOG=""
 DAEMON_MODE=false
-AUTO_START_FILE="/etc/profile.d/command_monitor_auto.sh"
 
 # 获取时间戳
 timestamp() {
@@ -63,19 +53,8 @@ log_message() {
 # 英文转中文函数
 english_to_chinese() {
     local text="$1"
-    # 使用多个sed命令避免语法错误
+    # 简化翻译，只保留主要城市和国家
     text=$(echo "$text" | sed 's/China/中国/g')
-    text=$(echo "$text" | sed 's/United States/美国/g')
-    text=$(echo "$text" | sed 's/Japan/日本/g')
-    text=$(echo "$text" | sed 's/Korea/韩国/g')
-    text=$(echo "$text" | sed 's/Russia/俄罗斯/g')
-    text=$(echo "$text" | sed 's/Germany/德国/g')
-    text=$(echo "$text" | sed 's/France/法国/g')
-    text=$(echo "$text" | sed 's/UK/英国/g')
-    text=$(echo "$text" | sed 's/Canada/加拿大/g')
-    text=$(echo "$text" | sed 's/Australia/澳大利亚/g')
-    text=$(echo "$text" | sed 's/Brazil/巴西/g')
-    text=$(echo "$text" | sed 's/India/印度/g')
     text=$(echo "$text" | sed 's/Beijing/北京/g')
     text=$(echo "$text" | sed 's/Shanghai/上海/g')
     text=$(echo "$text" | sed 's/Guangzhou/广州/g')
@@ -85,79 +64,29 @@ english_to_chinese() {
     text=$(echo "$text" | sed 's/Wuhan/武汉/g')
     text=$(echo "$text" | sed 's/Chengdu/成都/g')
     text=$(echo "$text" | sed 's/Xi'"'"'an/西安/g')
-    text=$(echo "$text" | sed 's/Chongqing/重庆/g')
-    text=$(echo "$text" | sed 's/Tianjin/天津/g')
-    text=$(echo "$text" | sed 's/Suzhou/苏州/g')
-    text=$(echo "$text" | sed 's/Zhengzhou/郑州/g')
-    text=$(echo "$text" | sed 's/Changsha/长沙/g')
-    text=$(echo "$text" | sed 's/Hefei/合肥/g')
-    text=$(echo "$text" | sed 's/Nanchang/南昌/g')
-    text=$(echo "$text" | sed 's/Fuzhou/福州/g')
-    text=$(echo "$text" | sed 's/Jinan/济南/g')
-    text=$(echo "$text" | sed 's/Taiyuan/太原/g')
-    text=$(echo "$text" | sed 's/Hohhot/呼和浩特/g')
-    text=$(echo "$text" | sed 's/Shijiazhuang/石家庄/g')
-    text=$(echo "$text" | sed 's/Harbin/哈尔滨/g')
-    text=$(echo "$text" | sed 's/Changchun/长春/g')
-    text=$(echo "$text" | sed 's/Dalian/大连/g')
-    text=$(echo "$text" | sed 's/Qingdao/青岛/g')
-    text=$(echo "$text" | sed 's/Ningbo/宁波/g')
-    text=$(echo "$text" | sed 's/Xiamen/厦门/g')
-    text=$(echo "$text" | sed 's/Kunming/昆明/g')
-    text=$(echo "$text" | sed 's/Guiyang/贵阳/g')
-    text=$(echo "$text" | sed 's/Nanning/南宁/g')
-    text=$(echo "$text" | sed 's/Haikou/海口/g')
-    text=$(echo "$text" | sed 's/Urumqi/乌鲁木齐/g')
-    text=$(echo "$text" | sed 's/Lanzhou/兰州/g')
-    text=$(echo "$text" | sed 's/Xining/西宁/g')
-    text=$(echo "$text" | sed 's/Yinchuan/银川/g')
-    text=$(echo "$text" | sed 's/Lhasa/拉萨/g')
-    text=$(echo "$text" | sed 's/Hong Kong/香港/g')
-    text=$(echo "$text" | sed 's/Macau/澳门/g')
-    text=$(echo "$text" | sed 's/Taiwan/台湾/g')
     text=$(echo "$text" | sed 's/Jiangxi/江西/g')
-    text=$(echo "$text" | sed 's/Zhejiang/浙江/g')
-    text=$(echo "$text" | sed 's/Jiangsu/江苏/g')
-    text=$(echo "$text" | sed 's/Guangdong/广东/g')
-    text=$(echo "$text" | sed 's/Fujian/福建/g')
-    text=$(echo "$text" | sed 's/Hunan/湖南/g')
-    text=$(echo "$text" | sed 's/Hubei/湖北/g')
-    text=$(echo "$text" | sed 's/Henan/河南/g')
-    text=$(echo "$text" | sed 's/Hebei/河北/g')
-    text=$(echo "$text" | sed 's/Shandong/山东/g')
-    text=$(echo "$text" | sed 's/Shanxi/山西/g')
-    text=$(echo "$text" | sed 's/Shaanxi/陕西/g')
-    text=$(echo "$text" | sed 's/Sichuan/四川/g')
-    text=$(echo "$text" | sed 's/Yunnan/云南/g')
-    text=$(echo "$text" | sed 's/Guizhou/贵州/g')
-    text=$(echo "$text" | sed 's/Liaoning/辽宁/g')
-    text=$(echo "$text" | sed 's/Jilin/吉林/g')
-    text=$(echo "$text" | sed 's/Heilongjiang/黑龙江/g')
-    text=$(echo "$text" | sed 's/Anhui/安徽/g')
-    text=$(echo "$text" | sed 's/Gansu/甘肃/g')
-    text=$(echo "$text" | sed 's/Qinghai/青海/g')
+    text=$(echo "$text" | sed 's/Nanchang/南昌/g')
     text=$(echo "$text" | sed 's/Telecom/电信/g')
     text=$(echo "$text" | sed 's/Unicom/联通/g')
     text=$(echo "$text" | sed 's/Mobile/移动/g')
-    text=$(echo "$text" | sed 's/Network/网络/g')
-    text=$(echo "$text" | sed 's/Communications/通信/g')
-    text=$(echo "$text" | sed 's/Company/公司/g')
-    text=$(echo "$text" | sed 's/Corporation/集团/g')
-    text=$(echo "$text" | sed 's/Limited/有限公司/g')
-    text=$(echo "$text" | sed 's/CHINA169/中国联通/g')
-    text=$(echo "$text" | sed 's/ChinaNet/中国电信/g')
-    text=$(echo "$text" | sed 's/CMNET/中国移动/g')
-    
     echo "$text"
 }
 
-# 在线IP地理位置查询
-get_ip_location_online() {
+# 获取IP地理位置
+get_ip_location() {
     local ip="$1"
-    local location_info=""
     
-    # 方法1: ip-api.com (国际)
-    location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp" 2>/dev/null || true)
+    if [[ "$ip" == "192.168."* ]] || [[ "$ip" == "10."* ]] || [[ "$ip" == "172."* ]]; then
+        echo "内网IP"
+        return 0
+    fi
+    
+    if [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]] || [[ "$ip" == "unknown" ]]; then
+        echo "本机"
+        return 0
+    fi
+    
+    local location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp" 2>/dev/null || true)
     if [ -n "$location_info" ] && echo "$location_info" | grep -q '"status":"success"'; then
         local country=$(echo "$location_info" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
         local region=$(echo "$location_info" | grep -o '"regionName":"[^"]*"' | cut -d'"' -f4)
@@ -169,54 +98,12 @@ get_ip_location_online() {
             [ -n "$region" ] && result="$result-$region"
             [ -n "$city" ] && result="$result-$city"
             [ -n "$isp" ] && result="$result($isp)"
-            echo "$result"
+            echo $(english_to_chinese "$result")
             return 0
         fi
     fi
     
-    # 方法2: 国内IP查询接口
-    location_info=$(curl -s -m 3 "https://whois.pconline.com.cn/ipJson.jsp?ip=$ip&json=true" 2>/dev/null || true)
-    if [ -n "$location_info" ]; then
-        local addr=$(echo "$location_info" | grep -o '"addr":"[^"]*"' | cut -d'"' -f4)
-        if [ -n "$addr" ] && [ "$addr" != "保留地址" ]; then
-            echo "$addr"
-            return 0
-        fi
-    fi
-    
-    return 1
-}
-
-# 主IP地理位置查询函数
-get_ip_location() {
-    local ip="$1"
-    
-    # 检查内网IP
-    if [[ "$ip" == "192.168."* ]] || [[ "$ip" == "10."* ]] || [[ "$ip" == "172."* ]]; then
-        echo "内网IP"
-        return 0
-    fi
-    
-    if [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]] || [[ "$ip" == "unknown" ]]; then
-        echo "本机"
-        return 0
-    fi
-    
-    # 在线查询
-    local location_info=""
-    if command -v curl &> /dev/null; then
-        location_info=$(get_ip_location_online "$ip")
-    fi
-    
-    # 如果查询失败，使用简单判断
-    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
-        location_info="未知位置"
-    fi
-    
-    # 转换为中文
-    location_info=$(english_to_chinese "$location_info")
-    
-    echo "$location_info"
+    echo "未知位置"
 }
 
 # 获取客户端IP
@@ -247,21 +134,10 @@ init_log_system() {
     LATEST_LOG="$LOG_DIR/latest.log"
     
     ln -sf "$CURRENT_LOG" "$LATEST_LOG" 2>/dev/null || true
-    
-    log_message "INFO" "监控脚本启动 - PID: $$"
-    
-    local client_ip_original=$(get_client_ip)
-    log_message "INFO" "客户端IP: $client_ip_original"
-    
-    local location_info=$(get_ip_location "$client_ip_original")
-    log_message "INFO" "地理位置: $location_info"
-    log_message "INFO" "日志文件: $CURRENT_LOG"
 }
 
 # 配置实时history记录
 configure_realtime_history() {
-    log_message "INFO" "配置实时命令记录..."
-    
     for user_dir in /home/* /root; do
         if [ -d "$user_dir" ]; then
             local user=$(basename "$user_dir")
@@ -279,7 +155,6 @@ shopt -s histappend
 export HISTCONTROL=ignoredups:erasedups
 
 EOF
-                log_message "SUCCESS" "已为用户 $user 配置实时命令记录"
             fi
         fi
     done
@@ -287,8 +162,6 @@ EOF
 
 # 监控命令历史文件变化
 monitor_history_files() {
-    log_message "INFO" "启动命令历史监控..."
-    
     declare -A file_sizes
     declare -A last_commands
     
@@ -346,49 +219,66 @@ monitor_history_files() {
     done
 }
 
-# 资源监控函数
-monitor_resources() {
-    while true; do
-        sleep 60
-        
-        # 检查日志文件大小
-        if [ -f "$CURRENT_LOG" ]; then
-            local log_size=$(stat -c%s "$CURRENT_LOG" 2>/dev/null || echo 0)
-            if [ "$log_size" -gt 1048576 ]; then  # 1MB
-                log_rotation
-            fi
-        fi
-    done
-}
-
-# 日志轮转
-log_rotation() {
-    log_message "INFO" "执行日志轮转"
-    init_log_system
-    log_message "INFO" "新日志文件已创建"
+# 安装脚本到系统
+install_script() {
+    echo -e "${GREEN}正在安装脚本到系统...${NC}"
+    
+    # 下载并保存脚本
+    local script_content=$(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7 2>/dev/null || echo "")
+    
+    if [ -z "$script_content" ]; then
+        echo -e "${RED}下载脚本失败${NC}"
+        return 1
+    fi
+    
+    # 保存到本地文件
+    echo "$script_content" > "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    
+    echo -e "${GREEN}✓ 脚本已安装到: $SCRIPT_PATH${NC}"
+    return 0
 }
 
 # 设置开机自启动
 setup_auto_start() {
-    cat > "$AUTO_START_FILE" << 'EOF'
-#!/bin/bash
-# 命令监控自动启动脚本
+    if [ ! -f "$SCRIPT_PATH" ]; then
+        install_script
+    fi
+    
+    # 创建systemd服务
+    cat > /etc/systemd/system/command-monitor.service << EOF
+[Unit]
+Description=Command Monitor Service
+After=network.target
 
-if [ ! -f "/tmp/command_monitor.pid" ] || ! ps -p $(cat "/tmp/command_monitor.pid") >/dev/null 2>&1; then
-    nohup /bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7) -d" >/dev/null 2>&1 &
-fi
+[Service]
+Type=forking
+ExecStart=$SCRIPT_PATH --daemon
+ExecStop=$SCRIPT_PATH --kill
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
 EOF
-    chmod +x "$AUTO_START_FILE"
-    echo -e "${GREEN}✓ 已设置开机自动启动${NC}"
+
+    systemctl daemon-reload
+    systemctl enable command-monitor.service
+    echo -e "${GREEN}✓ 已设置开机自启动${NC}"
+    echo -e "${YELLOW}启动服务: systemctl start command-monitor${NC}"
+    echo -e "${YELLOW}停止服务: systemctl stop command-monitor${NC}"
 }
 
 # 取消开机自启动
 remove_auto_start() {
-    rm -f "$AUTO_START_FILE" 2>/dev/null
-    echo -e "${YELLOW}✓ 已取消开机自动启动${NC}"
+    systemctl stop command-monitor.service 2>/dev/null || true
+    systemctl disable command-monitor.service 2>/dev/null || true
+    rm -f /etc/systemd/system/command-monitor.service
+    systemctl daemon-reload
+    echo -e "${YELLOW}✓ 已取消开机自启动${NC}"
 }
 
-# 后台运行监控
+# 后台运行监控（修复版）
 start_background_monitor() {
     echo -e "${GREEN}启动后台监控服务...${NC}"
     
@@ -401,38 +291,45 @@ start_background_monitor() {
         fi
     fi
     
+    # 直接启动监控进程
     (
-        setsid >/dev/null 2>&1
+        # 设置环境
         DAEMON_MODE=true
         init_log_system
-        configure_realtime_history
         
+        # 记录启动信息
         log_message "INFO" "后台监控进程启动 - PID: $$"
+        log_message "INFO" "客户端IP: $(get_client_ip)"
+        log_message "INFO" "地理位置: $(get_ip_location $(get_client_ip))"
+        
+        # 保存PID
         echo $$ > "/tmp/command_monitor.pid"
         
-        # 启动资源监控
-        monitor_resources &
+        # 配置实时记录
+        configure_realtime_history
         
-        # 启动命令监控
+        # 启动监控
         monitor_history_files
         
+        # 清理
         rm -f "/tmp/command_monitor.pid"
         
-    ) >/dev/null 2>&1 &
+    ) &
     
     local main_pid=$!
-    sleep 2
+    sleep 3
     
-    if ps -p $main_pid >/dev/null 2>&1; then
+    # 检查是否启动成功
+    if ps -p $main_pid >/dev/null 2>&1 && [ -f "/tmp/command_monitor.pid" ]; then
         echo -e "${GREEN}✓ 后台监控已启动!${NC}"
         echo -e "主进程PID: $main_pid"
         echo -e "日志文件: $LATEST_LOG"
         echo -e "查看日志: ${GREEN}tail -f $LATEST_LOG${NC}"
-        echo -e "停止监控: ${RED}kill $main_pid${NC}"
-        echo -e "切换前台: 输入 ${CYAN}TO${NC} 然后回车"
+        echo -e "停止监控: ${RED}$0 --kill${NC}"
         return 0
     else
         echo -e "${RED}✗ 后台监控启动失败${NC}"
+        echo -e "${YELLOW}尝试使用前台模式...${NC}"
         return 1
     fi
 }
@@ -440,26 +337,30 @@ start_background_monitor() {
 # 前台运行监控
 start_foreground_monitor() {
     echo -e "${YELLOW}前台运行模式 (输入 TO 切换后台，Ctrl+C 停止)${NC}"
+    echo -e "${GREEN}开始监控...${NC}"
+    
     DAEMON_MODE=false
     init_log_system
     configure_realtime_history
     
-    # 启动后台监控进程
-    (
-        monitor_history_files
-    ) &
+    # 显示启动信息
+    log_message "INFO" "前台监控启动 - PID: $$"
+    log_message "INFO" "客户端IP: $(get_client_ip)"
+    log_message "INFO" "地理位置: $(get_ip_location $(get_client_ip))"
+    
+    # 启动监控进程
+    monitor_history_files &
     local monitor_pid=$!
     
     # 等待用户输入
     while true; do
-        echo -e "\n${CYAN}输入 'TO' 切换到后台模式: ${NC}"
-        read -t 1 user_input 2>/dev/null || true
-        
-        if [ "$user_input" = "TO" ] || [ "$user_input" = "to" ]; then
-            echo -e "${GREEN}切换到后台模式...${NC}"
-            kill $monitor_pid 2>/dev/null || true
-            start_background_monitor
-            break
+        if read -t 1 -n 2 user_input 2>/dev/null; then
+            if [ "$user_input" = "TO" ] || [ "$user_input" = "to" ]; then
+                echo -e "\n${GREEN}切换到后台模式...${NC}"
+                kill $monitor_pid 2>/dev/null || true
+                start_background_monitor
+                break
+            fi
         fi
         
         # 检查监控进程是否还在运行
@@ -467,8 +368,6 @@ start_foreground_monitor() {
             echo -e "${RED}监控进程异常退出${NC}"
             break
         fi
-        
-        sleep 1
     done
 }
 
@@ -512,7 +411,7 @@ stop_monitor() {
     fi
     
     if [ -z "$main_pid" ]; then
-        main_pid=$(pgrep -f "command_monitor" | head -1)
+        main_pid=$(pgrep -f "monitor_history_files" | head -1)
     fi
     
     if [ -z "$main_pid" ]; then
@@ -529,6 +428,9 @@ stop_monitor() {
         kill -9 "$main_pid" 2>/dev/null || true
     fi
     
+    # 清理所有相关进程
+    pkill -f "monitor_history_files" 2>/dev/null || true
+    
     echo -e "${GREEN}✓ 监控进程已停止${NC}"
 }
 
@@ -536,7 +438,7 @@ stop_monitor() {
 show_interactive_menu() {
     clear
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}       实时命令监控系统 v4.0${NC}"
+    echo -e "${GREEN}       实时命令监控系统 v4.1${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo
     echo -e "${YELLOW}请选择操作:${NC}"
@@ -547,12 +449,13 @@ show_interactive_menu() {
     echo -e "  ${CYAN}4${NC}. 停止监控服务"
     echo -e "  ${CYAN}5${NC}. 设置开机自启动"
     echo -e "  ${CYAN}6${NC}. 取消开机自启动"
+    echo -e "  ${CYAN}7${NC}. 安装脚本到系统"
     echo -e "  ${CYAN}0${NC}. 退出"
     echo
     echo -e "${GREEN}========================================${NC}"
     echo -e "${YELLOW}提示:${NC}"
     echo -e "  - 前台模式下输入 ${CYAN}TO${NC} 可切换到后台"
-    echo -e "  - 重启后会自动在后台运行"
+    echo -e "  - 建议先安装脚本到系统再使用"
     echo -e "${GREEN}========================================${NC}"
     echo
 }
@@ -560,7 +463,7 @@ show_interactive_menu() {
 # 处理用户选择
 handle_user_choice() {
     local choice
-    read -p "请输入选择 [0-6]: " choice
+    read -p "请输入选择 [0-7]: " choice
     
     case $choice in
         1)
@@ -581,6 +484,9 @@ handle_user_choice() {
         6)
             remove_auto_start
             ;;
+        7)
+            install_script
+            ;;
         0)
             echo -e "${GREEN}再见!${NC}"
             exit 0
@@ -591,66 +497,45 @@ handle_user_choice() {
     esac
     
     echo
-    read -p "按回车键继续..."
-}
-
-# 显示使用说明
-show_usage() {
-    echo -e "${GREEN}实时命令监控系统 v4.0${NC}"
-    echo "用法: $0 [选项]"
-    echo
-    echo "选项:"
-    echo "  -d, --daemon    后台运行模式"
-    echo "  -s, --status    查看监控状态"
-    echo "  -k, --kill      停止监控进程"
-    echo "  -h, --help      显示此帮助信息"
-    echo
-    echo "示例:"
-    echo "  $0 -d          # 后台运行监控"
-    echo "  $0 -s          # 查看监控状态"
-    echo "  $0 -k          # 停止监控"
+    read -p "按回车键返回菜单..."
 }
 
 ### 主程序 ###
 main() {
     local command="${1:-}"
     
-    # 如果没有参数，显示交互式菜单
-    if [ $# -eq 0 ]; then
-        # 检查是否设置了开机自启动
-        if [ -f "$AUTO_START_FILE" ] && [ ! -f "/tmp/command_monitor.pid" ]; then
-            echo -e "${GREEN}检测到开机自启动配置，正在启动后台监控...${NC}"
+    # 命令行参数模式
+    case "$command" in
+        -d|--daemon)
             start_background_monitor
-            sleep 2
-        fi
-        
-        while true; do
+            exit $?
+            ;;
+        -s|--status)
+            check_monitor_status
+            exit $?
+            ;;
+        -k|--kill)
+            stop_monitor
+            exit $?
+            ;;
+        -h|--help|"")
             show_interactive_menu
             handle_user_choice
-        done
-    else
-        # 命令行参数模式
-        case "$command" in
-            -d|--daemon)
-                start_background_monitor
-                ;;
-            -s|--status)
-                check_monitor_status
-                ;;
-            -k|--kill)
-                stop_monitor
-                ;;
-            -h|--help|"")
-                show_usage
-                ;;
-            *)
-                echo -e "${RED}未知选项: $command${NC}"
-                show_usage
-                return 1
-                ;;
-        esac
-    fi
+            ;;
+        *)
+            echo -e "${RED}未知选项: $command${NC}"
+            echo "使用: $0 [--daemon|--status|--kill|--help]"
+            exit 1
+            ;;
+    esac
 }
 
-# 启动主程序
-main "$@"
+# 如果是直接运行且没有参数，显示菜单
+if [ $# -eq 0 ] && [ -t 0 ]; then
+    while true; do
+        show_interactive_menu
+        handle_user_choice
+    done
+else
+    main "$@"
+fi
