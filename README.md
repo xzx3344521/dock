@@ -35,4 +35,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E6%B5%8B%E9%80%9F%E8%BD%AF%E4%BB%B6)
 ```
+# 关闭防火墙de12
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%85%B3%E9%97%AD%E9%98%B2%E7%81%AB%E5%A2%99de12)
+```
 
