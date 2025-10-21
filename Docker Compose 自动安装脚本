@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Docker Compose 自动安装脚本
+# 适用于大多数Linux发行版
+
+set -e  # 遇到错误立即退出
+
+echo "=== Docker Compose 安装脚本 ==="
+
+# 检查系统架构
+ARCH=$(uname -m)
+if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "aarch64" ]; then
+    echo "❌ 不支持的架构: $ARCH"
+    exit 1
+fi
+
+# 检查是否已安装Docker
+if ! command -v docker &> /dev/null; then
+    echo "❌ Docker 未安装，请先安装Docker"
+    echo "运行以下命令安装Docker:"
+    echo "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh"
+    exit 1
+fi
+
+echo "✅ Docker 已安装"
+
+# 检查当前用户是否有Docker权限
+if ! docker ps &> /dev/null; then
+    echo "⚠️  当前用户无Docker权限，尝试添加到docker组..."
+    sudo usermod -aG docker $USER
+    echo "📝 请重新登录或运行 'newgrp docker' 使权限生效"
+    echo "📝 然后重新运行此脚本"
+    exit 1
+fi
+
+# 获取最新版本
+get_latest_version() {
+    curl -s https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
+# 安装Docker Compose
+install_docker_compose() {
+    echo "📥 正在安装 Docker Compose..."
+    
+    # 获取最新版本
+    VERSION=$(get_latest_version)
+    echo "🔍 最新版本: $VERSION"
+    
+    # 下载并安装
+    sudo curl -L "https://github.com/docker/compose/releases/download/${VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    
+    # 赋予执行权限
+    sudo chmod +x /usr/local/bin/docker-compose
+    
+    # 创建符号链接（兼容旧版本）
+    if [ ! -f /usr/bin/docker-compose ]; then
+        sudo ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+    fi
+}
+
+# 主安装流程
+main() {
+    # 如果已安装，询问是否重新安装
+    if command -v docker-compose &> /dev/null; then
+        CURRENT_VERSION=$(docker-compose --version 2>/dev/null || echo "未知版本")
+        echo "ℹ️  Docker Compose 已安装: $CURRENT_VERSION"
+        read -p "是否重新安装？(y/N): " -n 1 -r
+        echo
+        if [[ ! $REply =~ ^[Yy]$ ]]; then
+            echo "✅ 安装已取消"
+            exit 0
+        fi
+    fi
+    
+    install_docker_compose
+    
+    # 验证安装
+    if docker-compose --version &> /dev/null; then
+        echo "✅ Docker Compose 安装成功！"
+        echo "📋 版本信息: $(docker-compose --version)"
+    else
+        echo "❌ 安装失败，请检查网络连接或手动安装"
+        exit 1
+    fi
+}
+
+# 执行主函数
+main
