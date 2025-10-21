@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# 综合防火墙禁用脚本
+
+set -e
+
+echo "=== 开始禁用所有防火墙 ==="
+
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo "请使用 root 权限运行此脚本"
+    exit 1
+fi
+
+# 函数：检查并停止服务
+stop_service() {
+    local service_name=$1
+    if systemctl is-active --quiet "$service_name"; then
+        echo "停止 $service_name 服务..."
+        systemctl stop "$service_name"
+        systemctl disable "$service_name"
+        echo "✓ $service_name 已停止并禁用"
+    else
+        echo "✓ $service_name 未运行"
+    fi
+}
+
+# 停止所有防火墙服务
+stop_service "ufw"
+stop_service "firewalld"
+stop_service "nftables"
+stop_service "iptables"
+
+# 清除 iptables 规则
+echo "清除 iptables 规则..."
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# 清除 ip6tables 规则
+ip6tables -F
+ip6tables -X
+ip6tables -t nat -F
+ip6tables -t nat -X
+ip6tables -t mangle -F
+ip6tables -t mangle -X
+ip6tables -P INPUT ACCEPT
+ip6tables -P FORWARD ACCEPT
+ip6tables -P OUTPUT ACCEPT
+
+# 清除 nftables 规则
+echo "清除 nftables 规则..."
+nft flush ruleset 2>/dev/null || true
+
+# 创建允许所有的 nftables 配置
+cat > /tmp/nftables-accept-all.conf << 'EOF'
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy accept;
+    }
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+    }
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}
+EOF
+
+nft -f /tmp/nftables-accept-all.conf
+cp /tmp/nftables-accept-all.conf /etc/nftables.conf
+
+# 显示最终状态
+echo ""
+echo "=== 防火墙状态 ==="
+echo "ufw: $(systemctl is-active ufw 2>/dev/null || echo 'inactive')"
+echo "firewalld: $(systemctl is-active firewalld 2>/dev/null || echo 'inactive')"
+echo "nftables: $(systemctl is-active nftables 2>/dev/null || echo 'inactive')"
+echo ""
+echo "=== 当前策略 ==="
+echo "IPv4 INPUT: $(iptables -L INPUT -n | grep policy | awk '{print $4}')"
+echo "IPv6 INPUT: $(ip6tables -L INPUT -n | grep policy | awk '{print $4}')"
+
+echo ""
+echo "✅ 所有防火墙已禁用，系统现在允许所有连接！"
+echo "⚠️  警告：此配置存在安全风险，仅建议在测试环境中使用"
