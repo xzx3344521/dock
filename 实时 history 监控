@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# 实时 history 监控 - 强制实时写入
+echo "启用实时 history 监控..."
+
+# 配置所有用户的 bash 为实时记录
+configure_realtime_history() {
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            user=$(basename "$user_dir")
+            bashrc="$user_dir/.bashrc"
+            
+            # 添加实时 history 配置
+            if [ -f "$bashrc" ]; then
+                if ! grep -q "REAL_TIME_HISTORY" "$bashrc"; then
+                    echo "
+# REAL_TIME_HISTORY - 实时记录命令
+export PROMPT_COMMAND='history -a; history -c; history -r'
+export HISTTIMEFORMAT='%F %T '
+shopt -s histappend
+" >> "$bashrc"
+                    echo "已为用户 $user 配置实时 history"
+                fi
+            fi
+        fi
+    done
+}
+
+# 监控 history 文件变化
+monitor_history() {
+    echo "开始监控命令历史..."
+    
+    # 获取初始文件状态
+    declare -A file_sizes
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            user=$(basename "$user_dir")
+            history_file="$user_dir/.bash_history"
+            if [ -f "$history_file" ]; then
+                file_sizes["$user"]=$(stat -c%s "$history_file")
+            else
+                file_sizes["$user"]=0
+            fi
+        fi
+    done
+    
+    # 持续监控
+    while true; do
+        for user_dir in /home/* /root; do
+            if [ -d "$user_dir" ]; then
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                
+                if [ -f "$history_file" ]; then
+                    current_size=$(stat -c%s "$history_file")
+                    last_size=${file_sizes["$user"]}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        # 读取新内容
+                        new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null)
+                        if [ -n "$new_content" ]; then
+                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户 $user 执行命令:"
+                            echo "$new_content" | while IFS= read -r line; do
+                                if [ -n "$line" ] && [ "${#line}" -gt 1 ]; then
+                                    echo "  → $line"
+                                fi
+                            done
+                            echo "---"
+                        fi
+                        file_sizes["$user"]=$current_size
+                    fi
+                fi
+            fi
+        done
+        sleep 1
+    done
+}
+
+# 执行
+configure_realtime_history
+monitor_history
