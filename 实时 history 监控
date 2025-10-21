@@ -1,26 +1,20 @@
 #!/bin/bash
 
-# 修复版实时命令监控脚本 - 多IP查询源 + 优化后台模式
-# 版本: 3.1
+# 稳定版实时命令监控脚本 - 带离线IP库支持
+# 版本: 3.2
 
 set -e
 
 ### 配置区域 ###
 LOG_DIR="/root/command_monitor_logs"
 MAX_LOG_SIZE="1M"
-MAX_LOG_FILES=50                     # 增加最大文件数避免覆盖
+MAX_LOG_FILES=50
 LOG_ROTATE_INTERVAL=1800
 MEMORY_LIMIT="512M"
 CPU_LIMIT=90
 CHECK_INTERVAL=300
 BACKUP_DAYS=7
 CLEANUP_INTERVAL=3600
-
-### IP地理位置配置 - 多个备用源 ###
-IP_API_SERVICES=("ipapi" "ipapi.co" "ipinfo.io" "ip-api.com" "ipapi.com")
-CACHE_IP_INFO=true
-IP_CACHE_FILE="/tmp/ip_geo_cache.txt"
-CACHE_EXPIRE=86400
 
 ### 颜色定义 ###
 RED='\033[0;31m'
@@ -38,6 +32,243 @@ LAST_CLEANUP=0
 LAST_ROTATION=0
 CURRENT_LOG=""
 DAEMON_MODE=false
+
+# 简单离线IP库 - 中国常见IP段
+declare -A IP_LOCAL_DB=(
+    ["1."]="中国-APNIC"
+    ["14."]="中国-APNIC"
+    ["27."]="中国-APNIC"
+    ["36."]="中国-电信"
+    ["39."]="中国-电信"
+    ["42."]="中国-电信"
+    ["49."]="中国-电信"
+    ["58."]="中国-电信"
+    ["59."]="中国-电信"
+    ["60."]="中国-电信"
+    ["61."]="中国-电信"
+    ["106."]="中国-电信"
+    ["110."]="中国-电信"
+    ["111."]="中国-电信"
+    ["112."]="中国-电信"
+    ["113."]="中国-电信"
+    ["114."]="中国-电信"
+    ["115."]="中国-电信"
+    ["116."]="中国-电信"
+    ["117."]="中国-电信"
+    ["118."]="中国-电信"
+    ["119."]="中国-电信"
+    ["120."]="中国-电信"
+    ["121."]="中国-电信"
+    ["122."]="中国-电信"
+    ["123."]="中国-电信"
+    ["124."]="中国-电信"
+    ["125."]="中国-电信"
+    ["139."]="中国-电信"
+    ["140."]="中国-电信"
+    ["171."]="中国-电信"
+    ["175."]="中国-电信"
+    ["180."]="中国-电信"
+    ["182."]="中国-电信"
+    ["183."]="中国-电信"
+    ["202."]="中国-电信"
+    ["203."]="中国-电信"
+    ["210."]="中国-电信"
+    ["218."]="中国-电信"
+    ["219."]="中国-电信"
+    ["220."]="中国-电信"
+    ["221."]="中国-电信"
+    ["222."]="中国-电信"
+    ["223."]="中国-电信"
+    ["14.16."]="中国-广东-电信"
+    ["14.17."]="中国-广东-电信"
+    ["14.18."]="中国-广东-电信"
+    ["14.19."]="中国-广东-电信"
+    ["27.16."]="中国-湖北-电信"
+    ["27.17."]="中国-湖北-电信"
+    ["27.18."]="中国-湖北-电信"
+    ["27.19."]="中国-湖北-电信"
+    ["36.32."]="中国-浙江-电信"
+    ["36.33."]="中国-浙江-电信"
+    ["36.34."]="中国-浙江-电信"
+    ["36.35."]="中国-浙江-电信"
+    ["36.36."]="中国-浙江-电信"
+    ["36.37."]="中国-浙江-电信"
+    ["36.38."]="中国-浙江-电信"
+    ["36.39."]="中国-浙江-电信"
+    ["39.128."]="中国-云南-电信"
+    ["39.129."]="中国-云南-电信"
+    ["39.130."]="中国-云南-电信"
+    ["39.131."]="中国-云南-电信"
+    ["42.48."]="中国-湖南-电信"
+    ["42.49."]="中国-湖南-电信"
+    ["42.50."]="中国-湖南-电信"
+    ["42.51."]="中国-湖南-电信"
+    ["42.52."]="中国-湖南-电信"
+    ["42.53."]="中国-湖南-电信"
+    ["42.54."]="中国-湖南-电信"
+    ["42.55."]="中国-湖南-电信"
+    ["42.56."]="中国-湖南-电信"
+    ["42.57."]="中国-湖南-电信"
+    ["42.58."]="中国-湖南-电信"
+    ["42.59."]="中国-湖南-电信"
+    ["42.60."]="中国-湖南-电信"
+    ["42.61."]="中国-湖南-电信"
+    ["42.62."]="中国-湖南-电信"
+    ["42.63."]="中国-湖南-电信"
+    ["49.64."]="中国-江苏-电信"
+    ["49.65."]="中国-江苏-电信"
+    ["49.66."]="中国-江苏-电信"
+    ["49.67."]="中国-江苏-电信"
+    ["49.68."]="中国-江苏-电信"
+    ["49.69."]="中国-江苏-电信"
+    ["49.70."]="中国-江苏-电信"
+    ["49.71."]="中国-江苏-电信"
+    ["49.72."]="中国-江苏-电信"
+    ["49.73."]="中国-江苏-电信"
+    ["49.74."]="中国-江苏-电信"
+    ["49.75."]="中国-江苏-电信"
+    ["49.76."]="中国-江苏-电信"
+    ["49.77."]="中国-江苏-电信"
+    ["49.78."]="中国-江苏-电信"
+    ["49.79."]="中国-江苏-电信"
+    ["49.80."]="中国-江苏-电信"
+    ["49.81."]="中国-江苏-电信"
+    ["49.82."]="中国-江苏-电信"
+    ["49.83."]="中国-江苏-电信"
+    ["49.84."]="中国-江苏-电信"
+    ["49.85."]="中国-江苏-电信"
+    ["49.86."]="中国-江苏-电信"
+    ["49.87."]="中国-江苏-电信"
+    ["49.88."]="中国-江苏-电信"
+    ["49.89."]="中国-江苏-电信"
+    ["49.90."]="中国-江苏-电信"
+    ["49.91."]="中国-江苏-电信"
+    ["49.92."]="中国-江苏-电信"
+    ["49.93."]="中国-江苏-电信"
+    ["49.94."]="中国-江苏-电信"
+    ["49.95."]="中国-江苏-电信"
+    ["49.96."]="中国-江苏-电信"
+    ["49.97."]="中国-江苏-电信"
+    ["49.98."]="中国-江苏-电信"
+    ["49.99."]="中国-江苏-电信"
+    ["58.16."]="中国-贵州-电信"
+    ["58.17."]="中国-贵州-电信"
+    ["58.18."]="中国-贵州-电信"
+    ["58.19."]="中国-贵州-电信"
+    ["58.20."]="中国-湖南-电信"
+    ["58.21."]="中国-湖南-电信"
+    ["58.22."]="中国-湖南-电信"
+    ["58.23."]="中国-湖南-电信"
+    ["58.24."]="中国-江苏-电信"
+    ["58.25."]="中国-上海-电信"
+    ["58.26."]="中国-福建-电信"
+    ["58.27."]="中国-福建-电信"
+    ["58.28."]="中国-福建-电信"
+    ["58.29."]="中国-福建-电信"
+    ["58.30."]="中国-上海-电信"
+    ["58.31."]="中国-上海-电信"
+    ["58.32."]="中国-上海-电信"
+    ["58.33."]="中国-上海-电信"
+    ["58.34."]="中国-上海-电信"
+    ["58.35."]="中国-上海-电信"
+    ["58.36."]="中国-上海-电信"
+    ["58.37."]="中国-上海-电信"
+    ["58.38."]="中国-上海-电信"
+    ["58.39."]="中国-上海-电信"
+    ["58.40."]="中国-上海-电信"
+    ["58.41."]="中国-上海-电信"
+    ["58.42."]="中国-上海-电信"
+    ["58.43."]="中国-上海-电信"
+    ["58.44."]="中国-上海-电信"
+    ["58.45."]="中国-上海-电信"
+    ["58.46."]="中国-上海-电信"
+    ["58.47."]="中国-上海-电信"
+    ["58.48."]="中国-上海-电信"
+    ["58.49."]="中国-上海-电信"
+    ["58.50."]="中国-上海-电信"
+    ["58.51."]="中国-上海-电信"
+    ["58.52."]="中国-上海-电信"
+    ["58.53."]="中国-上海-电信"
+    ["58.54."]="中国-上海-电信"
+    ["58.55."]="中国-上海-电信"
+    ["58.56."]="中国-上海-电信"
+    ["58.57."]="中国-上海-电信"
+    ["58.58."]="中国-上海-电信"
+    ["58.59."]="中国-上海-电信"
+    ["58.60."]="中国-广东-电信"
+    ["58.61."]="中国-广东-电信"
+    ["58.62."]="中国-广东-电信"
+    ["58.63."]="中国-广东-电信"
+    ["59.32."]="中国-广东-电信"
+    ["59.33."]="中国-广东-电信"
+    ["59.34."]="中国-广东-电信"
+    ["59.35."]="中国-广东-电信"
+    ["59.36."]="中国-广东-电信"
+    ["59.37."]="中国-广东-电信"
+    ["59.38."]="中国-广东-电信"
+    ["59.39."]="中国-广东-电信"
+    ["59.40."]="中国-广东-电信"
+    ["59.41."]="中国-广东-电信"
+    ["59.42."]="中国-广东-电信"
+    ["59.43."]="中国-广东-电信"
+    ["59.44."]="中国-广东-电信"
+    ["59.45."]="中国-广东-电信"
+    ["59.46."]="中国-广东-电信"
+    ["59.47."]="中国-广东-电信"
+    ["59.48."]="中国-广东-电信"
+    ["59.49."]="中国-广东-电信"
+    ["59.50."]="中国-广东-电信"
+    ["59.51."]="中国-广东-电信"
+    ["59.52."]="中国-广东-电信"
+    ["59.53."]="中国-广东-电信"
+    ["59.54."]="中国-广东-电信"
+    ["59.55."]="中国-广东-电信"
+    ["59.56."]="中国-广东-电信"
+    ["59.57."]="中国-广东-电信"
+    ["59.58."]="中国-广东-电信"
+    ["59.59."]="中国-广东-电信"
+    ["59.60."]="中国-广东-电信"
+    ["59.61."]="中国-广东-电信"
+    ["59.62."]="中国-广东-电信"
+    ["59.63."]="中国-广东-电信"
+    ["59.64."]="中国-广东-电信"
+    ["59.65."]="中国-广东-电信"
+    ["59.66."]="中国-广东-电信"
+    ["59.67."]="中国-广东-电信"
+    ["59.68."]="中国-广东-电信"
+    ["59.69."]="中国-广东-电信"
+    ["59.70."]="中国-广东-电信"
+    ["59.71."]="中国-广东-电信"
+    ["59.72."]="中国-广东-电信"
+    ["59.73."]="中国-广东-电信"
+    ["59.74."]="中国-广东-电信"
+    ["59.75."]="中国-广东-电信"
+    ["59.76."]="中国-广东-电信"
+    ["59.77."]="中国-广东-电信"
+    ["59.78."]="中国-广东-电信"
+    ["59.79."]="中国-广东-电信"
+    ["59.80."]="中国-广东-电信"
+    ["59.81."]="中国-广东-电信"
+    ["59.82."]="中国-广东-电信"
+    ["59.83."]="中国-广东-电信"
+    ["59.84."]="中国-广东-电信"
+    ["59.85."]="中国-广东-电信"
+    ["59.86."]="中国-广东-电信"
+    ["59.87."]="中国-广东-电信"
+    ["59.88."]="中国-广东-电信"
+    ["59.89."]="中国-广东-电信"
+    ["59.90."]="中国-广东-电信"
+    ["59.91."]="中国-广东-电信"
+    ["59.92."]="中国-广东-电信"
+    ["59.93."]="中国-广东-电信"
+    ["59.94."]="中国-广东-电信"
+    ["59.95."]="中国-广东-电信"
+    ["59.96."]="中国-广东-电信"
+    ["59.97."]="中国-广东-电信"
+    ["59.98."]="中国-广东-电信"
+    ["59.99."]="中国-广东-电信"
+    ["113.194."]="中国-江西-电信"
+)
 
 # 获取时间戳
 timestamp() {
@@ -65,8 +296,8 @@ log_message() {
     fi
 }
 
-# 增强版IP地理位置查询 - 多备用源
-get_ip_location() {
+# 离线IP地理位置查询
+get_ip_location_offline() {
     local ip="$1"
     
     # 检查内网IP
@@ -80,23 +311,41 @@ get_ip_location() {
         return 0
     fi
     
-    # 检查缓存
-    if [ "$CACHE_IP_INFO" = true ] && [ -f "$IP_CACHE_FILE" ]; then
-        local cached_info=$(grep "^$ip|" "$IP_CACHE_FILE" | head -1)
-        if [ -n "$cached_info" ]; then
-            local cache_time=$(echo "$cached_info" | cut -d'|' -f2)
-            local current_time=$(date +%s)
-            if [ $((current_time - cache_time)) -lt $CACHE_EXPIRE ]; then
-                echo "$cached_info" | cut -d'|' -f3-
-                return 0
-            fi
+    # 在离线数据库中查找
+    for prefix in "${!IP_LOCAL_DB[@]}"; do
+        if [[ "$ip" == "$prefix"* ]]; then
+            echo "${IP_LOCAL_DB[$prefix]}"
+            return 0
         fi
-    fi
+    done
     
-    local location_info=""
+    # 根据IP段判断国家
+    local first_octet=$(echo "$ip" | cut -d. -f1)
+    case $first_octet in
+        1|14|27|36|39|42|49|58|59|60|61|106|110|111|112|113|114|115|116|117|118|119|120|121|122|123|124|125|139|140|171|175|180|182|183|202|203|210|218|219|220|221|222|223)
+            echo "中国-未知地区"
+            ;;
+        8|12|13|23|24|32|34|35|37|38|40|45|47|50|52|54|63|64|65|66|67|68|69|70|71|72|73|74|75|76|96|97|98|99|104|107|108|128|129|130|131|132|134|135|136|137|138|142|143|144|146|147|148|149|150|152|153|155|156|157|158|159|160|161|162|164|165|166|167|168|169|170|172|173|174|176|184|192|198|199|200|202|203|204|205|206|207|208|209)
+            echo "美国"
+            ;;
+        5|31|37|46|62|77|78|79|80|81|82|83|84|85|86|87|88|89|90|91|92|93|94|95)
+            echo "欧洲"
+            ;;
+        103|110|111|112|113|114|115|116|117|118|119|120|121|122|123|124|125|126|133|180|210|211|218|219|220|221)
+            echo "亚太地区"
+            ;;
+        *)
+            echo "未知位置"
+            ;;
+    esac
+}
+
+# 在线IP地理位置查询
+get_ip_location_online() {
+    local ip="$1"
     
     # 方法1: ip-api.com (最可靠)
-    location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp" 2>/dev/null || true)
+    local location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp" 2>/dev/null || true)
     if [ -n "$location_info" ] && echo "$location_info" | grep -q '"status":"success"'; then
         local country=$(echo "$location_info" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
         local region=$(echo "$location_info" | grep -o '"regionName":"[^"]*"' | cut -d'"' -f4)
@@ -104,67 +353,61 @@ get_ip_location() {
         local isp=$(echo "$location_info" | grep -o '"isp":"[^"]*"' | cut -d'"' -f4)
         
         if [ -n "$country" ]; then
-            location_info="$country"
-            [ -n "$region" ] && location_info="$location_info-$region"
-            [ -n "$city" ] && location_info="$location_info-$city"
-            [ -n "$isp" ] && location_info="$location_info($isp)"
+            local result="$country"
+            [ -n "$region" ] && result="$result-$region"
+            [ -n "$city" ] && result="$result-$city"
+            [ -n "$isp" ] && result="$result($isp)"
+            echo "$result"
+            return 0
         fi
     fi
     
-    # 方法2: ipapi.co (备用)
-    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
-        location_info=$(curl -s -m 3 "https://ipapi.co/$ip/json/" 2>/dev/null | \
-            grep -o '"country_name":"[^"]*","region":"[^"]*","city":"[^"]*","org":"[^"]*"' | \
-            sed 's/"country_name":"//;s/","region":"/-/;s/","city":"/-/;s/","org":"/(/;s/"$//;s/$/)/' || true)
-    fi
-    
-    # 方法3: ipinfo.io (备用)
-    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
-        location_info=$(curl -s -m 3 "https://ipinfo.io/$ip" 2>/dev/null | \
-            grep -o '"country":"[^"]*","region":"[^"]*","city":"[^"]*","org":"[^"]*"' | \
-            sed 's/"country":"//;s/","region":"/-/;s/","city":"/-/;s/","org":"/(/;s/"$//;s/$/)/' || true)
-    fi
-    
-    # 方法4: 使用whois查询 (最后备用)
-    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
-        if command -v whois &> /dev/null; then
-            location_info=$(timeout 5 whois "$ip" 2>/dev/null | \
-                grep -iE "country:|descr:|Organization:" | head -2 | \
-                awk -F: '{print $2}' | sed 's/^ *//' | tr '\n' ' ' | sed 's/  / /g' | head -c 50)
-            if [ -n "$location_info" ]; then
-                location_info="whois:$location_info"
-            fi
+    # 方法2: 使用ipapi.co
+    location_info=$(curl -s -m 3 "https://ipapi.co/$ip/json/" 2>/dev/null || true)
+    if [ -n "$location_info" ]; then
+        local country=$(echo "$location_info" | grep -o '"country_name":"[^"]*"' | cut -d'"' -f4)
+        local city=$(echo "$location_info" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
+        local isp=$(echo "$location_info" | grep -o '"org":"[^"]*"' | cut -d'"' -f4)
+        
+        if [ -n "$country" ]; then
+            local result="$country"
+            [ -n "$city" ] && result="$result-$city"
+            [ -n "$isp" ] && result="$result($isp)"
+            echo "$result"
+            return 0
         fi
     fi
     
-    # 如果所有方法都失败
-    if [ -z "$location_info" ] || [ "$location_info" = "null" ]; then
-        location_info="未知位置"
-    fi
-    
-    # 缓存结果
-    if [ "$CACHE_IP_INFO" = true ]; then
-        mkdir -p "$(dirname "$IP_CACHE_FILE")"
-        # 删除旧的缓存条目
-        grep -v "^$ip|" "$IP_CACHE_FILE" 2>/dev/null > "${IP_CACHE_FILE}.tmp" || true
-        echo "$ip|$(date +%s)|$location_info" >> "${IP_CACHE_FILE}.tmp"
-        mv "${IP_CACHE_FILE}.tmp" "$IP_CACHE_FILE" 2>/dev/null || true
-    fi
-    
-    echo "$location_info"
+    return 1
 }
 
-# 获取城市名称（用于日志文件名）
+# 主IP地理位置查询函数
+get_ip_location() {
+    local ip="$1"
+    
+    # 先尝试在线查询
+    if command -v curl &> /dev/null; then
+        local online_result=$(get_ip_location_online "$ip")
+        if [ -n "$online_result" ] && [ "$online_result" != "null" ]; then
+            echo "$online_result"
+            return 0
+        fi
+    fi
+    
+    # 在线查询失败，使用离线数据库
+    local offline_result=$(get_ip_location_offline "$ip")
+    echo "$offline_result"
+}
+
+# 获取城市名称
 get_city_name() {
     local ip="$1"
     local location=$(get_ip_location "$ip")
     
     # 从位置信息中提取城市名
     if [[ "$location" == *"-"* ]]; then
-        # 格式: 中国-江西-南昌(中国电信)
         local city=$(echo "$location" | awk -F'-' '{print $NF}' | sed 's/(.*//')
-        if [ -n "$city" ] && [ "$city" != "未知位置" ]; then
-            # 清理特殊字符，只保留中文、英文、数字
+        if [ -n "$city" ] && [ "$city" != "未知位置" ] && [ "$city" != "未知地区" ]; then
             echo "$city" | sed 's/[^a-zA-Z0-9\u4e00-\u9fff]/_/g'
         else
             echo "unknown"
@@ -178,30 +421,21 @@ get_city_name() {
 get_client_ip() {
     local ip="unknown"
     
-    # 方法1: 从SSH连接获取
     if [ -n "$SSH_CLIENT" ]; then
         ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
     elif [ -n "$SSH_CONNECTION" ]; then
         ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
-    fi
-    
-    # 方法2: 从who命令获取
-    if [ "$ip" = "unknown" ]; then
+    else
         ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
         if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
             ip="localhost"
         fi
     fi
     
-    # 方法3: 从网络连接获取
-    if [ "$ip" = "unknown" ] || [ "$ip" = "localhost" ]; then
-        ip=$(netstat -tn 2>/dev/null | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | head -1)
-    fi
-    
     echo "$ip"
 }
 
-# 生成唯一日志文件名（避免覆盖）
+# 生成唯一日志文件名
 generate_log_filename() {
     local client_ip=$(get_client_ip)
     local city_name=$(get_city_name "$client_ip")
@@ -209,7 +443,6 @@ generate_log_filename() {
     local counter=1
     local base_name=""
     
-    # 构建基础文件名
     if [ "$city_name" != "unknown" ]; then
         base_name="monitor_${client_ip//./_}_${city_name}_${log_date}"
     else
@@ -218,7 +451,6 @@ generate_log_filename() {
     
     local log_file="$LOG_DIR/${base_name}.log"
     
-    # 如果文件已存在，添加序号
     while [ -f "$log_file" ]; do
         log_file="$LOG_DIR/${base_name}_${counter}.log"
         counter=$((counter + 1))
@@ -234,18 +466,14 @@ generate_log_filename() {
 check_log_rotation() {
     local current_time=$(date +%s)
     
-    # 检查时间间隔
     if [ $((current_time - LAST_ROTATION)) -ge $LOG_ROTATE_INTERVAL ]; then
         log_rotation "time"
         return 0
     fi
     
-    # 检查文件大小
     if [ -f "$CURRENT_LOG" ]; then
         local log_size=$(stat -c%s "$CURRENT_LOG" 2>/dev/null || echo 0)
-        local max_bytes=1048576  # 1M in bytes
-        
-        if [ "$log_size" -gt "$max_bytes" ]; then
+        if [ "$log_size" -gt 1048576 ]; then
             log_rotation "size"
             return 0
         fi
@@ -258,11 +486,9 @@ check_log_rotation() {
 init_log_system() {
     mkdir -p "$LOG_DIR"
     
-    # 生成唯一日志文件名
     CURRENT_LOG=$(generate_log_filename)
     LATEST_LOG="$LOG_DIR/latest.log"
     
-    # 创建软链接
     ln -sf "$CURRENT_LOG" "$LATEST_LOG" 2>/dev/null || true
     
     LAST_ROTATION=$(date +%s)
@@ -277,9 +503,11 @@ init_log_system() {
     log_message "INFO" "日志文件: $CURRENT_LOG"
     log_message "INFO" "日志轮转: ${LOG_ROTATE_INTERVAL}秒或${MAX_LOG_SIZE}"
     
-    # 显示IP查询结果详情
-    if [ "$location_info" = "未知位置" ]; then
-        log_message "WARN" "IP地理位置查询失败，请检查网络连接"
+    # 显示查询方式
+    if [[ "$location_info" == *"离线"* ]] || [[ "$location_info" == *"未知"* ]]; then
+        log_message "WARN" "使用离线IP数据库查询"
+    else
+        log_message "SUCCESS" "在线IP查询成功"
     fi
 }
 
@@ -288,117 +516,125 @@ log_rotation() {
     local reason="$1"
     log_message "INFO" "执行日志轮转 - 原因: $reason"
     
-    # 保存当前日志的最终信息
     if [ -f "$CURRENT_LOG" ]; then
         local log_size=$(du -h "$CURRENT_LOG" 2>/dev/null | cut -f1 || echo "未知")
         log_message "INFO" "原日志文件大小: $log_size"
     fi
     
-    # 重新初始化日志系统
     init_log_system
     log_message "INFO" "新日志文件已创建"
 }
 
-# 资源监控函数
-monitor_resources() {
-    local check_count=0
+# 主监控函数
+start_main_monitor() {
+    log_message "INFO" "启动主监控进程..."
+    
+    declare -A file_sizes
+    declare -A last_commands
+    
+    for user_dir in /home/* /root; do
+        if [ -d "$user_dir" ]; then
+            local user=$(basename "$user_dir")
+            local history_file="$user_dir/.bash_history"
+            if [ -f "$history_file" ]; then
+                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_commands["$user"]=""
+            else
+                file_sizes["$user"]=0
+                last_commands["$user"]=""
+            fi
+        fi
+    done
     
     while true; do
-        sleep 60
-        
-        # 检查日志轮转条件
-        check_log_rotation
-        
-        # 检查内存使用
-        local mem_usage=$(free 2>/dev/null | awk 'NR==2{printf "%.2f", $3*100/$2}' || echo "0")
-        if (( $(echo "$mem_usage > $CPU_LIMIT" | bc -l 2>/dev/null) )); then
-            log_message "WARN" "内存使用率过高: ${mem_usage}%"
-        fi
-        
-        # 检查CPU使用率
-        local cpu_usage=$(top -bn1 2>/dev/null | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 || echo "0")
-        if (( $(echo "$cpu_usage > $CPU_LIMIT" | bc -l 2>/dev/null) )); then
-            log_message "WARN" "CPU使用率过高: ${cpu_usage}%"
-        fi
-        
-        # 定期系统检查
-        ((check_count++))
-        if [ $((check_count * 60)) -ge $CHECK_INTERVAL ]; then
-            perform_system_check
-            check_count=0
-        fi
-        
-        # 定期清理旧日志
-        local current_time=$(date +%s)
-        if [ $((current_time - LAST_CLEANUP)) -ge $CLEANUP_INTERVAL ]; then
-            cleanup_old_logs
-            LAST_CLEANUP=$current_time
-        fi
+        for user_dir in /home/* /root; do
+            if [ -d "$user_dir" ]; then
+                local user=$(basename "$user_dir")
+                local history_file="$user_dir/.bash_history"
+                
+                if [ -f "$history_file" ]; then
+                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    local last_size=${file_sizes["$user"]}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        local new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null | tr -d '\0')
+                        
+                        if [ -n "$new_content" ]; then
+                            while IFS= read -r line; do
+                                line=$(echo "$line" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                                
+                                if [ -n "$line" ] && [ "${#line}" -gt 1 ] && \
+                                   [[ ! "$line" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|echo|date|whoami)$ ]] && \
+                                   [[ ! "$line" =~ ^#[0-9]+$ ]]; then
+                                    
+                                    local client_ip=$(get_client_ip)
+                                    local location_info=$(get_ip_location "$client_ip")
+                                    
+                                    log_message "COMMAND" "用户: $user | 命令: $line | 来源: $client_ip [$location_info]"
+                                    last_commands["$user"]="$line"
+                                fi
+                            done <<< "$new_content"
+                        fi
+                        
+                        file_sizes["$user"]=$current_size
+                    fi
+                fi
+            fi
+        done
+        sleep 1
     done
 }
 
-# 系统健康检查
-perform_system_check() {
-    log_message "INFO" "=== 系统健康检查 ==="
+# 后台运行监控
+start_background_monitor() {
+    echo -e "${GREEN}启动后台监控服务...${NC}"
     
-    # 内存信息
-    local mem_info=$(free -h 2>/dev/null || echo "无法获取内存信息")
-    log_message "INFO" "内存使用: $mem_info"
-    
-    # 磁盘信息
-    local disk_info=$(df -h "$LOG_DIR" 2>/dev/null | tail -1 || echo "无法获取磁盘信息")
-    log_message "INFO" "磁盘使用: $disk_info"
-    
-    # 日志文件信息
-    local log_count=$(find "$LOG_DIR" -name "monitor_*.log" 2>/dev/null | wc -l)
-    local total_log_size=$(du -sh "$LOG_DIR" 2>/dev/null | cut -f1 || echo "0")
-    log_message "INFO" "日志文件数: $log_count, 总大小: $total_log_size"
-    
-    log_message "INFO" "=== 检查完成 ==="
-}
-
-# 清理旧日志
-cleanup_old_logs() {
-    log_message "INFO" "开始清理旧日志..."
-    
-    # 按时间清理
-    local deleted_count=$(find "$LOG_DIR" -name "monitor_*.log" -mtime "+$BACKUP_DAYS" -delete -print 2>/dev/null | wc -l)
-    if [ "$deleted_count" -gt 0 ]; then
-        log_message "INFO" "已删除 $deleted_count 个过期日志文件"
+    if [ -f "/tmp/command_monitor.pid" ]; then
+        local old_pid=$(cat "/tmp/command_monitor.pid" 2>/dev/null)
+        if ps -p "$old_pid" >/dev/null 2>&1; then
+            echo -e "${YELLOW}监控服务已经在运行 (PID: $old_pid)${NC}"
+            echo -e "停止现有服务: ${RED}kill $old_pid${NC}"
+            return 1
+        fi
     fi
     
-    # 按数量清理（保留最新的）
-    local log_count=$(find "$LOG_DIR" -name "monitor_*.log" 2>/dev/null | wc -l)
-    if [ "$log_count" -gt "$MAX_LOG_FILES" ]; then
-        local files_to_delete=$((log_count - MAX_LOG_FILES))
-        find "$LOG_DIR" -name "monitor_*.log" -type f -printf '%T@ %p\n' 2>/dev/null | \
-        sort -n 2>/dev/null | head -n "$files_to_delete" | cut -d' ' -f2- | while read file; do
-            rm -f "$file" 2>/dev/null && log_message "INFO" "删除旧日志: $(basename "$file")"
-        done
+    (
+        setsid >/dev/null 2>&1
+        DAEMON_MODE=true
+        init_log_system
+        configure_realtime_history
+        
+        log_message "INFO" "后台监控进程启动 - PID: $$"
+        echo $$ > "/tmp/command_monitor.pid"
+        
+        # 启动资源监控（简化版）
+        (
+            while true; do
+                sleep 60
+                check_log_rotation
+            done
+        ) &
+        
+        start_main_monitor
+        
+        rm -f "/tmp/command_monitor.pid"
+        
+    ) >/dev/null 2>&1 &
+    
+    local main_pid=$!
+    sleep 2
+    
+    if ps -p $main_pid >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 后台监控已启动!${NC}"
+        echo -e "主进程PID: $main_pid"
+        echo -e "日志文件: $LATEST_LOG"
+        echo -e "查看日志: ${GREEN}tail -f $LATEST_LOG${NC}"
+        echo -e "停止监控: ${RED}kill $main_pid${NC}"
+        echo -e "状态检查: ${BLUE}$0 -s${NC}"
+    else
+        echo -e "${RED}✗ 后台监控启动失败${NC}"
+        return 1
     fi
-    
-    log_message "SUCCESS" "日志清理完成"
-}
-
-# 信号处理函数
-setup_signal_handlers() {
-    trap 'cleanup_on_exit' SIGINT SIGTERM
-    trap 'log_message "WARN" "收到挂起信号"; cleanup_on_exit' SIGHUP
-    trap 'log_rotation "manual"' SIGUSR1
-}
-
-# 退出清理
-cleanup_on_exit() {
-    log_message "INFO" "正在停止监控服务..."
-    
-    if [ -n "$MONITOR_PID" ]; then
-        kill "$MONITOR_PID" 2>/dev/null || true
-    fi
-    
-    pkill -f "monitor_resources" 2>/dev/null || true
-    
-    log_message "SUCCESS" "监控服务已停止"
-    exit 0
 }
 
 # 配置实时history
@@ -432,186 +668,25 @@ EOF
     done
 }
 
-# 过滤无用命令
-should_ignore_command() {
-    local command="$1"
-    
-    # 忽略空命令和很短的无意义命令
-    if [ -z "$command" ] || [ "${#command}" -lt 2 ]; then
-        return 0
-    fi
-    
-    # 忽略history时间戳行
-    if [[ "$command" =~ ^#[0-9]+$ ]]; then
-        return 0
-    fi
-    
-    # 忽略常见简单命令
-    local ignore_patterns=(
-        "ls" "cd" "pwd" "ll" "la" "history" "exit" "clear"
-        "echo" "date" "whoami" "id" "uname" "uptime"
-    )
-    
-    for pattern in "${ignore_patterns[@]}"; do
-        if [ "$command" = "$pattern" ]; then
-            return 0
-        fi
-    done
-    
-    return 1
-}
-
-# 主监控函数
-start_main_monitor() {
-    log_message "INFO" "启动主监控进程..."
-    
-    declare -A file_sizes
-    declare -A last_commands
-    
-    # 初始化文件大小
-    for user_dir in /home/* /root; do
-        if [ -d "$user_dir" ]; then
-            local user=$(basename "$user_dir")
-            local history_file="$user_dir/.bash_history"
-            if [ -f "$history_file" ]; then
-                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                last_commands["$user"]=""
-            else
-                file_sizes["$user"]=0
-                last_commands["$user"]=""
-            fi
-        fi
-    done
-    
-    # 主监控循环
-    while true; do
-        for user_dir in /home/* /root; do
-            if [ -d "$user_dir" ]; then
-                local user=$(basename "$user_dir")
-                local history_file="$user_dir/.bash_history"
-                
-                if [ -f "$history_file" ]; then
-                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    local last_size=${file_sizes["$user"]}
-                    
-                    if [ "$current_size" -gt "$last_size" ]; then
-                        local new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null | tr -d '\0')
-                        
-                        if [ -n "$new_content" ]; then
-                            while IFS= read -r line; do
-                                line=$(echo "$line" | sed 's/^[ \t]*//;s/[ \t]*$//')
-                                
-                                if ! should_ignore_command "$line" && [ "$line" != "${last_commands["$user"]}" ]; then
-                                    local client_ip=$(get_client_ip)
-                                    local location_info=$(get_ip_location "$client_ip")
-                                    
-                                    log_message "COMMAND" "用户: $user | 命令: $line | 来源: $client_ip [$location_info]"
-                                    last_commands["$user"]="$line"
-                                fi
-                            done <<< "$new_content"
-                        fi
-                        
-                        file_sizes["$user"]=$current_size
-                    fi
-                fi
-            fi
-        done
-        sleep 1
-    done
-}
-
-# 后台运行监控（优化版）
-start_background_monitor() {
-    log_message "INFO" "启动后台监控服务..."
-    
-    # 检查是否已经在运行
-    if [ -f "/tmp/command_monitor.pid" ]; then
-        local old_pid=$(cat "/tmp/command_monitor.pid" 2>/dev/null)
-        if ps -p "$old_pid" >/dev/null 2>&1; then
-            echo -e "${YELLOW}监控服务已经在运行 (PID: $old_pid)${NC}"
-            echo -e "停止现有服务: ${RED}kill $old_pid${NC}"
-            return 1
-        fi
-    fi
-    
-    # 在子进程中运行
-    (
-        # 设置进程组，便于管理
-        setsid >/dev/null 2>&1
-        
-        # 重新初始化
-        DAEMON_MODE=true
-        init_log_system
-        setup_signal_handlers
-        configure_realtime_history
-        
-        log_message "INFO" "后台监控进程启动 - PID: $$"
-        log_message "INFO" "进程组ID: $(ps -o pgid= $$ | tr -d ' ')"
-        
-        # 保存PID
-        echo $$ > "/tmp/command_monitor.pid"
-        
-        # 启动资源监控
-        monitor_resources &
-        local resource_pid=$!
-        
-        # 启动主监控
-        start_main_monitor &
-        MONITOR_PID=$!
-        
-        log_message "SUCCESS" "后台监控服务已启动"
-        log_message "INFO" "主监控PID: $MONITOR_PID"
-        log_message "INFO" "资源监控PID: $resource_pid"
-        log_message "INFO" "查看实时日志: tail -f $LATEST_LOG"
-        log_message "INFO" "停止监控: kill $$"
-        
-        # 等待子进程
-        wait $MONITOR_PID
-        
-        # 清理PID文件
-        rm -f "/tmp/command_monitor.pid"
-        
-    ) >/dev/null 2>&1 &
-    
-    local main_pid=$!
-    sleep 2
-    
-    # 检查是否启动成功
-    if ps -p $main_pid >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ 后台监控已启动!${NC}"
-        echo -e "主进程PID: $main_pid"
-        echo -e "日志文件: $LATEST_LOG"
-        echo -e "查看日志: ${GREEN}tail -f $LATEST_LOG${NC}"
-        echo -e "停止监控: ${RED}kill $main_pid${NC}"
-        echo -e "状态检查: ${BLUE}$0 -s${NC}"
-    else
-        echo -e "${RED}✗ 后台监控启动失败${NC}"
-        return 1
-    fi
-}
-
 # 显示使用说明
 show_usage() {
-    echo -e "${GREEN}实时命令监控系统 v3.1${NC}"
+    echo -e "${GREEN}实时命令监控系统 v3.2${NC}"
     echo "用法: $0 [选项]"
     echo
     echo "选项:"
     echo "  -d, --daemon    后台运行模式"
-    echo "  -c, --config    只配置不运行"
     echo "  -s, --status    查看监控状态"
     echo "  -k, --kill      停止监控进程"
-    echo "  -r, --rotate    轮转日志文件"
     echo "  -h, --help      显示此帮助信息"
     echo
-    echo "日志特性:"
-    echo "  - 每30分钟或1M自动轮转"
-    echo "  - 多IP地理位置查询源"
-    echo "  - 唯一日志文件名，避免覆盖"
+    echo "特性:"
+    echo "  - 离线IP数据库支持"
+    echo "  - 智能日志轮转"
+    echo "  - 唯一日志文件名"
     echo
     echo "示例:"
     echo "  $0 -d          # 后台运行监控"
     echo "  $0 -s          # 查看监控状态"
-    echo "  $0 -k          # 停止监控"
 }
 
 # 查看监控状态
@@ -625,33 +700,16 @@ check_monitor_status() {
     
     if [ -z "$main_pid" ] || ! ps -p "$main_pid" >/dev/null 2>&1; then
         echo -e "${RED}✗ 监控服务未运行${NC}"
-        
-        # 检查是否有残留进程
-        local residual_pids=$(pgrep -f "command_monitor" 2>/dev/null || true)
-        if [ -n "$residual_pids" ]; then
-            echo -e "${YELLOW}发现残留进程: $residual_pids${NC}"
-            echo -e "建议清理: ${RED}pkill -f 'command_monitor'${NC}"
-        fi
         return 1
     fi
     
     echo -e "${GREEN}✓ 监控服务运行中${NC}"
     echo "主进程PID: $main_pid"
     echo "日志目录: $LOG_DIR"
-    echo "最新日志: $LATEST_LOG"
     
     if [ -f "$LATEST_LOG" ]; then
         local log_size=$(du -h "$LATEST_LOG" 2>/dev/null | cut -f1 || echo "未知")
-        local log_count=$(find "$LOG_DIR" -name "monitor_*.log" 2>/dev/null | wc -l)
-        local log_files=$(find "$LOG_DIR" -name "monitor_*.log" -exec basename {} \; 2>/dev/null | head -5)
-        
         echo "当前日志大小: $log_size"
-        echo "总日志文件数: $log_count"
-        echo
-        echo -e "${YELLOW}最近日志文件:${NC}"
-        for file in $log_files; do
-            echo "  $file"
-        done
         echo
         echo -e "${YELLOW}最近3条记录:${NC}"
         tail -3 "$LATEST_LOG" 2>/dev/null | while read line; do
@@ -671,7 +729,6 @@ stop_monitor() {
     fi
     
     if [ -z "$main_pid" ]; then
-        # 如果没有PID文件，尝试查找进程
         main_pid=$(pgrep -f "command_monitor" | head -1)
     fi
     
@@ -681,22 +738,15 @@ stop_monitor() {
     fi
     
     echo -e "${YELLOW}正在停止监控进程 (PID: $main_pid)...${NC}"
-    
-    # 优雅停止
     kill "$main_pid" 2>/dev/null || true
-    sleep 3
+    sleep 2
     
-    # 检查是否停止成功
     if ps -p "$main_pid" >/dev/null 2>&1; then
         echo -e "${RED}强制停止监控进程...${NC}"
         kill -9 "$main_pid" 2>/dev/null || true
-        sleep 1
     fi
     
-    # 清理所有相关进程
     pkill -f "monitor_resources" 2>/dev/null || true
-    
-    # 清理PID文件
     rm -f "$pid_file" 2>/dev/null
     
     echo -e "${GREEN}✓ 监控进程已停止${NC}"
@@ -710,37 +760,27 @@ main() {
         -d|--daemon)
             start_background_monitor
             ;;
-        -c|--config)
-            init_log_system
-            configure_realtime_history
-            ;;
         -s|--status)
             check_monitor_status
             ;;
         -k|--kill)
             stop_monitor
             ;;
-        -r|--rotate)
-            init_log_system
-            log_rotation "manual"
-            ;;
         -h|--help|"")
             show_usage
             ;;
         *)
             echo -e "${RED}未知选项: $command${NC}"
-            echo
             show_usage
             return 1
             ;;
     esac
 }
 
-# 直接运行模式（当没有参数时）
+# 直接运行模式
 if [ $# -eq 0 ]; then
     echo -e "${YELLOW}前台运行模式 (Ctrl+C 停止)${NC}"
     init_log_system
-    setup_signal_handlers
     configure_realtime_history
     start_main_monitor
 else
