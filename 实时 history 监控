@@ -1,72 +1,284 @@
 #!/bin/bash
 
-# 实时 history 监控 - 强制实时写入
-echo "启用实时 history 监控..."
+# 优化版实时命令监控脚本
+# 作者: 系统安全监控
+# 版本: 2.0
 
-# 配置所有用户的 bash 为实时记录
+set -e  # 遇到错误立即退出
+
+### 配置区域 - 可根据需要修改 ###
+LOG_DIR="/root/command_monitor_logs"  # 日志目录
+MAX_LOG_SIZE="100M"                   # 单个日志文件最大大小
+MAX_LOG_FILES=10                      # 最大日志文件数量
+MEMORY_LIMIT="512M"                   # 内存使用限制
+CPU_LIMIT=90                          # CPU使用率限制%
+CHECK_INTERVAL=300                    # 系统检查间隔(秒)
+BACKUP_DAYS=7                         # 日志保留天数
+CLEANUP_INTERVAL=3600                 # 清理间隔(秒)
+
+### 颜色定义 ###
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+### 全局变量 ###
+SCRIPT_PID=$$
+MONITOR_PID=""
+LAST_CLEANUP=0
+
+# 获取时间戳
+timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
+# 日志函数
+log_message() {
+    local level="$1"
+    local message="$2"
+    local color="$GREEN"
+    
+    case "$level" in
+        "ERROR") color="$RED" ;;
+        "WARN") color="$YELLOW" ;;
+        "INFO") color="$BLUE" ;;
+        "SUCCESS") color="$GREEN" ;;
+    esac
+    
+    echo -e "${color}[$(timestamp)] [$level] $message${NC}" | tee -a "$CURRENT_LOG"
+}
+
+# 获取客户端IP
+get_client_ip() {
+    local ip="unknown"
+    # 尝试多种方式获取IP
+    if [ -n "$SSH_CLIENT" ]; then
+        ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    elif [ -n "$SSH_CONNECTION" ]; then
+        ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    else
+        # 获取当前连接的IP
+        ip=$(who -m | awk '{print $5}' | sed 's/[()]//g' | head -1)
+        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]]; then
+            ip="localhost"
+        fi
+    fi
+    echo "$ip"
+}
+
+# 初始化日志系统
+init_log_system() {
+    mkdir -p "$LOG_DIR"
+    
+    local client_ip=$(get_client_ip | sed 's/\./_/g')
+    local log_date=$(date '+%Y%m%d_%H%M%S')
+    CURRENT_LOG="$LOG_DIR/command_monitor_${client_ip}_${log_date}.log"
+    
+    # 创建软链接指向最新日志
+    LATEST_LOG="$LOG_DIR/latest.log"
+    ln -sf "$CURRENT_LOG" "$LATEST_LOG"
+    
+    log_message "INFO" "监控脚本启动 - PID: $$"
+    log_message "INFO" "客户端IP: $(get_client_ip)"
+    log_message "INFO" "日志文件: $CURRENT_LOG"
+}
+
+# 资源监控函数
+monitor_resources() {
+    local check_count=0
+    
+    while true; do
+        sleep 60
+        
+        # 检查内存使用
+        local mem_usage=$(free | awk 'NR==2{printf "%.2f", $3*100/$2}')
+        if (( $(echo "$mem_usage > $CPU_LIMIT" | bc -l) )); then
+            log_message "WARN" "内存使用率过高: ${mem_usage}%"
+        fi
+        
+        # 检查CPU使用率
+        local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+        if (( $(echo "$cpu_usage > $CPU_LIMIT" | bc -l) )); then
+            log_message "WARN" "CPU使用率过高: ${cpu_usage}%"
+        fi
+        
+        # 检查磁盘空间
+        local disk_usage=$(df "$LOG_DIR" | awk 'NR==2{print $5}' | cut -d'%' -f1)
+        if [ "$disk_usage" -gt 90 ]; then
+            log_message "WARN" "磁盘使用率过高: ${disk_usage}%"
+        fi
+        
+        # 定期系统检查
+        ((check_count++))
+        if [ $((check_count * 60)) -ge $CHECK_INTERVAL ]; then
+            perform_system_check
+            check_count=0
+        fi
+        
+        # 定期清理旧日志
+        local current_time=$(date +%s)
+        if [ $((current_time - LAST_CLEANUP)) -ge $CLEANUP_INTERVAL ]; then
+            cleanup_old_logs
+            LAST_CLEANUP=$current_time
+        fi
+    done
+}
+
+# 系统健康检查
+perform_system_check() {
+    log_message "INFO" "=== 系统健康检查 ==="
+    
+    # 内存信息
+    local mem_info=$(free -h)
+    log_message "INFO" "内存使用:\n$mem_info"
+    
+    # 磁盘信息
+    local disk_info=$(df -h "$LOG_DIR")
+    log_message "INFO" "磁盘使用:\n$disk_info"
+    
+    # 进程信息
+    local process_count=$(ps aux --forest | grep -v grep | grep -c "command_monitor")
+    log_message "INFO" "监控进程数: $process_count"
+    
+    log_message "INFO" "=== 检查完成 ==="
+}
+
+# 清理旧日志
+cleanup_old_logs() {
+    log_message "INFO" "开始清理旧日志..."
+    
+    # 按时间清理
+    find "$LOG_DIR" -name "command_monitor_*.log" -mtime "+$BACKUP_DAYS" -delete
+    
+    # 按数量清理
+    local log_count=$(find "$LOG_DIR" -name "command_monitor_*.log" | wc -l)
+    if [ "$log_count" -gt "$MAX_LOG_FILES" ]; then
+        local files_to_delete=$((log_count - MAX_LOG_FILES))
+        find "$LOG_DIR" -name "command_monitor_*.log" -type f -printf '%T@ %p\n' | \
+        sort -n | head -n "$files_to_delete" | cut -d' ' -f2- | xargs rm -f
+    fi
+    
+    log_message "SUCCESS" "日志清理完成"
+}
+
+# 信号处理函数
+setup_signal_handlers() {
+    trap 'cleanup_on_exit' SIGINT SIGTERM
+    trap 'log_message "WARN" "收到挂起信号"; cleanup_on_exit' SIGHUP
+    trap 'log_rotation' SIGUSR1
+}
+
+# 日志轮转
+log_rotation() {
+    log_message "INFO" "执行日志轮转"
+    init_log_system
+}
+
+# 退出清理
+cleanup_on_exit() {
+    log_message "INFO" "正在停止监控服务..."
+    
+    # 杀死所有子进程
+    if [ -n "$MONITOR_PID" ]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+    fi
+    
+    # 杀死资源监控进程
+    pkill -f "monitor_resources" 2>/dev/null || true
+    
+    log_message "SUCCESS" "监控服务已停止"
+    exit 0
+}
+
+# 配置实时history
 configure_realtime_history() {
+    log_message "INFO" "配置实时命令记录..."
+    
     for user_dir in /home/* /root; do
         if [ -d "$user_dir" ]; then
-            user=$(basename "$user_dir")
-            bashrc="$user_dir/.bashrc"
+            local user=$(basename "$user_dir")
+            local bashrc="$user_dir/.bashrc"
             
-            # 添加实时 history 配置
             if [ -f "$bashrc" ]; then
                 if ! grep -q "REAL_TIME_HISTORY" "$bashrc"; then
-                    echo "
-# REAL_TIME_HISTORY - 实时记录命令
+                    cat >> "$bashrc" << EOF
+
+# REAL_TIME_HISTORY - 实时命令记录配置
 export PROMPT_COMMAND='history -a; history -c; history -r'
 export HISTTIMEFORMAT='%F %T '
+export HISTSIZE=10000
+export HISTFILESIZE=20000
 shopt -s histappend
-" >> "$bashrc"
-                    echo "已为用户 $user 配置实时 history"
+# 记录所有命令，包括时间戳
+export HISTCONTROL=ignoredups:erasedups
+
+EOF
+                    log_message "SUCCESS" "已为用户 $user 配置实时命令记录"
+                else
+                    log_message "INFO" "用户 $user 已配置实时记录"
                 fi
             fi
         fi
     done
 }
 
-# 监控 history 文件变化
-monitor_history() {
-    echo "开始监控命令历史..."
+# 主监控函数
+start_main_monitor() {
+    log_message "INFO" "启动主监控进程..."
     
-    # 获取初始文件状态
+    # 声明关联数组来跟踪每个用户的文件状态
     declare -A file_sizes
+    declare -A last_commands
+    
+    # 初始化文件大小
     for user_dir in /home/* /root; do
         if [ -d "$user_dir" ]; then
-            user=$(basename "$user_dir")
-            history_file="$user_dir/.bash_history"
+            local user=$(basename "$user_dir")
+            local history_file="$user_dir/.bash_history"
             if [ -f "$history_file" ]; then
-                file_sizes["$user"]=$(stat -c%s "$history_file")
+                file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_commands["$user"]=""
             else
                 file_sizes["$user"]=0
+                last_commands["$user"]=""
             fi
         fi
     done
     
-    # 持续监控
+    # 主监控循环
     while true; do
         for user_dir in /home/* /root; do
             if [ -d "$user_dir" ]; then
-                user=$(basename "$user_dir")
-                history_file="$user_dir/.bash_history"
+                local user=$(basename "$user_dir")
+                local history_file="$user_dir/.bash_history"
                 
                 if [ -f "$history_file" ]; then
-                    current_size=$(stat -c%s "$history_file")
-                    last_size=${file_sizes["$user"]}
+                    local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    local last_size=${file_sizes["$user"]}
                     
                     if [ "$current_size" -gt "$last_size" ]; then
                         # 读取新内容
-                        new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null)
+                        local new_content=$(tail -c +$((last_size + 1)) "$history_file" 2>/dev/null | tr -d '\0')
+                        
                         if [ -n "$new_content" ]; then
-                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户 $user 执行命令:"
-                            echo "$new_content" | while IFS= read -r line; do
-                                if [ -n "$line" ] && [ "${#line}" -gt 1 ]; then
-                                    echo "  → $line"
+                            # 逐行处理新命令
+                            while IFS= read -r line; do
+                                line=$(echo "$line" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                                
+                                if [ -n "$line" ] && \
+                                   [ "${#line}" -gt 1 ] && \
+                                   [ "$line" != "${last_commands["$user"]}" ] && \
+                                   [[ ! "$line" =~ ^(ls|cd|pwd|ll|la|history|exit|clear)$ ]]; then
+                                    
+                                    log_message "COMMAND" "用户: $user | 命令: $line | 来源: $(get_client_ip)"
+                                    last_commands["$user"]="$line"
                                 fi
-                            done
-                            echo "---"
+                            done <<< "$new_content"
                         fi
+                        
                         file_sizes["$user"]=$current_size
                     fi
                 fi
@@ -76,6 +288,125 @@ monitor_history() {
     done
 }
 
-# 执行
-configure_realtime_history
-monitor_history
+# 后台运行监控
+start_background_monitor() {
+    log_message "INFO" "启动后台监控服务..."
+    
+    # 启动资源监控
+    monitor_resources &
+    local resource_pid=$!
+    
+    # 启动主监控
+    start_main_monitor &
+    MONITOR_PID=$!
+    
+    log_message "SUCCESS" "后台监控服务已启动"
+    log_message "INFO" "主监控PID: $MONITOR_PID"
+    log_message "INFO" "资源监控PID: $resource_pid"
+    log_message "INFO" "查看实时日志: tail -f $LATEST_LOG"
+    
+    # 等待子进程
+    wait $MONITOR_PID
+}
+
+# 显示使用说明
+show_usage() {
+    echo -e "${GREEN}实时命令监控系统 v2.0${NC}"
+    echo "用法: $0 [选项]"
+    echo
+    echo "选项:"
+    echo "  -d, --daemon    后台运行模式"
+    echo "  -c, --config    只配置不运行"
+    echo "  -s, --status    查看监控状态"
+    echo "  -k, --kill      停止监控进程"
+    echo "  -r, --rotate    轮转日志文件"
+    echo "  -h, --help      显示此帮助信息"
+    echo
+    echo "示例:"
+    echo "  $0 -d          # 后台运行监控"
+    echo "  $0 --status    # 查看监控状态"
+}
+
+# 查看监控状态
+check_monitor_status() {
+    local pids=$(pgrep -f "command_monitor" || true)
+    
+    if [ -z "$pids" ]; then
+        echo -e "${RED}监控服务未运行${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}监控服务运行中${NC}"
+    echo "进程PID: $pids"
+    echo "日志目录: $LOG_DIR"
+    echo "最新日志: $LATEST_LOG"
+    
+    # 显示最近的活动
+    if [ -f "$LATEST_LOG" ]; then
+        echo
+        echo -e "${YELLOW}最近10条记录:${NC}"
+        tail -10 "$LATEST_LOG"
+    fi
+}
+
+# 停止监控进程
+stop_monitor() {
+    local pids=$(pgrep -f "command_monitor" || true)
+    
+    if [ -z "$pids" ]; then
+        echo -e "${YELLOW}没有找到运行的监控进程${NC}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}正在停止监控进程...${NC}"
+    kill $pids 2>/dev/null || true
+    sleep 2
+    
+    # 检查是否停止成功
+    if pgrep -f "command_monitor" >/dev/null; then
+        echo -e "${RED}强制停止监控进程...${NC}"
+        kill -9 $pids 2>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}监控进程已停止${NC}"
+}
+
+### 主程序 ###
+main() {
+    # 参数处理
+    case "${1:-}" in
+        -d|--daemon)
+            init_log_system
+            setup_signal_handlers
+            configure_realtime_history
+            start_background_monitor
+            ;;
+        -c|--config)
+            init_log_system
+            configure_realtime_history
+            ;;
+        -s|--status)
+            check_monitor_status
+            ;;
+        -k|--kill)
+            stop_monitor
+            ;;
+        -r|--rotate)
+            init_log_system
+            log_rotation
+            ;;
+        -h|--help)
+            show_usage
+            ;;
+        *)
+            echo -e "${YELLOW}前台运行模式 (Ctrl+C 停止)${NC}"
+            init_log_system
+            setup_signal_handlers
+            configure_realtime_history
+            start_main_monitor
+            ;;
+    esac
+}
+
+# 运行主程序
+main "$@"
