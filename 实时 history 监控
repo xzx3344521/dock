@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# 优化版实时命令监控脚本 - 带IP地理位置查询
+# 修复版实时命令监控脚本 - 带IP地理位置查询
 # 版本: 2.1
 
 set -e
 
 ### 配置区域 ###
 LOG_DIR="/root/command_monitor_logs"
-MAX_LOG_SIZE="10M"
+MAX_LOG_SIZE="100M"
 MAX_LOG_FILES=10
 MEMORY_LIMIT="512M"
 CPU_LIMIT=90
@@ -82,16 +82,19 @@ get_ip_location() {
     for api in $IP_API_SERVICE ipapi.co ipinfo.io; do
         case $api in
             ipapi)
-                location_info=$(curl -s -m 5 "http://ip-api.com/json/$ip" | \
-                    jq -r '[.country, .regionName, .city, .isp] | join(", ")' 2>/dev/null || echo "")
+                location_info=$(curl -s -m 5 "http://ip-api.com/json/$ip" 2>/dev/null | \
+                    grep -o '"country":"[^"]*","regionName":"[^"]*","city":"[^"]*","isp":"[^"]*"' | \
+                    sed 's/"country":"//;s/","regionName":"/, /;s/","city":"/, /;s/","isp":"/, /;s/"$//' || echo "")
                 ;;
             ipapi.co)
-                location_info=$(curl -s -m 5 "https://ipapi.co/$ip/json/" | \
-                    jq -r '[.country_name, .region, .city, .org] | join(", ")' 2>/dev/null || echo "")
+                location_info=$(curl -s -m 5 "https://ipapi.co/$ip/json/" 2>/dev/null | \
+                    grep -o '"country_name":"[^"]*","region":"[^"]*","city":"[^"]*","org":"[^"]*"' | \
+                    sed 's/"country_name":"//;s/","region":"/, /;s/","city":"/, /;s/","org":"/, /;s/"$//' || echo "")
                 ;;
             ipinfo.io)
-                location_info=$(curl -s -m 5 "https://ipinfo.io/$ip" | \
-                    jq -r '[.country, .region, .city, .org] | join(", ")' 2>/dev/null || echo "")
+                location_info=$(curl -s -m 5 "https://ipinfo.io/$ip" 2>/dev/null | \
+                    grep -o '"country":"[^"]*","region":"[^"]*","city":"[^"]*","org":"[^"]*"' | \
+                    sed 's/"country":"//;s/","region":"/, /;s/","city":"/, /;s/","org":"/, /;s/"$//' || echo "")
                 ;;
         esac
         
@@ -138,19 +141,7 @@ get_simple_ip_location() {
         fi
     fi
     
-    # 使用ping方式获取粗略位置（通过TTL判断）
-    local ttl=$(timeout 3 ping -c 1 "$ip" 2>/dev/null | grep "ttl=" | sed 's/.*ttl=\([0-9]*\).*/\1/' || echo "")
-    if [ -n "$ttl" ]; then
-        if [ "$ttl" -le 64 ]; then
-            echo "Linux系统 - 可能较近"
-        elif [ "$ttl" -le 128 ]; then
-            echo "Windows系统 - 中等距离"
-        else
-            echo "远程主机 - 可能较远"
-        fi
-    else
-        echo "位置未知"
-    fi
+    echo "位置未知"
 }
 
 # 获取客户端IP
@@ -161,8 +152,8 @@ get_client_ip() {
     elif [ -n "$SSH_CONNECTION" ]; then
         ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
     else
-        ip=$(who -m | awk '{print $5}' | sed 's/[()]//g' | head -1)
-        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]]; then
+        ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
+        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
             ip="localhost"
         fi
     fi
@@ -174,8 +165,15 @@ get_ip_with_location() {
     local ip="$1"
     local location=""
     
+    # 如果是内网或本地IP，直接返回
+    if [[ "$ip" == "192.168."* ]] || [[ "$ip" == "10."* ]] || [[ "$ip" == "172."* ]] || \
+       [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]] || [[ "$ip" == "unknown" ]]; then
+        echo "$ip"
+        return
+    fi
+    
     # 先尝试完整查询
-    if command -v curl &> /dev/null && command -v jq &> /dev/null; then
+    if command -v curl &> /dev/null; then
         location=$(get_ip_location "$ip")
     else
         location=$(get_simple_ip_location "$ip")
@@ -219,20 +217,20 @@ monitor_resources() {
         sleep 60
         
         # 检查内存使用
-        local mem_usage=$(free | awk 'NR==2{printf "%.2f", $3*100/$2}')
-        if (( $(echo "$mem_usage > $CPU_LIMIT" | bc -l) )); then
+        local mem_usage=$(free 2>/dev/null | awk 'NR==2{printf "%.2f", $3*100/$2}' || echo "0")
+        if (( $(echo "$mem_usage > $CPU_LIMIT" | bc -l 2>/dev/null) )); then
             log_message "WARN" "内存使用率过高: ${mem_usage}%"
         fi
         
         # 检查CPU使用率
-        local cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-        if (( $(echo "$cpu_usage > $CPU_LIMIT" | bc -l) )); then
+        local cpu_usage=$(top -bn1 2>/dev/null | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1 || echo "0")
+        if (( $(echo "$cpu_usage > $CPU_LIMIT" | bc -l 2>/dev/null) )); then
             log_message "WARN" "CPU使用率过高: ${cpu_usage}%"
         fi
         
         # 检查磁盘空间
-        local disk_usage=$(df "$LOG_DIR" | awk 'NR==2{print $5}' | cut -d'%' -f1)
-        if [ "$disk_usage" -gt 90 ]; then
+        local disk_usage=$(df "$LOG_DIR" 2>/dev/null | awk 'NR==2{print $5}' | cut -d'%' -f1 || echo "0")
+        if [ "$disk_usage" -gt 90 ] 2>/dev/null; then
             log_message "WARN" "磁盘使用率过高: ${disk_usage}%"
         fi
         
@@ -257,15 +255,15 @@ perform_system_check() {
     log_message "INFO" "=== 系统健康检查 ==="
     
     # 内存信息
-    local mem_info=$(free -h)
+    local mem_info=$(free -h 2>/dev/null || echo "无法获取内存信息")
     log_message "INFO" "内存使用:\n$mem_info"
     
     # 磁盘信息
-    local disk_info=$(df -h "$LOG_DIR")
+    local disk_info=$(df -h "$LOG_DIR" 2>/dev/null || echo "无法获取磁盘信息")
     log_message "INFO" "磁盘使用:\n$disk_info"
     
     # 进程信息
-    local process_count=$(ps aux --forest | grep -v grep | grep -c "command_monitor")
+    local process_count=$(ps aux 2>/dev/null | grep -v grep | grep -c "command_monitor" || echo "0")
     log_message "INFO" "监控进程数: $process_count"
     
     log_message "INFO" "=== 检查完成 ==="
@@ -276,14 +274,14 @@ cleanup_old_logs() {
     log_message "INFO" "开始清理旧日志..."
     
     # 按时间清理
-    find "$LOG_DIR" -name "command_monitor_*.log" -mtime "+$BACKUP_DAYS" -delete
+    find "$LOG_DIR" -name "command_monitor_*.log" -mtime "+$BACKUP_DAYS" -delete 2>/dev/null
     
     # 按数量清理
-    local log_count=$(find "$LOG_DIR" -name "command_monitor_*.log" | wc -l)
-    if [ "$log_count" -gt "$MAX_LOG_FILES" ]; then
+    local log_count=$(find "$LOG_DIR" -name "command_monitor_*.log" 2>/dev/null | wc -l)
+    if [ "$log_count" -gt "$MAX_LOG_FILES" ] 2>/dev/null; then
         local files_to_delete=$((log_count - MAX_LOG_FILES))
-        find "$LOG_DIR" -name "command_monitor_*.log" -type f -printf '%T@ %p\n' | \
-        sort -n | head -n "$files_to_delete" | cut -d' ' -f2- | xargs rm -f
+        find "$LOG_DIR" -name "command_monitor_*.log" -type f -printf '%T@ %p\n' 2>/dev/null | \
+        sort -n 2>/dev/null | head -n "$files_to_delete" | cut -d' ' -f2- | xargs rm -f 2>/dev/null
     fi
     
     log_message "SUCCESS" "日志清理完成"
@@ -327,7 +325,7 @@ configure_realtime_history() {
             
             if [ -f "$bashrc" ]; then
                 if ! grep -q "REAL_TIME_HISTORY" "$bashrc"; then
-                    cat >> "$bashrc" << EOF
+                    cat >> "$bashrc" << 'EOF'
 
 # REAL_TIME_HISTORY - 实时命令记录配置
 export PROMPT_COMMAND='history -a; history -c; history -r'
@@ -343,7 +341,7 @@ EOF
                     log_message "INFO" "用户 $user 已配置实时记录"
                 fi
             fi
-        done
+        fi
     done
 }
 
@@ -448,7 +446,7 @@ show_usage() {
 
 # 查看监控状态
 check_monitor_status() {
-    local pids=$(pgrep -f "command_monitor" || true)
+    local pids=$(pgrep -f "command_monitor" 2>/dev/null || true)
     
     if [ -z "$pids" ]; then
         echo -e "${RED}监控服务未运行${NC}"
@@ -463,13 +461,13 @@ check_monitor_status() {
     if [ -f "$LATEST_LOG" ]; then
         echo
         echo -e "${YELLOW}最近10条记录:${NC}"
-        tail -10 "$LATEST_LOG"
+        tail -10 "$LATEST_LOG" 2>/dev/null || echo "无法读取日志文件"
     fi
 }
 
 # 停止监控进程
 stop_monitor() {
-    local pids=$(pgrep -f "command_monitor" || true)
+    local pids=$(pgrep -f "command_monitor" 2>/dev/null || true)
     
     if [ -z "$pids" ]; then
         echo -e "${YELLOW}没有找到运行的监控进程${NC}"
@@ -480,7 +478,7 @@ stop_monitor() {
     kill $pids 2>/dev/null || true
     sleep 2
     
-    if pgrep -f "command_monitor" >/dev/null; then
+    if pgrep -f "command_monitor" >/dev/null 2>&1; then
         echo -e "${RED}强制停止监控进程...${NC}"
         kill -9 $pids 2>/dev/null || true
     fi
@@ -493,10 +491,6 @@ main() {
     # 检查依赖
     if ! command -v curl &> /dev/null; then
         echo -e "${YELLOW}警告: 未找到 curl，地理位置查询功能受限${NC}"
-    fi
-    
-    if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}警告: 未找到 jq，使用简化版地理位置查询${NC}"
     fi
     
     case "${1:-}" in
