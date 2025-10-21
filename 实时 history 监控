@@ -48,7 +48,7 @@ log_message() {
     local level="$1"
     local message="$2"
     local color="$GREEN"
-    
+
     case "$level" in
         "ERROR") color="$RED" ;;
         "WARN") color="$YELLOW" ;;
@@ -56,7 +56,7 @@ log_message() {
         "SUCCESS") color="$GREEN" ;;
         "COMMAND") color="$CYAN" ;;
     esac
-    
+
     if [ "$DAEMON_MODE" = true ]; then
         echo -e "${color}[$(timestamp)] [$level] $message${NC}" >> "$CURRENT_LOG"
     else
@@ -67,60 +67,126 @@ log_message() {
 # 英文转中文函数
 english_to_chinese() {
     local text="$1"
-    # 常见国家地区翻译
-    text=$(echo "$text" | sed -e 's/China/中国/g' -e 's/United States/美国/g' -e 's/Japan/日本/g' -e 's/Korea/韩国/g' \
-        -e 's/Russia/俄罗斯/g' -e 's/Germany/德国/g' -e 's/France/法国/g' -e 's/UK/英国/g' -e 's/Canada/加拿大/g' \
-        -e 's/Australia/澳大利亚/g' -e 's/Brazil/巴西/g' -e 's/India/印度/g')
+    text=$(echo "$text" | sed \
+        -e 's/China/中国/g' \
+        -e 's/United States/美国/g' \
+        -e 's/Japan/日本/g' \
+        -e 's/Korea/韩国/g' \
+        -e 's/Russia/俄罗斯/g' \
+        -e 's/Germany/德国/g' \
+        -e 's/France/法国/g' \
+        -e 's/UK/英国/g' \
+        -e 's/Canada/加拿大/g' \
+        -e 's/Australia/澳大利亚/g' \
+        -e 's/Brazil/巴西/g' \
+        -e 's/India/印度/g' \
+        -e 's/Beijing/北京/g' \
+        -e 's/Shanghai/上海/g' \
+        -e 's/Guangzhou/广州/g' \
+        -e 's/Shenzhen/深圳/g' \
+        -e 's/Hangzhou/杭州/g' \
+        -e 's/Nanjing/南京/g' \
+        -e 's/Wuhan/武汉/g' \
+        -e 's/Chengdu/成都/g' \
+        -e 's/Xi'an/西安/g' \
+        -e 's/Chongqing/重庆/g' \
+        -e 's/Tianjin/天津/g' \
+        -e 's/Suzhou/苏州/g' \
+        -e 's/Zhengzhou/郑州/g' \
+        -e 's/Changsha/长沙/g' \
+        -e 's/Hefei/合肥/g' \
+        -e 's/Nanchang/南昌/g' \
+        -e 's/Fuzhou/福州/g' \
+        -e 's/Jinan/济南/g' \
+        -e 's/Taiyuan/太原/g' \
+        -e 's/Hohhot/呼和浩特/g' \
+        -e 's/Shijiazhuang/石家庄/g' \
+        -e 's/Harbin/哈尔滨/g' \
+        -e 's/Changchun/长春/g' \
+        -e 's/Jilin/吉林/g' \
+        -e 's/Dalian/大连/g' \
+        -e 's/Qingdao/青岛/g' \
+        -e 's/Ningbo/宁波/g' \
+        -e 's/Xiamen/厦门/g' \
+        -e 's/Kunming/昆明/g' \
+        -e 's/Guiyang/贵阳/g' \
+        -e 's/Nanning/南宁/g' \
+        -e 's/Haikou/海口/g' \
+        -e 's/Urumqi/乌鲁木齐/g' \
+        -e 's/Lanzhou/兰州/g' \
+        -e 's/Xining/西宁/g' \
+        -e 's/Yinchuan/银川/g' \
+        -e 's/Lhasa/拉萨/g' \
+        -e 's/Hong Kong/香港/g' \
+        -e 's/Macau/澳门/g' \
+        -e 's/Taiwan/台湾/g' \
+        -e 's/Jiangxi/江西/g' \
+        -e 's/Zhejiang/浙江/g' \
+        -e 's/Jiangsu/江苏/g' \
+        -e 's/Guangdong/广东/g' \
+        -e 's/Fujian/福建/g' \
+        -e 's/Hunan/湖南/g' \
+        -e 's/Hubei/湖北/g' \
+        -e 's/Henan/河南/g' \
+        -e 's/Hebei/河北/g' \
+        -e 's/Shandong/山东/g' \
+        -e 's/Shanxi/山西/g' \
+        -e 's/Shaanxi/陕西/g' \
+        -e 's/Sichuan/四川/g' \
+        -e 's/Yunnan/云南/g' \
+        -e 's/Guizhou/贵州/g' \
+        -e 's/Liaoning/辽宁/g' \
+        -e 's/Jilin/吉林/g' \
+        -e 's/Heilongjiang/黑龙江/g' \
+        -e 's/Anhui/安徽/g' \
+        -e 's/Gansu/甘肃/g' \
+        -e 's/Qinghai/青海/g' \
+        -e 's/Telecom/电信/g' \
+        -e 's/Unicom/联通/g' \
+        -e 's/Mobile/移动/g' \
+        -e 's/Network/网络/g' \
+        -e 's/Communications/通信/g' \
+        -e 's/Company/公司/g' \
+        -e 's/Corporation/集团/g' \
+        -e 's/Limited/有限公司/g' \
+        -e 's/CHINA169/中国联通/g' \
+        -e 's/ChinaNet/中国电信/g' \
+        -e 's/CMNET/中国移动/g')
     
     echo "$text"
 }
 
-# 多IP查询源函数
-get_ip_location_online() {
+# 获取IP地理位置
+get_ip_location() {
     local ip="$1"
     local location_info=""
-    
-    for service in "${IP_API_SERVICES[@]}"; do
-        case $service in
-            "ipapi")
-                location_info=$(curl -s -m 3 "http://ip-api.com/json/$ip?fields=status,country,regionName,city,isp,as" 2>/dev/null || true)
-                ;;
-            "ipapi.co")
-                location_info=$(curl -s -m 3 "https://ipapi.co/$ip/json/" 2>/dev/null || true)
-                ;;
-            "ipinfo.io")
-                location_info=$(curl -s -m 3 "https://ipinfo.io/$ip" 2>/dev/null || true)
-                ;;
-            "ip-api.com")
-                location_info=$(curl -s -m 3 "https://ip-api.com/json/$ip" 2>/dev/null || true)
-                ;;
-            "whois.pconline.com.cn")
-                location_info=$(curl -s -m 3 "https://whois.pconline.com.cn/ipJson.jsp?ip=$ip&json=true" 2>/dev/null || true)
-                ;;
-            *)
-                location_info=""
-                ;;
-        esac
-        
+
+    if [[ "$ip" == "127.0.0.1" ]] || [[ "$ip" == "localhost" ]] || [[ "$ip" == "unknown" ]]; then
+        echo "本机"
+        return 0
+    fi
+
+    # 查询缓存
+    if [ "$CACHE_IP_INFO" = true ] && [ -f "$IP_CACHE_FILE" ]; then
+        location_info=$(grep "^$ip|" "$IP_CACHE_FILE" | head -1 | cut -d'|' -f3-)
         if [ -n "$location_info" ]; then
-            local country=$(echo "$location_info" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
-            local region=$(echo "$location_info" | grep -o '"regionName":"[^"]*"' | cut -d'"' -f4)
-            local city=$(echo "$location_info" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
-            local isp=$(echo "$location_info" | grep -o '"isp":"[^"]*"' | cut -d'"' -f4)
-            
-            if [ -n "$country" ]; then
-                local result="$country"
-                [ -n "$region" ] && result="$result-$region"
-                [ -n "$city" ] && result="$result-$city"
-                [ -n "$isp" ] && result="$result($isp)"
-                echo "$result"
-                return 0
-            fi
+            echo "$location_info"
+            return 0
         fi
-    done
-    
-    echo "未知位置"
-    return 1
+    fi
+
+    # 查询在线API
+    location_info=$(get_ip_location_online "$ip")
+    if [ -z "$location_info" ]; then
+        location_info="未知位置"
+    fi
+
+    # 缓存结果
+    if [ "$CACHE_IP_INFO" = true ]; then
+        echo "$ip|$(date +%s)|$location_info" >> "$IP_CACHE_FILE"
+    fi
+
+    echo "$location_info"
 }
 
 # 获取客户端IP
@@ -133,77 +199,60 @@ get_client_ip() {
         ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
     else
         ip=$(who -m 2>/dev/null | awk '{print $5}' | sed 's/[()]//g' | head -1)
-        if [[ "$ip" == ":0" ]] || [[ "$ip" == ":1" ]] || [[ -z "$ip" ]]; then
-            ip="localhost"
-        fi
     fi
     
     echo "$ip"
 }
 
-# 日志轮转检查
-check_log_rotation() {
-    local current_time=$(date +%s)
-    
-    if [ $((current_time - LAST_ROTATION)) -ge $LOG_ROTATE_INTERVAL ]; then
-        log_rotation "time"
-        return 0
-    fi
-    
-    if [ -f "$CURRENT_LOG" ]; then
-        local log_size=$(stat -c%s "$CURRENT_LOG" 2>/dev/null || echo 0)
-        if [ "$log_size" -gt 1048576 ]; then
-            log_rotation "size"
-            return 0
-        fi
-    fi
-    
-    return 1
-}
-
 # 初始化日志系统
 init_log_system() {
     mkdir -p "$LOG_DIR"
-    
-    CURRENT_LOG=$(generate_log_filename)
-    LATEST_LOG="$LOG_DIR/latest.log"
-    
-    ln -sf "$CURRENT_LOG" "$LATEST_LOG" 2>/dev/null || true
-    
-    LAST_ROTATION=$(date +%s)
-    
+    CURRENT_LOG="$LOG_DIR/monitor_$(date '+%Y%m%d_%H%M%S').log"
     log_message "INFO" "监控脚本启动 - PID: $$"
-    local client_ip=$(get_client_ip)
-    log_message "INFO" "客户端IP: $client_ip"
-    local location_info=$(get_ip_location "$client_ip")
-    log_message "INFO" "地理位置: $location_info"
-    log_message "INFO" "日志文件: $CURRENT_LOG"
-    log_message "INFO" "日志轮转: ${LOG_ROTATE_INTERVAL}秒或${MAX_LOG_SIZE}"
 }
 
-# 主监控函数
+# 后台监控启动
+start_background_monitor() {
+    log_message "INFO" "启动后台监控进程..."
+    # 启动日志监控进程
+    monitor_resources &
+    # 启动命令监控
+    start_main_monitor
+}
+
+# 启动命令监控
 start_main_monitor() {
-    log_message "INFO" "启动主监控进程..."
+    log_message "INFO" "命令监控启动..."
     while true; do
-        sleep 60
-        
-        # 检查日志轮转条件
-        check_log_rotation
-        
-        # 只监控内存使用
-        local mem_usage=$(free 2>/dev/null | awk 'NR==2{printf "%.2f", $3*100/$2}' || echo "0")
-        if (( $(echo "$mem_usage > 90" | bc -l 2>/dev/null) )); then
-            log_message "WARN" "内存使用率过高: ${mem_usage}%"
-        fi
-        
-        # 检查磁盘空间
-        local disk_usage=$(df "$LOG_DIR" 2>/dev/null | awk 'NR==2{print $5}' | cut -d'%' -f1 || echo "0")
-        if [ "$disk_usage" -gt 90 ]; then
-            log_message "WARN" "磁盘使用率过高: ${disk_usage}%"
-        fi
+        sleep 1
+        local ip=$(get_client_ip)
+        local location_info=$(get_ip_location "$ip")
+        log_message "COMMAND" "客户端IP: $ip | 位置: $location_info"
     done
 }
 
-# 显示使用说明
+# 显示帮助信息
 show_usage() {
-    echo -e "${GREEN}实时命令监控系统 v3.3
+    echo -e "${GREEN}实时命令监控系统 v3.3${NC}"
+    echo "用法: $0 [选项]"
+    echo "  -d, --daemon    后台运行模式"
+    echo "  -s, --status    查看监控状态"
+    echo "  -k, --kill      停止监控进程"
+    echo "  -h, --help      显示帮助"
+}
+
+# 主程序
+main() {
+    local command="${1:-}"
+    
+    case "$command" in
+        -d|--daemon) start_background_monitor ;;
+        -s|--status) check_monitor_status ;;
+        -k|--kill) stop_monitor ;;
+        -h|--help|"") show_usage ;;
+        *) echo -e "${RED}未知选项: $command${NC}"; show_usage; exit 1 ;;
+    esac
+}
+
+# 执行主程序
+main "$1"
