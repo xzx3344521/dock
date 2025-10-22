@@ -1,100 +1,82 @@
-# 创建超级简单的监控系统
-cat > /usr/local/bin/watchcmd << 'EOF'
+# 创建极简监控系统
+cat > /tmp/simple_monitor.sh << 'EOF'
 #!/bin/bash
 
-LOG="/root/watch.log"
-PID="/tmp/watch.pid"
+LOG_FILE="/tmp/command_monitor.log"
+PID_FILE="/tmp/monitor_simple.pid"
 
 case "$1" in
     start)
-        # 停止其他监控
-        pkill -f "cmdwatch"
-        pkill -f "monitor"
-        pkill -f "mt"
-        pkill -f "mon"
-        
+        echo "启动极简监控..."
         # 设置实时history
         echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> ~/.bashrc
         source ~/.bashrc
         
-        # 启动监控
+        # 启动监控进程
         (
-            echo "监控启动: $(date)" > "$LOG"
+            echo "=== 监控启动: $(date) ===" > "$LOG_FILE"
             declare -A sizes
             
             while true; do
-                for user in /home/* /root; do
-                    [ -d "$user" ] || continue
-                    history_file="$user/.bash_history"
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
                     [ -f "$history_file" ] || continue
                     
-                    user_name=$(basename "$user")
                     current=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    last=${sizes["$user_name"]:-0}
+                    last=${sizes["$user"]:-0}
                     
                     if [ "$current" -gt "$last" ]; then
-                        cmd=$(tail -n 1 "$history_file" 2>/dev/null | tr -d '\000-\037')
+                        cmd=$(tail -n 1 "$history_file" 2>/dev/null)
                         if [ -n "$cmd" ] && [ ${#cmd} -gt 1 ]; then
                             case "$cmd" in
-                                ls|cd|pwd|ll|history|exit|clear|watchcmd|".") 
-                                    continue 
-                                    ;;
+                                ls|cd|pwd|ll|history|exit|clear|".") continue ;;
                                 *)
                                     ip="unknown"
                                     [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $user_name: $cmd (from: $ip)" >> "$LOG"
-                                    sizes["$user_name"]=$current
+                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $user: $cmd (from: $ip)" >> "$LOG_FILE"
                                     ;;
                             esac
                         fi
+                        sizes["$user"]=$current
                     fi
                 done
-                sleep 1
+                sleep 2
             done
         ) &
-        echo $! > "$PID"
-        echo "监控已启动"
-        ;;
-    stop)
-        pkill -f "watchcmd"
-        rm -f "$PID"
-        echo "监控已停止"
+        echo $! > "$PID_FILE"
+        echo "监控已启动 (PID: $!)"
+        echo "查看日志: tail -f $LOG_FILE"
         ;;
     view)
-        if [ -f "$LOG" ]; then
-            tail -f "$LOG"
+        if [ -f "$LOG_FILE" ]; then
+            tail -f "$LOG_FILE"
         else
-            echo "暂无日志"
+            echo "暂无日志，请先启动监控: $0 start"
         fi
         ;;
-    status)
-        if [ -f "$PID" ] && ps -p $(cat "$PID") >/dev/null 2>&1; then
-            echo "监控运行中 (PID: $(cat "$PID"))"
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            kill $(cat "$PID_FILE") 2>/dev/null
+            rm -f "$PID_FILE"
+            echo "监控已停止"
         else
             echo "监控未运行"
-            rm -f "$PID"
         fi
         ;;
-    install)
-        # 设置开机启动
-        (crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/watchcmd start >/dev/null 2>&1") | crontab -
-        # 设置别名
-        echo "alias wc='watchcmd view'" >> ~/.bashrc
-        source ~/.bashrc
-        # 启动
-        watchcmd start
-        echo "安装完成! 使用 'wc' 查看监控"
-        ;;
     *)
-        echo "使用: watchcmd [start|stop|view|status|install]"
+        echo "使用方法: $0 {start|view|stop}"
         ;;
 esac
 EOF
 
-chmod +x /usr/local/bin/watchcmd
+chmod +x /tmp/simple_monitor.sh
 
-# 安装并测试
-watchcmd install
+# 启动极简监控
+/tmp/simple_monitor.sh start
 
 # 测试
-wc
+echo "test_simple_$(date +%s)" >> ~/.bash_history
+sleep 2
+tail -5 /tmp/command_monitor.log
