@@ -1,10 +1,18 @@
-# 创建统一的监控系统
-cat > /usr/local/bin/mon << 'EOF'
+# 创建唯一的监控系统
+cat > /usr/local/bin/cmdwatch << 'EOF'
 #!/bin/bash
 
-LOG_FILE="/root/command_logs/monitor.log"
-PID_FILE="/tmp/monitor.pid"
-LOCK_FILE="/tmp/monitor.lock"
+# 配置文件
+CONFIG_DIR="/root/.cmdwatch"
+LOG_FILE="$CONFIG_DIR/monitor.log"
+PID_FILE="$CONFIG_DIR/pid"
+LOCK_FILE="$CONFIG_DIR/lock"
+
+# 初始化
+init_system() {
+    mkdir -p "$CONFIG_DIR"
+    touch "$LOG_FILE"
+}
 
 # 获取客户端IP
 get_client_ip() {
@@ -27,7 +35,7 @@ is_running() {
     return 1
 }
 
-# 获取文件锁防止重复启动
+# 文件锁
 get_lock() {
     exec 200>"$LOCK_FILE"
     flock -n 200 && return 0
@@ -36,135 +44,123 @@ get_lock() {
 
 release_lock() {
     flock -u 200
-    rm -f "$LOCK_FILE"
 }
 
-# to命令处理
-if [ "$1" = "to" ]; then
-    if is_running; then
-        echo "🔍 切换到前台显示模式..."
-        echo "💡 按 Ctrl+C 返回后台模式"
-        echo "================================"
-        
-        if [ -f "$LOG_FILE" ]; then
-            echo "最近记录:"
-            tail -5 "$LOG_FILE"
-            echo "------------------------"
-            echo "开始实时显示..."
-            tail -f "$LOG_FILE"
-        else
-            echo "暂无日志记录"
-        fi
-    else
-        echo "🚀 启动监控系统..."
-        exec "$0" start
+# 停止所有可能的监控进程
+stop_all_monitors() {
+    echo "停止所有监控进程..."
+    # 停止当前系统
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
     fi
-    exit 0
-fi
+    
+    # 停止其他可能运行的监控
+    pkill -f "cmd_monitor"
+    pkill -f "monitor.sh"
+    pkill -f "mt"
+    pkill -f "mon"
+    pkill -f "cmdwatch"
+    
+    # 清理文件
+    rm -f "$PID_FILE"
+    rm -f "$LOCK_FILE"
+    sleep 1
+}
 
+# 主监控函数
+start_monitoring() {
+    echo "启动命令监控..."
+    
+    # 设置实时history
+    for user_dir in /home/* /root; do
+        [ -d "$user_dir" ] || continue
+        bashrc="$user_dir/.bashrc"
+        [ -f "$bashrc" ] || continue
+        if ! grep -q "PROMPT_COMMAND.*cmdwatch" "$bashrc" 2>/dev/null; then
+            echo 'export PROMPT_COMMAND="history -a; history -c; history -r #cmdwatch"' >> "$bashrc"
+        fi
+    done
+    
+    # 启动监控进程
+    (
+        echo "=== 命令监控启动: $(date) ===" >> "$LOG_FILE"
+        declare -A file_sizes
+        
+        # 初始化文件大小
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            user=$(basename "$user_dir")
+            history_file="$user_dir/.bash_history"
+            [ -f "$history_file" ] && file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+        done
+        
+        # 主监控循环
+        while true; do
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] || continue
+                
+                current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_size=${file_sizes["$user"]:-0}
+                
+                if [ "$current_size" -gt "$last_size" ]; then
+                    new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                    if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                        # 过滤简单命令
+                        case "$new_cmd" in
+                            ls|cd|pwd|ll|history|exit|clear|cmdwatch|"."|"..")
+                                continue
+                                ;;
+                            *)
+                                client_ip=$(get_client_ip)
+                                timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                                log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
+                                echo "$log_entry" >> "$LOG_FILE"
+                                file_sizes["$user"]=$current_size
+                                ;;
+                        esac
+                    fi
+                fi
+            done
+            sleep 1
+        done
+    ) &
+    
+    echo $! > "$PID_FILE"
+    echo "✅ 监控已启动 (PID: $!)"
+}
+
+# 命令处理
 case "$1" in
-    start|background)
+    start)
+        init_system
         if ! get_lock; then
             echo "❌ 监控已经在运行中"
             exit 1
         fi
         
         if is_running; then
-            echo "✅ 监控已在运行中 (PID: $(cat "$PID_FILE"))"
+            echo "✅ 监控已在运行中"
             release_lock
             exit 0
         fi
         
-        echo "🔧 启动后台监控..."
-        
-        # 设置实时history（只设置一次）
-        for user_dir in /home/* /root; do
-            [ -d "$user_dir" ] || continue
-            bashrc="$user_dir/.bashrc"
-            [ -f "$bashrc" ] || continue
-            if ! grep -q "PROMPT_COMMAND.*history.*a.*c.*r" "$bashrc" 2>/dev/null; then
-                echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
-            fi
-        done
-        
-        # 创建日志目录
-        mkdir -p "/root/command_logs"
-        
-        # 启动单一监控进程
-        (
-            echo "=== 监控系统启动: $(date) ===" >> "$LOG_FILE"
-            declare -A file_sizes
-            
-            # 初始化文件大小
-            for user_dir in /home/* /root; do
-                [ -d "$user_dir" ] || continue
-                user=$(basename "$user_dir")
-                history_file="$user_dir/.bash_history"
-                [ -f "$history_file" ] && file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-            done
-            
-            # 主监控循环
-            while true; do
-                for user_dir in /home/* /root; do
-                    [ -d "$user_dir" ] || continue
-                    user=$(basename "$user_dir")
-                    history_file="$user_dir/.bash_history"
-                    [ -f "$history_file" ] || continue
-                    
-                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    last_size=${file_sizes["$user"]:-0}
-                    
-                    if [ "$current_size" -gt "$last_size" ]; then
-                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
-                            # 过滤简单命令
-                            case "$new_cmd" in
-                                ls|cd|pwd|ll|history|exit|clear|to|mon|"."|"..")
-                                    continue
-                                    ;;
-                                *)
-                                    client_ip=$(get_client_ip)
-                                    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
-                                    echo "$log_entry" >> "$LOG_FILE"
-                                    ;;
-                            esac
-                        fi
-                        file_sizes["$user"]=$current_size
-                    fi
-                done
-                sleep 2
-            done
-        ) &
-        
-        monitor_pid=$!
-        echo $monitor_pid > "$PID_FILE"
+        stop_all_monitors
+        start_monitoring
         release_lock
-        
-        echo "✅ 后台监控已启动 (PID: $monitor_pid)"
-        echo "📝 日志文件: $LOG_FILE"
-        echo "💡 使用 'mon to' 查看实时监控"
         ;;
         
     stop)
-        if [ -f "$PID_FILE" ]; then
-            pid=$(cat "$PID_FILE")
-            if ps -p "$pid" >/dev/null 2>&1; then
-                kill "$pid" 2>/dev/null
-                rm -f "$PID_FILE"
-                rm -f "$LOCK_FILE"
-                echo "✅ 监控已停止 (PID: $pid)"
-            else
-                rm -f "$PID_FILE"
-                rm -f "$LOCK_FILE"
-                echo "⚠️ 监控进程不存在，已清理"
-            fi
-        else
-            echo "ℹ️ 监控未运行"
-        fi
+        init_system
+        stop_all_monitors
+        echo "✅ 所有监控已停止"
         ;;
         
     status)
+        init_system
         if is_running; then
             pid=$(cat "$PID_FILE")
             echo "✅ 监控运行中 (PID: $pid)"
@@ -175,80 +171,107 @@ case "$1" in
         fi
         ;;
         
-    logs)
-        if [ -f "$LOG_FILE" ]; then
-            if [ "$2" = "-f" ]; then
+    view|logs)
+        init_system
+        if [ "$2" = "-f" ] || [ "$1" = "view" ]; then
+            if [ -f "$LOG_FILE" ]; then
                 tail -f "$LOG_FILE"
             else
-                tail -20 "$LOG_FILE"
+                echo "暂无日志"
             fi
         else
-            echo "日志文件不存在"
+            if [ -f "$LOG_FILE" ]; then
+                tail -20 "$LOG_FILE"
+            else
+                echo "暂无日志"
+            fi
         fi
         ;;
         
     install)
-        # 停止可能运行的旧监控
-        "$0" stop
+        init_system
+        stop_all_monitors
         
         # 设置开机自启动
-        echo "🔧 设置开机自启动..."
-        (crontab -l 2>/dev/null | grep -v "$0"; echo "@reboot $0 start >/dev/null 2>&1") | crontab -
+        echo "设置开机自启动..."
+        (crontab -l 2>/dev/null | grep -v "cmdwatch"; echo "@reboot /usr/local/bin/cmdwatch start >/dev/null 2>&1") | crontab -
         
         # 设置命令别名
-        echo "🔧 设置命令别名..."
-        sed -i '/alias to=/d' ~/.bashrc
-        echo "alias to='$0 to'" >> ~/.bashrc
-        
-        # 重新加载配置
-        source ~/.bashrc
+        echo "设置命令别名..."
+        sed -i '/alias cmdwatch=/d' ~/.bashrc
+        echo "alias cw='/usr/local/bin/cmdwatch view'" >> ~/.bashrc
         
         # 启动监控
-        "$0" start
+        /usr/local/bin/cmdwatch start
+        
+        source ~/.bashrc
         
         echo ""
         echo "🎉 安装完成!"
         echo "========================"
-        echo "立即使用:"
-        echo "  to          # 启动/查看监控"
-        echo "  mon status  # 查看状态"
-        echo "  mon stop    # 停止监控"
-        echo "  mon logs    # 查看日志"
+        echo "使用方法:"
+        echo "  cw              # 查看实时监控"
+        echo "  cmdwatch view   # 查看实时监控"
+        echo "  cmdwatch status # 查看状态"
+        echo "  cmdwatch stop   # 停止监控"
+        echo "  cmdwatch logs   # 查看历史日志"
         ;;
         
-    uninstall)
-        "$0" stop
-        rm -f "$0"
+    clean)
+        echo "🧹 彻底清理所有监控系统..."
+        # 停止所有
+        pkill -f "cmd_monitor"
+        pkill -f "monitor.sh"
+        pkill -f "mt"
+        pkill -f "mon"
+        pkill -f "cmdwatch"
+        
+        # 清理文件
+        rm -rf /root/monitor
+        rm -rf /root/install
+        rm -rf /root/.cmdwatch
+        rm -f /usr/local/bin/mt
+        rm -f /usr/local/bin/mon
+        rm -f /tmp/*monitor*
+        rm -f /tmp/cmd_monitor.*
+        
         # 清理crontab
-        crontab -l 2>/dev/null | grep -v "$0" | crontab -
+        (crontab -l 2>/dev/null | grep -v -E "(monitor|cmd_monitor|mt|mon|cmdwatch)") | crontab -
+        
         # 清理别名
         sed -i '/alias to=/d' ~/.bashrc
-        echo "✅ 已卸载监控系统"
+        sed -i '/alias mon=/d' ~/.bashrc
+        sed -i '/alias mt=/d' ~/.bashrc
+        sed -i '/alias cw=/d' ~/.bashrc
+        
+        source ~/.bashrc
+        echo "✅ 彻底清理完成"
         ;;
         
     *)
-        echo "命令监控系统"
+        echo "命令监控系统 (cmdwatch)"
         echo "========================"
         echo "使用方法:"
-        echo "  to              # 启动/查看监控"
-        echo "  mon start       # 启动后台监控"
-        echo "  mon stop        # 停止监控"
-        echo "  mon status      # 查看状态"
-        echo "  mon logs        # 查看日志"
-        echo "  mon logs -f     # 实时查看日志"
-        echo "  mon install     # 安装配置"
-        echo "  mon uninstall   # 卸载"
+        echo "  cmdwatch start   # 启动监控"
+        echo "  cmdwatch stop    # 停止监控"
+        echo "  cmdwatch status  # 查看状态"
+        echo "  cmdwatch view    # 实时查看"
+        echo "  cmdwatch logs    # 查看日志"
+        echo "  cmdwatch install # 安装配置"
+        echo "  cmdwatch clean   # 彻底清理"
+        echo ""
+        echo "安装后使用: cw   # 查看实时监控"
         ;;
 esac
 EOF
 
 # 给执行权限
-chmod +x /usr/local/bin/mon
+chmod +x /usr/local/bin/cmdwatch
 
 # 安装并启动
-echo "安装统一监控系统..."
-mon install
+echo "安装唯一监控系统..."
+cmdwatch install
 
 # 测试
 echo "测试监控系统..."
-to
+cw
