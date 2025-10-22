@@ -1,303 +1,50 @@
+# 创建独立安装脚本
+cat > /tmp/standalone_install.sh << 'EOF'
 #!/bin/bash
-# 极简版命令监控脚本 - 前后台同时记录
 
-set -e
-
-### 配置 ###
 INSTALL_DIR="/root/安装"
-SCRIPT_NAME="cmd_monitor.sh"
+SCRIPT_NAME="cmd_monitor.sh" 
 SCRIPT_PATH="$INSTALL_DIR/$SCRIPT_NAME"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
-### 颜色定义 ###
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
 # 创建安装目录
-create_install_dir() {
-    if [ ! -d "$INSTALL_DIR" ]; then
-        echo -e "${YELLOW}创建安装目录: $INSTALL_DIR${NC}"
-        mkdir -p "$INSTALL_DIR"
-    fi
-}
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$LOG_DIR"
 
-# 获取客户端IP
-get_client_ip() {
-    local ip="unknown"
-    
-    if [ -n "$SSH_CLIENT" ]; then
-        ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-    elif [ -n "$SSH_CONNECTION" ]; then
-        ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
-    else
-        ip=$(who -m 2>/dev/null | awk '{print $NF}' | sed 's/[()]//g' | head -1)
-        [[ "$ip" =~ ^:[0-9]+$ ]] && ip="localhost"
-    fi
-    
-    echo "$ip"
-}
-
-# 配置实时history记录
-setup_realtime_history() {
-    for user_dir in /home/* /root; do
-        [ -d "$user_dir" ] || continue
-        local bashrc="$user_dir/.bashrc"
-        [ -f "$bashrc" ] || continue
-        
-        if ! grep -q "AUTO_HISTORY_SETUP" "$bashrc"; then
-            cat >> "$bashrc" << 'EOF'
-
-# AUTO_HISTORY_SETUP - 实时命令记录
-export PROMPT_COMMAND='history -a; history -c; history -r'
-export HISTTIMEFORMAT='%F %T '
-export HISTSIZE=10000
-export HISTFILESIZE=20000
-shopt -s histappend
-EOF
-        fi
-    done
-}
-
-# 后台监控进程
-start_background_monitor() {
-    # 如果已经在运行，先停止
-    stop_background_monitor 2>/dev/null || true
-    
-    echo -e "${GREEN}启动后台监控...${NC}"
-    
-    (
-        # 设置实时history
-        setup_realtime_history
-        
-        # 创建日志目录
-        mkdir -p "$LOG_DIR"
-        local log_file="$LOG_DIR/background_$(date +%Y%m%d).log"
-        
-        echo "=== 后台监控启动于: $(date) ===" >> "$log_file"
-        
-        # 主监控循环
-        declare -A last_sizes
-        declare -A last_commands
-        
-        while true; do
-            for user_dir in /home/* /root; do
-                [ -d "$user_dir" ] || continue
-                local user=$(basename "$user_dir")
-                local history_file="$user_dir/.bash_history"
-                [ -f "$history_file" ] || continue
-                
-                local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                local last_size=${last_sizes["$user"]:-0}
-                
-                if [ "$current_size" -gt "$last_size" ]; then
-                    local new_command=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                    
-                    if [ -n "$new_command" ] && 
-                       [ ${#new_command} -gt 1 ] && 
-                       [[ ! "$new_command" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|to|TO)$ ]] && 
-                       [ "$new_command" != "${last_commands["$user"]}" ]; then
-                        
-                        local client_ip=$(get_client_ip)
-                        local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                        local log_entry="[BG][$timestamp] 用户:$user | 命令:$new_command | 来源:$client_ip"
-                        
-                        echo "$log_entry" >> "$log_file"
-                        last_commands["$user"]="$new_command"
-                    fi
-                    
-                    last_sizes["$user"]=$current_size
-                fi
-            done
-            sleep 1
-        done
-    ) &
-    
-    echo $! > "$PID_FILE"
-    echo -e "${GREEN}✓ 后台监控已启动 (PID: $!)${NC}"
-    echo -e "日志文件: $LOG_DIR/background_*.log"
-}
-
-# 停止后台监控
-stop_background_monitor() {
-    if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE")
-        kill "$pid" 2>/dev/null && echo -e "${GREEN}✓ 后台监控已停止${NC}" || echo -e "${YELLOW}后台监控未运行${NC}"
-        rm -f "$PID_FILE"
-    else
-        echo -e "${YELLOW}后台监控未运行${NC}"
-    fi
-}
-
-# 前台监控模式
-start_foreground_monitor() {
-    echo -e "${YELLOW}=== 前台监控模式 ===${NC}"
-    echo -e "输入 ${GREEN}to${NC} 切换到后台模式"
-    echo -e "按 ${RED}Ctrl+C${NC} 停止监控"
-    echo -e "${YELLOW}===================${NC}"
-    
-    # 前台也记录日志（与后台独立的日志文件）
-    local fg_log="$LOG_DIR/foreground_$(date +%Y%m%d_%H%M%S).log"
-    mkdir -p "$LOG_DIR"
-    echo "=== 前台监控启动于: $(date) ===" > "$fg_log"
-    
-    declare -A fg_last_sizes
-    declare -A fg_last_commands
-    
-    while true; do
-        # 检查是否输入to
-        if read -t 0.1 -n 2 user_input 2>/dev/null; then
-            if [ "$user_input" = "to" ] || [ "$user_input" = "TO" ]; then
-                echo -e "\n${GREEN}切换到后台模式...${NC}"
-                start_background_monitor
-                exit 0
-            fi
-        fi
-        
-        # 监控命令历史
-        for user_dir in /home/* /root; do
-            [ -d "$user_dir" ] || continue
-            local user=$(basename "$user_dir")
-            local history_file="$user_dir/.bash_history"
-            [ -f "$history_file" ] || continue
-            
-            local current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-            local last_size=${fg_last_sizes["$user"]:-0}
-            
-            if [ "$current_size" -gt "$last_size" ]; then
-                local new_command=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                
-                if [ -n "$new_command" ] && 
-                   [ ${#new_command} -gt 1 ] && 
-                   [[ ! "$new_command" =~ ^(ls|cd|pwd|ll|la|history|exit|clear|to|TO)$ ]] && 
-                   [ "$new_command" != "${fg_last_commands["$user"]}" ]; then
-                    
-                    local client_ip=$(get_client_ip)
-                    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                    local log_entry="[FG][$timestamp] 用户:$user | 命令:$new_command | 来源:$client_ip"
-                    
-                    # 前台显示并记录
-                    echo -e "${BLUE}$log_entry${NC}"
-                    echo "$log_entry" >> "$fg_log"
-                    fg_last_commands["$user"]="$new_command"
-                fi
-                
-                fg_last_sizes["$user"]=$current_size
-            fi
-        done
-        sleep 1
-    done
-}
-
-# 安装脚本
-install_script() {
-    create_install_dir
-    
-    echo -e "${GREEN}正在安装脚本到: $SCRIPT_PATH${NC}"
-    
-    # 创建安装脚本
-    cat > "$SCRIPT_PATH" << 'EOF'
+# 创建监控脚本
+cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
 #!/bin/bash
-# 安装版命令监控脚本
 
 INSTALL_DIR="/root/安装"
 SCRIPT_PATH="$INSTALL_DIR/cmd_monitor.sh"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
+# 获取客户端IP
+get_client_ip() {
+    local ip="unknown"
+    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    [ "$ip" = "unknown" ] && [ -n "$SSH_CONNECTION" ] && ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    echo "$ip"
+}
+
 # 检查to命令
 if [ "$1" = "to" ] || [ "$1" = "TO" ]; then
-    if [ -f "$PID_FILE" ]; then
+    if [ -f "$PID_FILE" ] && ps -p $(cat "$PID_FILE") >/dev/null 2>&1; then
         echo "切换到前台模式..."
         kill $(cat "$PID_FILE") 2>/dev/null
         rm -f "$PID_FILE"
-        exec $SCRIPT_PATH foreground
+        exec "$SCRIPT_PATH" foreground
     else
         echo "切换到后台模式..."
-        exec $SCRIPT_PATH background
+        exec "$SCRIPT_PATH" background
     fi
     exit 0
 fi
 
 case "${1:-}" in
     background|start)
-        # 后台启动
-        (
-            mkdir -p "$LOG_DIR"
-            while true; do
-                for user_dir in /home/* /root; do
-                    [ -d "$user_dir" ] || continue
-                    user=$(basename "$user_dir")
-                    history_file="$user_dir/.bash_history"
-                    [ -f "$history_file" ] || continue
-                    
-                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    last_size=0
-                    [ -f "/tmp/last_size_$user" ] && last_size=$(cat "/tmp/last_size_$user")
-                    
-                    if [ "$current_size" -gt "$last_size" ]; then
-                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
-                            client_ip="unknown"
-                            [ -n "$SSH_CLIENT" ] && client_ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-                            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户:$user | 命令:$new_cmd | 来源:$client_ip" >> "$LOG_DIR/auto_monitor.log"
-                        fi
-                        echo "$current_size" > "/tmp/last_size_$user"
-                    fi
-                done
-                sleep 1
-            done
-        ) &
-        echo $! > "$PID_FILE"
-        echo "后台监控已启动 (PID: $!)"
-        ;;
-    foreground)
-        # 前台模式
-        echo "前台监控模式 - 输入 'to' 切换到后台"
-        while true; do
-            for user_dir in /home/* /root; do
-                [ -d "$user_dir" ] || continue
-                user=$(basename "$user_dir")
-                history_file="$user_dir/.bash_history"
-                [ -f "$history_file" ] || continue
-                
-                current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                last_size=0
-                [ -f "/tmp/last_size_$user" ] && last_size=$(cat "/tmp/last_size_$user")
-                
-                if [ "$current_size" -gt "$last_size" ]; then
-                    new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                    if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
-                        client_ip="unknown"
-                        [ -n "$SSH_CLIENT" ] && client_ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
-                    fi
-                    echo "$current_size" > "/tmp/last_size_$user"
-                fi
-            done
-            
-            # 检查to命令输入
-            if read -t 0.1 -n 2 input 2>/dev/null; then
-                if [ "$input" = "to" ] || [ "$input" = "TO" ]; then
-                    echo "切换到后台模式..."
-                    $SCRIPT_PATH background
-                    exit 0
-                fi
-            fi
-            sleep 1
-        done
-        ;;
-    stop)
-        [ -f "$PID_FILE" ] && kill $(cat "$PID_FILE") 2>/dev/null && rm -f "$PID_FILE"
-        echo "监控已停止"
-        ;;
-    install)
-        # 设置开机自启动
-        (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
-        
         # 设置实时history
         for user_dir in /home/* /root; do
             [ -d "$user_dir" ] || continue
@@ -306,46 +53,119 @@ case "${1:-}" in
             grep -q "PROMPT_COMMAND" "$bashrc" || echo "export PROMPT_COMMAND='history -a; history -c; history -r'" >> "$bashrc"
         done
         
-        echo "安装完成！已设置开机自启动"
-        echo "使用方法:"
-        echo "  to                    # 切换前后台模式"
-        echo "  $SCRIPT_PATH foreground # 前台模式"
-        echo "  $SCRIPT_PATH background # 后台模式"
+        # 后台启动
+        (
+            echo "后台监控启动于: $(date)" >> "$LOG_DIR/background.log"
+            
+            declare -A last_sizes
+            while true; do
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
+                    [ -f "$history_file" ] || continue
+                    
+                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    last_size=${last_sizes["$user"]:-0}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO)$ ]]; then
+                            client_ip=$(get_client_ip)
+                            timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                            echo "[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip" >> "$LOG_DIR/background.log"
+                        fi
+                        last_sizes["$user"]=$current_size
+                    fi
+                done
+                sleep 1
+            done
+        ) &
+        
+        echo $! > "$PID_FILE"
+        echo "后台监控已启动 (PID: $!)"
+        echo "日志: $LOG_DIR/background.log"
         ;;
+        
+    foreground)
+        echo "前台监控模式 - 输入 'to' 切换到后台"
+        echo "按 Ctrl+C 停止"
+        
+        declare -A last_sizes
+        while true; do
+            # 检查to命令
+            if read -t 0.1 -n 2 input 2>/dev/null; then
+                if [ "$input" = "to" ] || [ "$input" = "TO" ]; then
+                    echo "切换到后台模式..."
+                    "$SCRIPT_PATH" background
+                    exit 0
+                fi
+            fi
+            
+            # 监控命令
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] || continue
+                
+                current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                last_size=${last_sizes["$user"]:-0}
+                
+                if [ "$current_size" -gt "$last_size" ]; then
+                    new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                    if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO)$ ]]; then
+                        client_ip=$(get_client_ip)
+                        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                        echo "[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
+                    fi
+                    last_sizes["$user"]=$current_size
+                fi
+            done
+            sleep 1
+        done
+        ;;
+        
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            kill $(cat "$PID_FILE") 2>/dev/null
+            rm -f "$PID_FILE"
+            echo "监控已停止"
+        else
+            echo "监控未运行"
+        fi
+        ;;
+        
+    install)
+        # 设置开机自启动
+        (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
+        
+        # 设置to命令别名
+        if ! grep -q "alias to=" ~/.bashrc; then
+            echo "alias to='$SCRIPT_PATH to'" >> ~/.bashrc
+        fi
+        
+        echo "安装完成!"
+        echo "立即使用: $SCRIPT_PATH to"
+        echo "或重新登录后使用: to"
+        ;;
+        
     *)
         echo "使用方法: $0 {foreground|background|stop|install|to}"
         ;;
 esac
+SCRIPT_EOF
+
+chmod +x "$SCRIPT_PATH"
+
+# 执行安装
+echo "执行安装配置..."
+"$SCRIPT_PATH" install
+
+echo "安装完成!"
+echo "脚本位置: $SCRIPT_PATH"
+echo "立即测试: $SCRIPT_PATH to"
 EOF
 
-    chmod +x "$SCRIPT_PATH"
-    echo -e "${GREEN}✓ 脚本已安装到: $SCRIPT_PATH${NC}"
-    
-    # 执行安装配置
-    $SCRIPT_PATH install
-}
-
-### 主程序 ###
-case "${1:-}" in
-    "install")
-        install_script
-        ;;
-    "background")
-        start_background_monitor
-        ;;
-    "foreground")
-        start_foreground_monitor
-        ;;
-    "stop")
-        stop_background_monitor
-        ;;
-    *)
-        echo -e "${YELLOW}使用方法:${NC}"
-        echo -e "  $0 install     # 安装脚本并设置自启动"
-        echo -e "  $0 foreground  # 启动前台监控"
-        echo -e "  $0 background  # 启动后台监控"  
-        echo -e "  $0 stop        # 停止监控"
-        echo -e ""
-        echo -e "${GREEN}安装后直接输入 'to' 切换前后台模式${NC}"
-        ;;
-esac
+# 执行独立安装
+bash /tmp/standalone_install.sh
