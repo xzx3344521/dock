@@ -1,22 +1,12 @@
-# 创建本地安装脚本
-cat > /tmp/local_install.sh << 'EOF'
+# 重新下载修复版监控脚本
+curl -sSL -o /root/install/cmd_monitor.sh https://raw.githubusercontent.com/xzx3344521/dock/main/cmd_monitor_fixed.sh
+
+# 如果没有修复版，使用这个替代方案
+cat > /root/install/cmd_monitor_fixed.sh << 'EOF'
 #!/bin/bash
 
-INSTALL_DIR="/root/monitor"
-SCRIPT_NAME="cmd_monitor.sh" 
-SCRIPT_PATH="$INSTALL_DIR/$SCRIPT_NAME"
-LOG_DIR="/root/command_logs"
-
-# 创建目录
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$LOG_DIR"
-
-# 创建主监控脚本
-cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
-#!/bin/bash
-
-INSTALL_DIR="/root/monitor"
-SCRIPT_PATH="$INSTALL_DIR/cmd_monitor.sh"
+INSTALL_DIR="/root/install"
+SCRIPT_PATH="$INSTALL_DIR/cmd_monitor_fixed.sh"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
@@ -98,9 +88,22 @@ case "$1" in
         echo "按 Ctrl+C 停止"
         echo "================================"
         
+        # 设置信号处理
+        trap 'echo -e "\n停止监控"; exit 0' INT TERM
+        
         declare -A last_sizes
         
         while true; do
+            # 检测to命令输入
+            if read -t 0.5 -n 2 input 2>/dev/null; then
+                if [ "$input" = "to" ]; then
+                    echo "切换到后台模式..."
+                    "$SCRIPT_PATH" background
+                    exit 0
+                fi
+            fi
+            
+            # 监控命令
             for user_dir in /home/* /root; do
                 [ -d "$user_dir" ] || continue
                 user=$(basename "$user_dir")
@@ -131,50 +134,10 @@ case "$1" in
         done
         ;;
         
-    stop)
-        if [ -f "$PID_FILE" ]; then
-            kill $(cat "$PID_FILE") 2>/dev/null
-            rm -f "$PID_FILE"
-            echo "监控已停止"
-        else
-            echo "监控未运行"
-        fi
-        ;;
-        
-    install)
-        # 设置开机自启动
-        (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
-        
-        # 设置to命令别名
-        echo "alias to='$SCRIPT_PATH to'" >> ~/.bashrc
-        echo "alias to" >> ~/.bashrc
-        
-        echo "安装完成!"
-        echo "请运行: source ~/.bashrc"
-        echo "然后使用: to 命令切换模式"
-        ;;
-        
     *)
-        echo "使用方法: $0 {foreground|background|stop|install|to}"
-        echo "安装后使用 'to' 命令切换模式"
+        echo "使用方法: $0 {foreground|background|stop|to}"
         ;;
 esac
-SCRIPT_EOF
-
-chmod +x "$SCRIPT_PATH"
-
-# 执行安装
-echo "开始安装..."
-"$SCRIPT_PATH" install
-
-echo ""
-echo "=== 安装完成 ==="
-echo "脚本位置: $SCRIPT_PATH"
-echo "日志目录: $LOG_DIR"
-echo "请运行: source ~/.bashrc"
-echo "然后测试: to"
 EOF
 
-# 执行本地安装
-chmod +x /tmp/local_install.sh
-/tmp/local_install.sh
+chmod +x /root/install/cmd_monitor_fixed.sh
