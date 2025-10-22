@@ -1,60 +1,83 @@
-# 停止所有可能的监控进程
-pkill -f "cmd_monitor" 2>/dev/null
-rm -f /tmp/cmd_monitor.pid
-rm -f /tmp/cmd_monitor.last_cmd
-
-# 创建监控目录
-mkdir -p /root/monitor
-mkdir -p /root/command_logs
-
-# 创建新的监控脚本
-cat > /root/monitor/monitor.sh << 'EOF'
+# 创建最简单的监控脚本
+cat > /usr/local/bin/monitor << 'EOF'
 #!/bin/bash
 
-SCRIPT_PATH="/root/monitor/monitor.sh"
-LOG_DIR="/root/command_logs"
-PID_FILE="/tmp/cmd_monitor.pid"
+LOG_FILE="/root/command_logs/monitor.log"
+PID_FILE="/tmp/monitor.pid"
 
-# 获取客户端IP
-get_client_ip() {
-    local ip="unknown"
-    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-    [ "$ip" = "unknown" ] && [ -n "$SSH_CONNECTION" ] && ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
-    echo "$ip"
-}
-
-# 检查是否运行中
-is_running() {
-    if [ -f "$PID_FILE" ]; then
-        local pid=$(cat "$PID_FILE" 2>/dev/null)
-        if ps -p "$pid" >/dev/null 2>&1; then
-            return 0
-        else
-            rm -f "$PID_FILE"
-        fi
-    fi
-    return 1
-}
-
-# to命令处理
-if [ "$1" = "to" ]; then
-    if is_running; then
-        echo "🔄 切换到前台显示模式..."
-        # 前台显示模式
-        echo "🔍 实时监控显示中..."
-        echo "💡 输入 'exit' 返回后台模式"
-        echo "================================"
+case "$1" in
+    start)
+        # 设置实时history
+        echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> ~/.bashrc
+        source ~/.bashrc
         
-        # 显示最近记录
-        if [ -f "$LOG_DIR/monitor.log" ]; then
-            echo "最近记录:"
-            tail -5 "$LOG_DIR/monitor.log" | while read line; do
-                echo "  📌 $line"
+        # 启动监控进程
+        (
+            mkdir -p /root/command_logs
+            declare -A sizes
+            
+            while true; do
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
+                    [ -f "$history_file" ] || continue
+                    
+                    current=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    last=${sizes["$user"]:-0}
+                    
+                    if [ "$current" -gt "$last" ]; then
+                        cmd=$(tail -n 1 "$history_file" 2>/dev/null)
+                        if [ -n "$cmd" ] && [ ${#cmd} -gt 1 ]; then
+                            case "$cmd" in
+                                ls|cd|pwd|ll|history|exit|clear|"."|"..") continue ;;
+                                *)
+                                    ip="unknown"
+                                    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户:$user | 命令:$cmd | 来源:$ip" >> "$LOG_FILE"
+                                    ;;
+                            esac
+                        fi
+                        sizes["$user"]=$current
+                    fi
+                done
+                sleep 2
             done
-            echo "------------------------"
-        fi
+        ) &
+        echo $! > "$PID_FILE"
+        echo "监控已启动"
+        ;;
         
-        # 实时显示新命令
-        while true; do
-            # 检查退出命令
-            if read -t 1 -n 4 input 2>/dev
+    stop)
+        [ -f "$PID_FILE" ] && kill $(cat "$PID_FILE") 2>/dev/null
+        rm -f "$PID_FILE"
+        echo "监控已停止"
+        ;;
+        
+    view)
+        if [ -f "$LOG_FILE" ]; then
+            tail -f "$LOG_FILE"
+        else
+            echo "暂无日志"
+        fi
+        ;;
+        
+    *)
+        echo "使用方法:"
+        echo "  monitor start  # 启动监控"
+        echo "  monitor stop   # 停止监控" 
+        echo "  monitor view   # 查看日志"
+        ;;
+esac
+EOF
+
+chmod +x /usr/local/bin/monitor
+
+# 设置开机启动
+(crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/monitor start >/dev/null 2>&1") | crontab -
+
+# 启动监控
+monitor start
+
+echo "简化版安装完成!"
+echo "使用: monitor view  查看实时日志"
