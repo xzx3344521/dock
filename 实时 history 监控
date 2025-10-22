@@ -1,79 +1,375 @@
-# 创建完整的修复脚本
-cat > /tmp/fix_autostart.sh << 'EOF'
+# 停止所有监控进程
+/root/monitor/cmd_monitor.sh stop
+pkill -f "cmd_monitor.sh" 2>/dev/null
+rm -f /tmp/cmd_monitor.pid
+
+# 创建修复版的监控脚本
+cat > /root/monitor/cmd_monitor_fixed.sh << 'EOF'
 #!/bin/bash
 
-echo "=== 修复命令监控开机自启动 ==="
+INSTALL_DIR="/root/monitor"
+SCRIPT_PATH="$INSTALL_DIR/cmd_monitor_fixed.sh"
+LOG_DIR="/root/command_logs"
+PID_FILE="/tmp/cmd_monitor.pid"
+LOCK_FILE="/tmp/cmd_monitor.lock"
 
-# 停止现有监控
-/root/monitor/cmd_monitor.sh stop >/dev/null 2>&1
+# 获取客户端IP和地理位置
+get_client_ip() {
+    local ip="unknown"
+    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    [ "$ip" = "unknown" ] && [ -n "$SSH_CONNECTION" ] && ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    echo "$ip"
+}
 
-# 清理旧的crontab条目
-echo "1. 清理旧的crontab条目..."
-(crontab -l 2>/dev/null | grep -v "cmd_monitor" | grep -v "monitor") | crontab -
+get_ip_location() {
+    local ip="$1"
+    [ "$ip" = "unknown" ] && echo "unknown" && return
+    [ "$ip" = "127.0.0.1" ] && echo "localhost" && return
+    [ "$ip" = "::1" ] && echo "localhost" && return
+    
+    # 使用ipapi.co获取地理位置信息
+    location=$(curl -s -m 2 "http://ipapi.co/$ip/country_name/" 2>/dev/null || echo "unknown")
+    city=$(curl -s -m 2 "http://ipapi.co/$ip/city/" 2>/dev/null || echo "")
+    
+    if [ "$location" != "unknown" ] && [ -n "$city" ] && [ "$city" != "unknown" ]; then
+        echo "$city, $location"
+    elif [ "$location" != "unknown" ]; then
+        echo "$location"
+    else
+        echo "unknown"
+    fi
+}
 
-# 添加新的crontab开机启动
-echo "2. 设置crontab开机启动..."
-(crontab -l 2>/dev/null; echo "@reboot /bin/bash /root/monitor/cmd_monitor.sh background >/dev/null 2>&1") | crontab -
+# 检查是否已经运行
+is_running() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE" 2>/dev/null)
+        if ps -p "$pid" >/dev/null 2>&1; then
+            return 0
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+    return 1
+}
 
-# 尝试创建systemd服务
-echo "3. 尝试设置systemd服务..."
-if command -v systemctl >/dev/null 2>&1; then
-    cat > /etc/systemd/system/cmd-monitor.service << SVC_EOF
-[Unit]
-Description=Command Monitor Service
-After=network.target
+# 获取锁
+acquire_lock() {
+    exec 200>"$LOCK_FILE"
+    flock -n 200 && return 0
+    return 1
+}
 
-[Service]
-Type=forking
-User=root
-ExecStart=/root/monitor/cmd_monitor.sh background
-ExecStop=/root/monitor/cmd_monitor.sh stop
-Restart=no
-StandardOutput=null
-StandardError=null
+# 释放锁
+release_lock() {
+    flock -u 200
+    rm -f "$LOCK_FILE"
+}
 
-[Install]
-WantedBy=multi-user.target
-SVC_EOF
-
-    systemctl daemon-reload
-    systemctl enable cmd-monitor.service >/dev/null 2>&1
-    echo "   ✅ systemd服务已设置"
-else
-    echo "   ℹ️  systemctl不可用，跳过systemd设置"
+# 检查to命令
+if [ "$1" = "to" ]; then
+    if is_running; then
+        echo "切换到前台显示模式..."
+        # 不停止后台进程，只是启动前台显示
+        exec "$SCRIPT_PATH" display
+    else
+        echo "启动后台监控+前台显示模式..."
+        exec "$SCRIPT_PATH" both
+    fi
+    exit 0
 fi
 
-# 设置rc.local备用方案
-echo "4. 设置rc.local备用方案..."
-if [ -d /etc/rc.d ]; then
-    # SysV init系统
-    echo '/root/monitor/cmd_monitor.sh background >/dev/null 2>&1' > /etc/rc.d/rc.local
-    chmod +x /etc/rc.d/rc.local
-elif [ -f /etc/rc.local ]; then
-    # systemd的rc.local兼容
-    grep -q "cmd_monitor" /etc/rc.local || echo '/root/monitor/cmd_monitor.sh background >/dev/null 2>&1' >> /etc/rc.local
-    chmod +x /etc/rc.local
-else
-    # 创建rc.local
-    echo '#!/bin/bash' > /etc/rc.local
-    echo '/root/monitor/cmd_monitor.sh background >/dev/null 2>&1' >> /etc/rc.local
-    chmod +x /etc/rc.local
-fi
-
-# 立即启动监控
-echo "5. 立即启动监控服务..."
-/root/monitor/cmd_monitor.sh background
-
-# 验证启动状态
-echo "6. 验证启动状态..."
-sleep 2
-/root/monitor/cmd_monitor.sh status
-
-echo ""
-echo "=== 修复完成 ==="
-echo "重启系统测试: reboot"
-echo "手动检查状态: /root/monitor/cmd_monitor.sh status"
+case "$1" in
+    both|start)
+        if ! acquire_lock; then
+            echo "监控已经在运行中"
+            exit 1
+        fi
+        
+        echo "启动后台监控+前台显示模式..."
+        
+        # 设置实时history
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "PROMPT_COMMAND.*history" "$bashrc" 2>/dev/null; then
+                echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
+                echo "已为 $user_dir 设置实时history"
+            fi
+        done
+        
+        # 启动后台监控
+        (
+            echo "=== 后台监控启动: $(date) ===" >> "$LOG_DIR/monitor.log"
+            declare -A last_sizes
+            
+            # 初始化文件大小
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+            done
+            
+            while true; do
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
+                    [ -f "$history_file" ] || continue
+                    
+                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    last_size=${last_sizes["$user"]:-0}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                            # 过滤简单命令
+                            case "$new_cmd" in
+                                ls|cd|pwd|ll|history|exit|clear|to|"."|"..")
+                                    continue
+                                    ;;
+                                *)
+                                    client_ip=$(get_client_ip)
+                                    location=$(get_ip_location "$client_ip")
+                                    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源IP:$client_ip | 位置:$location"
+                                    echo "$log_entry" >> "$LOG_DIR/monitor.log"
+                                    # 同时输出到前台（如果有人在看）
+                                    echo "$log_entry" > /tmp/cmd_monitor.last_cmd
+                                    ;;
+                            esac
+                        fi
+                        last_sizes["$user"]=$current_size
+                    fi
+                done
+                sleep 2
+            done
+        ) &
+        
+        echo $! > "$PID_FILE"
+        release_lock
+        
+        echo "✅ 后台监控已启动 (PID: $!)"
+        echo "📝 日志文件: $LOG_DIR/monitor.log"
+        
+        # 启动前台显示
+        echo "🔍 启动前台显示..."
+        exec "$SCRIPT_PATH" display
+        ;;
+        
+    display|foreground)
+        echo "🔍 前台显示模式启动..."
+        echo "💡 后台监控持续运行中"
+        echo "💡 输入 'to' 切换到纯后台模式"
+        echo "⏹️  按 Ctrl+C 停止显示（后台继续运行）"
+        echo "================================"
+        
+        # 显示最后几条记录
+        if [ -f "$LOG_DIR/monitor.log" ]; then
+            echo "最近记录:"
+            tail -5 "$LOG_DIR/monitor.log" | while read line; do
+                echo "  📌 $line"
+            done
+            echo "------------------------"
+        fi
+        
+        # 设置信号处理
+        trap 'echo -e "\n🛑 停止前台显示（后台监控继续运行）"; exit 0' INT TERM
+        
+        # 实时显示新命令
+        while true; do
+            # 检测to命令输入
+            if read -t 1 -n 2 input 2>/dev/null; then
+                if [ "$input" = "to" ]; then
+                    echo "🔄 切换到纯后台模式..."
+                    echo "✅ 后台监控继续运行中"
+                    echo "📝 查看日志: tail -f $LOG_DIR/monitor.log"
+                    exit 0
+                fi
+            fi
+            
+            # 显示新命令
+            if [ -f /tmp/cmd_monitor.last_cmd ]; then
+                cat /tmp/cmd_monitor.last_cmd
+                rm -f /tmp/cmd_monitor.last_cmd
+            fi
+        done
+        ;;
+        
+    background)
+        if ! acquire_lock; then
+            echo "监控已经在运行中"
+            exit 1
+        fi
+        
+        # 只启动后台，不显示前台
+        echo "启动纯后台监控模式..."
+        
+        # 设置实时history
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "PROMPT_COMMAND.*history" "$bashrc" 2>/dev/null; then
+                echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
+            fi
+        done
+        
+        # 启动后台监控
+        (
+            echo "=== 后台监控启动: $(date) ===" >> "$LOG_DIR/monitor.log"
+            declare -A last_sizes
+            
+            # 初始化文件大小
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+            done
+            
+            while true; do
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
+                    [ -f "$history_file" ] || continue
+                    
+                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    last_size=${last_sizes["$user"]:-0}
+                    
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                            case "$new_cmd" in
+                                ls|cd|pwd|ll|history|exit|clear|to|"."|"..")
+                                    continue
+                                    ;;
+                                *)
+                                    client_ip=$(get_client_ip)
+                                    location=$(get_ip_location "$client_ip")
+                                    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源IP:$client_ip | 位置:$location"
+                                    echo "$log_entry" >> "$LOG_DIR/monitor.log"
+                                    ;;
+                            esac
+                        fi
+                        last_sizes["$user"]=$current_size
+                    fi
+                done
+                sleep 2
+            done
+        ) &
+        
+        echo $! > "$PID_FILE"
+        release_lock
+        
+        echo "✅ 纯后台监控已启动 (PID: $!)"
+        echo "📝 日志文件: $LOG_DIR/monitor.log"
+        echo "🔍 查看实时日志: tail -f $LOG_DIR/monitor.log"
+        ;;
+        
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                kill "$pid" 2>/dev/null
+                rm -f "$PID_FILE"
+                rm -f "$LOCK_FILE"
+                rm -f /tmp/cmd_monitor.last_cmd
+                echo "✅ 监控已停止 (PID: $pid)"
+            else
+                rm -f "$PID_FILE"
+                rm -f "$LOCK_FILE"
+                echo "⚠️  监控进程不存在，已清理"
+            fi
+        else
+            echo "ℹ️  监控未运行"
+        fi
+        ;;
+        
+    status)
+        if is_running; then
+            pid=$(cat "$PID_FILE")
+            echo "✅ 监控运行中 (PID: $pid)"
+            echo "📝 日志文件: $LOG_DIR/monitor.log"
+            echo "📊 日志行数: $(wc -l < "$LOG_DIR/monitor.log" 2>/dev/null || echo 0)"
+        else
+            echo "❌ 监控未运行"
+        fi
+        ;;
+        
+    install)
+        # 创建日志目录
+        mkdir -p "$LOG_DIR"
+        
+        # 设置开机自启动（使用both模式）
+        echo "🔧 设置开机自启动..."
+        (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
+        
+        # 设置to命令别名
+        echo "🔧 设置命令别名..."
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "alias to=" "$bashrc" 2>/dev/null; then
+                echo "alias to='$SCRIPT_PATH to'" >> "$bashrc"
+                echo "✅ 已为 $user_dir 设置别名"
+            fi
+        done
+        
+        echo ""
+        echo "🎉 安装完成!"
+        echo "========================"
+        echo "立即使用:"
+        echo "  to              - 启动后台+前台显示模式"
+        echo "  $SCRIPT_PATH both       - 后台+前台显示模式"
+        echo "  $SCRIPT_PATH background - 纯后台模式"
+        echo "  $SCRIPT_PATH display    - 仅前台显示"
+        echo "  $SCRIPT_PATH stop       - 停止监控"
+        echo "  $SCRIPT_PATH status     - 查看状态"
+        echo ""
+        echo "请运行: source ~/.bashrc"
+        ;;
+        
+    logs)
+        if [ -f "$LOG_DIR/monitor.log" ]; then
+            tail -20 "$LOG_DIR/monitor.log"
+        else
+            echo "日志文件不存在: $LOG_DIR/monitor.log"
+        fi
+        ;;
+        
+    *)
+        echo "命令监控系统 (增强版)"
+        echo "========================"
+        echo "使用方法: $0 {both|background|display|stop|status|install|logs|to}"
+        echo ""
+        echo "模式说明:"
+        echo "  both       - 后台监控+前台实时显示"
+        echo "  background - 纯后台监控模式"
+        echo "  display    - 仅前台显示（后台需运行）"
+        echo "  to         - 智能切换模式"
+        echo ""
+        echo "安装后直接使用 'to' 命令"
+        ;;
+esac
 EOF
 
-chmod +x /tmp/fix_autostart.sh
-/tmp/fix_autostart.sh
+chmod +x /root/monitor/cmd_monitor_fixed.sh
+
+# 更新别名指向新脚本
+sed -i 's|alias to=.*|alias to="/root/monitor/cmd_monitor_fixed.sh to"|' ~/.bashrc
+
+# 更新crontab指向新脚本
+(crontab -l 2>/dev/null | grep -v "cmd_monitor" | grep -v "monitor") | crontab -
+(crontab -l 2>/dev/null; echo "@reboot /bin/bash /root/monitor/cmd_monitor_fixed.sh background >/dev/null 2>&1") | crontab -
+
+# 重新加载配置
+source ~/.bashrc
+
+echo "修复完成！现在测试新版本："
+echo "to  # 启动后台+前台显示模式"
