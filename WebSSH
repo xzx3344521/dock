@@ -1,22 +1,13 @@
-#!/bin/bash
-
-# 快速安装脚本
-mkdir -p intellissh/data
-cd intellissh
-
-cat > docker-compose.yml << 'EOF'
-version: '3'
-
+cat > /boot/1.YAML << 'EOF'
 services:
   intellissh:
     image: clusterzx/intellissh:latest
     container_name: intellissh
     ports:
-      - 8080:3000
+      - "8080:3000"
     volumes:
-      - ./data:/app/server/data
+      - ./intellissh-data:/app/server/data
     restart: always
 EOF
 
-docker-compose up -d
-echo "IntelliSSH 已启动，访问 http://localhost:8080"
+mkdir -p ./intellissh-data && docker compose -f /boot/1.YAML up -d
