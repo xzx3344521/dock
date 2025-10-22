@@ -1,83 +1,73 @@
-# 创建最简单的监控脚本
-cat > /usr/local/bin/monitor << 'EOF'
+# 创建最简单的监控系统
+cat > /usr/local/bin/mt << 'EOF'
 #!/bin/bash
 
-LOG_FILE="/root/command_logs/monitor.log"
-PID_FILE="/tmp/monitor.pid"
+LOG="/root/command_logs/monitor.log"
+PID="/tmp/monitor.pid"
 
 case "$1" in
     start)
-        # 设置实时history
         echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> ~/.bashrc
         source ~/.bashrc
         
-        # 启动监控进程
         (
             mkdir -p /root/command_logs
-            declare -A sizes
+            declare -A size
+            for u in /home/* /root; do
+                [ -d "$u" ] && h="$u/.bash_history" && [ -f "$h" ] && size["$(basename "$u")"]=$(stat -c%s "$h" 2>/dev/null || echo 0)
+            done
             
             while true; do
-                for user_dir in /home/* /root; do
-                    [ -d "$user_dir" ] || continue
-                    user=$(basename "$user_dir")
-                    history_file="$user_dir/.bash_history"
-                    [ -f "$history_file" ] || continue
+                for u in /home/* /root; do
+                    [ -d "$u" ] || continue
+                    user=$(basename "$u")
+                    hfile="$u/.bash_history"
+                    [ -f "$hfile" ] || continue
                     
-                    current=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    last=${sizes["$user"]:-0}
+                    cur=$(stat -c%s "$hfile" 2>/dev/null || echo 0)
+                    last=${size["$user"]:-0}
                     
-                    if [ "$current" -gt "$last" ]; then
-                        cmd=$(tail -n 1 "$history_file" 2>/dev/null)
+                    if [ "$cur" -gt "$last" ]; then
+                        cmd=$(tail -n 1 "$hfile" 2>/dev/null)
                         if [ -n "$cmd" ] && [ ${#cmd} -gt 1 ]; then
                             case "$cmd" in
-                                ls|cd|pwd|ll|history|exit|clear|"."|"..") continue ;;
+                                ls|cd|pwd|ll|history|exit|clear|mt|".") continue ;;
                                 *)
                                     ip="unknown"
                                     [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 用户:$user | 命令:$cmd | 来源:$ip" >> "$LOG_FILE"
+                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $user: $cmd (from: $ip)" >> "$LOG"
                                     ;;
                             esac
                         fi
-                        sizes["$user"]=$current
+                        size["$user"]=$cur
                     fi
                 done
                 sleep 2
             done
         ) &
-        echo $! > "$PID_FILE"
+        echo $! > "$PID"
         echo "监控已启动"
         ;;
-        
     stop)
-        [ -f "$PID_FILE" ] && kill $(cat "$PID_FILE") 2>/dev/null
-        rm -f "$PID_FILE"
+        [ -f "$PID" ] && kill $(cat "$PID") 2>/dev/null
+        rm -f "$PID"
         echo "监控已停止"
         ;;
-        
     view)
-        if [ -f "$LOG_FILE" ]; then
-            tail -f "$LOG_FILE"
-        else
-            echo "暂无日志"
-        fi
+        [ -f "$LOG" ] && tail -f "$LOG" || echo "无日志"
         ;;
-        
     *)
-        echo "使用方法:"
-        echo "  monitor start  # 启动监控"
-        echo "  monitor stop   # 停止监控" 
-        echo "  monitor view   # 查看日志"
+        echo "用法: mt [start|stop|view]"
         ;;
 esac
 EOF
 
-chmod +x /usr/local/bin/monitor
+chmod +x /usr/local/bin/mt
 
 # 设置开机启动
-(crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/monitor start >/dev/null 2>&1") | crontab -
+(crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/mt start >/dev/null 2>&1") | crontab -
 
-# 启动监控
-monitor start
+# 启动
+mt start
 
-echo "简化版安装完成!"
-echo "使用: monitor view  查看实时日志"
+echo "安装完成! 使用 'mt view' 查看日志"
