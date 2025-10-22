@@ -1,22 +1,52 @@
-# 创建独立安装脚本
-cat > /tmp/standalone_install.sh << 'EOF'
 #!/bin/bash
 
-INSTALL_DIR="/root/安装"
+# 命令监控系统安装脚本
+# 功能：监控系统所有用户的命令执行并记录
+
+INSTALL_DIR="/root/install"
 SCRIPT_NAME="cmd_monitor.sh" 
 SCRIPT_PATH="$INSTALL_DIR/$SCRIPT_NAME"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
-# 创建安装目录
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$LOG_DIR"
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 打印颜色信息
+info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# 检查root权限
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        error "请使用root权限运行此脚本"
+        exit 1
+    fi
+}
+
+# 创建必要的目录
+create_directories() {
+    info "创建安装目录..."
+    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$LOG_DIR"
+    chmod 755 "$INSTALL_DIR"
+    chmod 755 "$LOG_DIR"
+}
 
 # 创建监控脚本
-cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
+create_monitor_script() {
+    info "创建监控脚本..."
+    
+    cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
 #!/bin/bash
 
-INSTALL_DIR="/root/安装"
+INSTALL_DIR="/root/install"
 SCRIPT_PATH="$INSTALL_DIR/cmd_monitor.sh"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
@@ -50,14 +80,27 @@ case "${1:-}" in
             [ -d "$user_dir" ] || continue
             bashrc="$user_dir/.bashrc"
             [ -f "$bashrc" ] || continue
-            grep -q "PROMPT_COMMAND" "$bashrc" || echo "export PROMPT_COMMAND='history -a; history -c; history -r'" >> "$bashrc"
+            if ! grep -q "PROMPT_COMMAND.*history.*a.*c.*r" "$bashrc" 2>/dev/null; then
+                echo "export PROMPT_COMMAND='history -a; history -c; history -r'" >> "$bashrc"
+                # 重新加载bashrc
+                [ -n "$BASH_VERSION" ] && source "$bashrc" 2>/dev/null
+            fi
         done
         
         # 后台启动
         (
-            echo "后台监控启动于: $(date)" >> "$LOG_DIR/background.log"
+            echo "=== 后台监控启动于: $(date) ===" >> "$LOG_DIR/background.log"
+            echo "监控用户: $(ls /home | tr '\n' ' ') root" >> "$LOG_DIR/background.log"
             
             declare -A last_sizes
+            # 初始化文件大小
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+            done
+            
             while true; do
                 for user_dir in /home/* /root; do
                     [ -d "$user_dir" ] || continue
@@ -69,39 +112,42 @@ case "${1:-}" in
                     last_size=${last_sizes["$user"]:-0}
                     
                     if [ "$current_size" -gt "$last_size" ]; then
-                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO)$ ]]; then
+                        new_cmd=$(tail -c $((current_size - last_size)) "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//' | tail -n1)
+                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO|\.\/|sh |bash ) ]]; then
                             client_ip=$(get_client_ip)
                             timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                            echo "[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip" >> "$LOG_DIR/background.log"
+                            log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
+                            echo "$log_entry" >> "$LOG_DIR/background.log"
+                            echo "$log_entry"  # 同时输出到控制台
                         fi
                         last_sizes["$user"]=$current_size
                     fi
                 done
-                sleep 1
+                sleep 2
             done
         ) &
         
         echo $! > "$PID_FILE"
         echo "后台监控已启动 (PID: $!)"
-        echo "日志: $LOG_DIR/background.log"
+        echo "日志文件: $LOG_DIR/background.log"
         ;;
         
     foreground)
-        echo "前台监控模式 - 输入 'to' 切换到后台"
-        echo "按 Ctrl+C 停止"
+        echo "前台监控模式启动..."
+        echo "输入 'to' 切换到后台模式"
+        echo "按 Ctrl+C 停止监控"
+        echo "================================"
         
         declare -A last_sizes
+        # 初始化文件大小
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            user=$(basename "$user_dir")
+            history_file="$user_dir/.bash_history"
+            [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+        done
+        
         while true; do
-            # 检查to命令
-            if read -t 0.1 -n 2 input 2>/dev/null; then
-                if [ "$input" = "to" ] || [ "$input" = "TO" ]; then
-                    echo "切换到后台模式..."
-                    "$SCRIPT_PATH" background
-                    exit 0
-                fi
-            fi
-            
             # 监控命令
             for user_dir in /home/* /root; do
                 [ -d "$user_dir" ] || continue
@@ -113,8 +159,8 @@ case "${1:-}" in
                 last_size=${last_sizes["$user"]:-0}
                 
                 if [ "$current_size" -gt "$last_size" ]; then
-                    new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                    if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO)$ ]]; then
+                    new_cmd=$(tail -c $((current_size - last_size)) "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//' | tail -n1)
+                    if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ] && [[ ! "$new_cmd" =~ ^(ls|cd|pwd|ll|history|exit|clear|to|TO|\.\/|sh |bash ) ]]; then
                         client_ip=$(get_client_ip)
                         timestamp=$(date '+%Y-%m-%d %H:%M:%S')
                         echo "[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
@@ -122,15 +168,36 @@ case "${1:-}" in
                     last_sizes["$user"]=$current_size
                 fi
             done
-            sleep 1
+            sleep 2
         done
         ;;
         
     stop)
         if [ -f "$PID_FILE" ]; then
-            kill $(cat "$PID_FILE") 2>/dev/null
-            rm -f "$PID_FILE"
-            echo "监控已停止"
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                kill "$pid" 2>/dev/null
+                rm -f "$PID_FILE"
+                echo "监控已停止 (PID: $pid)"
+            else
+                rm -f "$PID_FILE"
+                echo "监控进程不存在，已清理PID文件"
+            fi
+        else
+            echo "监控未运行"
+        fi
+        ;;
+        
+    status)
+        if [ -f "$PID_FILE" ]; then
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                echo "监控运行中 (PID: $pid)"
+                echo "日志文件: $LOG_DIR/background.log"
+            else
+                echo "PID文件存在但进程不存在"
+                rm -f "$PID_FILE"
+            fi
         else
             echo "监控未运行"
         fi
@@ -138,34 +205,88 @@ case "${1:-}" in
         
     install)
         # 设置开机自启动
+        info "设置开机自启动..."
         (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
         
         # 设置to命令别名
-        if ! grep -q "alias to=" ~/.bashrc; then
-            echo "alias to='$SCRIPT_PATH to'" >> ~/.bashrc
-        fi
+        info "设置命令别名..."
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "alias to=" "$bashrc" 2>/dev/null; then
+                echo "alias to='$SCRIPT_PATH to'" >> "$bashrc"
+                echo "已为 $user_dir 设置别名"
+            fi
+        done
         
-        echo "安装完成!"
-        echo "立即使用: $SCRIPT_PATH to"
-        echo "或重新登录后使用: to"
+        success "安装完成!"
+        echo "使用方法:"
+        echo "  to          - 切换前后台模式"
+        echo "  $SCRIPT_PATH foreground - 前台模式"
+        echo "  $SCRIPT_PATH background - 后台模式"
+        echo "  $SCRIPT_PATH stop       - 停止监控"
+        echo "  $SCRIPT_PATH status     - 查看状态"
+        ;;
+        
+    uninstall)
+        "$SCRIPT_PATH" stop
+        info "清理文件..."
+        rm -f "$SCRIPT_PATH"
+        rm -rf "$INSTALL_DIR"
+        # 清理crontab
+        crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" | crontab -
+        # 清理别名
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] && sed -i "/alias to=.*cmd_monitor/d" "$bashrc"
+        done
+        success "卸载完成"
         ;;
         
     *)
-        echo "使用方法: $0 {foreground|background|stop|install|to}"
+        echo "命令监控系统 v1.0"
+        echo "使用方法: $0 {foreground|background|stop|status|install|uninstall|to}"
+        echo ""
+        echo "示例:"
+        echo "  $0 install    # 安装并配置"
+        echo "  $0 foreground # 前台监控模式"
+        echo "  $0 background # 后台监控模式"
+        echo "  to            # 切换前后台模式"
+        echo "  $0 stop       # 停止监控"
+        echo "  $0 status     # 查看状态"
+        echo "  $0 uninstall  # 卸载"
         ;;
 esac
 SCRIPT_EOF
 
-chmod +x "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    success "监控脚本创建完成: $SCRIPT_PATH"
+}
 
 # 执行安装
-echo "执行安装配置..."
-"$SCRIPT_PATH" install
+main() {
+    echo "=========================================="
+    echo "        命令监控系统安装程序"
+    echo "=========================================="
+    
+    check_root
+    create_directories
+    create_monitor_script
+    
+    info "执行安装配置..."
+    "$SCRIPT_PATH" install
+    
+    echo ""
+    success "安装完成!"
+    echo "=========================================="
+    echo "脚本位置: $SCRIPT_PATH"
+    echo "日志目录: $LOG_DIR"
+    echo "立即测试: $SCRIPT_PATH foreground"
+    echo "或使用: to 命令切换模式"
+    echo "=========================================="
+}
 
-echo "安装完成!"
-echo "脚本位置: $SCRIPT_PATH"
-echo "立即测试: $SCRIPT_PATH to"
-EOF
-
-# 执行独立安装
-bash /tmp/standalone_install.sh
+# 执行主函数
+main "$@"
