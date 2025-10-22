@@ -1,73 +1,254 @@
-# 创建最简单的监控系统
-cat > /usr/local/bin/mt << 'EOF'
+# 创建统一的监控系统
+cat > /usr/local/bin/mon << 'EOF'
 #!/bin/bash
 
-LOG="/root/command_logs/monitor.log"
-PID="/tmp/monitor.pid"
+LOG_FILE="/root/command_logs/monitor.log"
+PID_FILE="/tmp/monitor.pid"
+LOCK_FILE="/tmp/monitor.lock"
+
+# 获取客户端IP
+get_client_ip() {
+    local ip="unknown"
+    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
+    [ "$ip" = "unknown" ] && [ -n "$SSH_CONNECTION" ] && ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    echo "$ip"
+}
+
+# 检查是否运行中
+is_running() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE" 2>/dev/null)
+        if ps -p "$pid" >/dev/null 2>&1; then
+            return 0
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+    return 1
+}
+
+# 获取文件锁防止重复启动
+get_lock() {
+    exec 200>"$LOCK_FILE"
+    flock -n 200 && return 0
+    return 1
+}
+
+release_lock() {
+    flock -u 200
+    rm -f "$LOCK_FILE"
+}
+
+# to命令处理
+if [ "$1" = "to" ]; then
+    if is_running; then
+        echo "🔍 切换到前台显示模式..."
+        echo "💡 按 Ctrl+C 返回后台模式"
+        echo "================================"
+        
+        if [ -f "$LOG_FILE" ]; then
+            echo "最近记录:"
+            tail -5 "$LOG_FILE"
+            echo "------------------------"
+            echo "开始实时显示..."
+            tail -f "$LOG_FILE"
+        else
+            echo "暂无日志记录"
+        fi
+    else
+        echo "🚀 启动监控系统..."
+        exec "$0" start
+    fi
+    exit 0
+fi
 
 case "$1" in
-    start)
-        echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> ~/.bashrc
-        source ~/.bashrc
+    start|background)
+        if ! get_lock; then
+            echo "❌ 监控已经在运行中"
+            exit 1
+        fi
         
+        if is_running; then
+            echo "✅ 监控已在运行中 (PID: $(cat "$PID_FILE"))"
+            release_lock
+            exit 0
+        fi
+        
+        echo "🔧 启动后台监控..."
+        
+        # 设置实时history（只设置一次）
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "PROMPT_COMMAND.*history.*a.*c.*r" "$bashrc" 2>/dev/null; then
+                echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
+            fi
+        done
+        
+        # 创建日志目录
+        mkdir -p "/root/command_logs"
+        
+        # 启动单一监控进程
         (
-            mkdir -p /root/command_logs
-            declare -A size
-            for u in /home/* /root; do
-                [ -d "$u" ] && h="$u/.bash_history" && [ -f "$h" ] && size["$(basename "$u")"]=$(stat -c%s "$h" 2>/dev/null || echo 0)
+            echo "=== 监控系统启动: $(date) ===" >> "$LOG_FILE"
+            declare -A file_sizes
+            
+            # 初始化文件大小
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] && file_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
             done
             
+            # 主监控循环
             while true; do
-                for u in /home/* /root; do
-                    [ -d "$u" ] || continue
-                    user=$(basename "$u")
-                    hfile="$u/.bash_history"
-                    [ -f "$hfile" ] || continue
+                for user_dir in /home/* /root; do
+                    [ -d "$user_dir" ] || continue
+                    user=$(basename "$user_dir")
+                    history_file="$user_dir/.bash_history"
+                    [ -f "$history_file" ] || continue
                     
-                    cur=$(stat -c%s "$hfile" 2>/dev/null || echo 0)
-                    last=${size["$user"]:-0}
+                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+                    last_size=${file_sizes["$user"]:-0}
                     
-                    if [ "$cur" -gt "$last" ]; then
-                        cmd=$(tail -n 1 "$hfile" 2>/dev/null)
-                        if [ -n "$cmd" ] && [ ${#cmd} -gt 1 ]; then
-                            case "$cmd" in
-                                ls|cd|pwd|ll|history|exit|clear|mt|".") continue ;;
+                    if [ "$current_size" -gt "$last_size" ]; then
+                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                            # 过滤简单命令
+                            case "$new_cmd" in
+                                ls|cd|pwd|ll|history|exit|clear|to|mon|"."|"..")
+                                    continue
+                                    ;;
                                 *)
-                                    ip="unknown"
-                                    [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
-                                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $user: $cmd (from: $ip)" >> "$LOG"
+                                    client_ip=$(get_client_ip)
+                                    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
+                                    echo "$log_entry" >> "$LOG_FILE"
                                     ;;
                             esac
                         fi
-                        size["$user"]=$cur
+                        file_sizes["$user"]=$current_size
                     fi
                 done
                 sleep 2
             done
         ) &
-        echo $! > "$PID"
-        echo "监控已启动"
+        
+        monitor_pid=$!
+        echo $monitor_pid > "$PID_FILE"
+        release_lock
+        
+        echo "✅ 后台监控已启动 (PID: $monitor_pid)"
+        echo "📝 日志文件: $LOG_FILE"
+        echo "💡 使用 'mon to' 查看实时监控"
         ;;
+        
     stop)
-        [ -f "$PID" ] && kill $(cat "$PID") 2>/dev/null
-        rm -f "$PID"
-        echo "监控已停止"
+        if [ -f "$PID_FILE" ]; then
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                kill "$pid" 2>/dev/null
+                rm -f "$PID_FILE"
+                rm -f "$LOCK_FILE"
+                echo "✅ 监控已停止 (PID: $pid)"
+            else
+                rm -f "$PID_FILE"
+                rm -f "$LOCK_FILE"
+                echo "⚠️ 监控进程不存在，已清理"
+            fi
+        else
+            echo "ℹ️ 监控未运行"
+        fi
         ;;
-    view)
-        [ -f "$LOG" ] && tail -f "$LOG" || echo "无日志"
+        
+    status)
+        if is_running; then
+            pid=$(cat "$PID_FILE")
+            echo "✅ 监控运行中 (PID: $pid)"
+            echo "📝 日志文件: $LOG_FILE"
+            echo "📊 日志行数: $(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
+        else
+            echo "❌ 监控未运行"
+        fi
         ;;
+        
+    logs)
+        if [ -f "$LOG_FILE" ]; then
+            if [ "$2" = "-f" ]; then
+                tail -f "$LOG_FILE"
+            else
+                tail -20 "$LOG_FILE"
+            fi
+        else
+            echo "日志文件不存在"
+        fi
+        ;;
+        
+    install)
+        # 停止可能运行的旧监控
+        "$0" stop
+        
+        # 设置开机自启动
+        echo "🔧 设置开机自启动..."
+        (crontab -l 2>/dev/null | grep -v "$0"; echo "@reboot $0 start >/dev/null 2>&1") | crontab -
+        
+        # 设置命令别名
+        echo "🔧 设置命令别名..."
+        sed -i '/alias to=/d' ~/.bashrc
+        echo "alias to='$0 to'" >> ~/.bashrc
+        
+        # 重新加载配置
+        source ~/.bashrc
+        
+        # 启动监控
+        "$0" start
+        
+        echo ""
+        echo "🎉 安装完成!"
+        echo "========================"
+        echo "立即使用:"
+        echo "  to          # 启动/查看监控"
+        echo "  mon status  # 查看状态"
+        echo "  mon stop    # 停止监控"
+        echo "  mon logs    # 查看日志"
+        ;;
+        
+    uninstall)
+        "$0" stop
+        rm -f "$0"
+        # 清理crontab
+        crontab -l 2>/dev/null | grep -v "$0" | crontab -
+        # 清理别名
+        sed -i '/alias to=/d' ~/.bashrc
+        echo "✅ 已卸载监控系统"
+        ;;
+        
     *)
-        echo "用法: mt [start|stop|view]"
+        echo "命令监控系统"
+        echo "========================"
+        echo "使用方法:"
+        echo "  to              # 启动/查看监控"
+        echo "  mon start       # 启动后台监控"
+        echo "  mon stop        # 停止监控"
+        echo "  mon status      # 查看状态"
+        echo "  mon logs        # 查看日志"
+        echo "  mon logs -f     # 实时查看日志"
+        echo "  mon install     # 安装配置"
+        echo "  mon uninstall   # 卸载"
         ;;
 esac
 EOF
 
-chmod +x /usr/local/bin/mt
+# 给执行权限
+chmod +x /usr/local/bin/mon
 
-# 设置开机启动
-(crontab -l 2>/dev/null; echo "@reboot /usr/local/bin/mt start >/dev/null 2>&1") | crontab -
+# 安装并启动
+echo "安装统一监控系统..."
+mon install
 
-# 启动
-mt start
-
-echo "安装完成! 使用 'mt view' 查看日志"
+# 测试
+echo "测试监控系统..."
+to
