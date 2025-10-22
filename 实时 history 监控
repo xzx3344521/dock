@@ -1,15 +1,14 @@
-# 重新下载修复版监控脚本
-curl -sSL -o /root/install/cmd_monitor.sh https://raw.githubusercontent.com/xzx3344521/dock/main/cmd_monitor_fixed.sh
-
-# 如果没有修复版，使用这个替代方案
-cat > /root/install/cmd_monitor_fixed.sh << 'EOF'
+# 创建安装目录和脚本
+mkdir -p /root/monitor
+cat > /root/monitor/cmd_monitor.sh << 'EOF'
 #!/bin/bash
 
-INSTALL_DIR="/root/install"
-SCRIPT_PATH="$INSTALL_DIR/cmd_monitor_fixed.sh"
+INSTALL_DIR="/root/monitor"
+SCRIPT_PATH="$INSTALL_DIR/cmd_monitor.sh"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
+# 获取客户端IP
 get_client_ip() {
     local ip="unknown"
     [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
@@ -17,6 +16,7 @@ get_client_ip() {
     echo "$ip"
 }
 
+# 检查to命令
 if [ "$1" = "to" ]; then
     if [ -f "$PID_FILE" ] && ps -p $(cat "$PID_FILE") >/dev/null 2>&1; then
         echo "切换到前台模式..."
@@ -39,6 +39,7 @@ case "$1" in
             [ -f "$bashrc" ] || continue
             if ! grep -q "PROMPT_COMMAND.*history" "$bashrc" 2>/dev/null; then
                 echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
+                echo "已为 $user_dir 设置实时history"
             fi
         done
         
@@ -46,6 +47,14 @@ case "$1" in
         (
             echo "=== 后台监控启动: $(date) ===" >> "$LOG_DIR/monitor.log"
             declare -A last_sizes
+            
+            # 初始化文件大小
+            for user_dir in /home/* /root; do
+                [ -d "$user_dir" ] || continue
+                user=$(basename "$user_dir")
+                history_file="$user_dir/.bash_history"
+                [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+            done
             
             while true; do
                 for user_dir in /home/* /root; do
@@ -60,6 +69,7 @@ case "$1" in
                     if [ "$current_size" -gt "$last_size" ]; then
                         new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
                         if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                            # 过滤简单命令
                             case "$new_cmd" in
                                 ls|cd|pwd|ll|history|exit|clear|to|"."|"..")
                                     continue
@@ -67,7 +77,8 @@ case "$1" in
                                 *)
                                     client_ip=$(get_client_ip)
                                     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                                    echo "[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip" >> "$LOG_DIR/monitor.log"
+                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源:$client_ip"
+                                    echo "$log_entry" >> "$LOG_DIR/monitor.log"
                                     ;;
                             esac
                         fi
@@ -79,25 +90,34 @@ case "$1" in
         ) &
         
         echo $! > "$PID_FILE"
-        echo "后台监控已启动 (PID: $!)"
-        echo "日志文件: $LOG_DIR/monitor.log"
+        echo "✅ 后台监控已启动 (PID: $!)"
+        echo "📝 日志文件: $LOG_DIR/monitor.log"
         ;;
         
     foreground)
-        echo "前台监控模式 - 输入 'to' 切换到后台"
-        echo "按 Ctrl+C 停止"
+        echo "🔍 前台监控模式启动..."
+        echo "💡 输入 'to' 切换到后台模式"
+        echo "⏹️  按 Ctrl+C 停止监控"
         echo "================================"
         
         # 设置信号处理
-        trap 'echo -e "\n停止监控"; exit 0' INT TERM
+        trap 'echo -e "\n🛑 停止监控"; exit 0' INT TERM
         
         declare -A last_sizes
         
+        # 初始化文件大小
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            user=$(basename "$user_dir")
+            history_file="$user_dir/.bash_history"
+            [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
+        done
+        
         while true; do
-            # 检测to命令输入
+            # 检测to命令输入（非阻塞读取）
             if read -t 0.5 -n 2 input 2>/dev/null; then
                 if [ "$input" = "to" ]; then
-                    echo "切换到后台模式..."
+                    echo "🔄 切换到后台模式..."
                     "$SCRIPT_PATH" background
                     exit 0
                 fi
@@ -116,6 +136,7 @@ case "$1" in
                 if [ "$current_size" -gt "$last_size" ]; then
                     new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
                     if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
+                        # 过滤简单命令
                         case "$new_cmd" in
                             ls|cd|pwd|ll|history|exit|clear|to|"."|"..")
                                 continue
@@ -134,10 +155,110 @@ case "$1" in
         done
         ;;
         
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                kill "$pid" 2>/dev/null
+                rm -f "$PID_FILE"
+                echo "✅ 监控已停止 (PID: $pid)"
+            else
+                rm -f "$PID_FILE"
+                echo "⚠️  监控进程不存在，已清理PID文件"
+            fi
+        else
+            echo "ℹ️  监控未运行"
+        fi
+        ;;
+        
+    status)
+        if [ -f "$PID_FILE" ]; then
+            pid=$(cat "$PID_FILE")
+            if ps -p "$pid" >/dev/null 2>&1; then
+                echo "✅ 监控运行中 (PID: $pid)"
+                echo "📝 日志文件: $LOG_DIR/monitor.log"
+            else
+                echo "❌ PID文件存在但进程不存在"
+                rm -f "$PID_FILE"
+            fi
+        else
+            echo "❌ 监控未运行"
+        fi
+        ;;
+        
+    install)
+        # 创建日志目录
+        mkdir -p "$LOG_DIR"
+        
+        # 设置开机自启动
+        echo "🔧 设置开机自启动..."
+        (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH"; echo "@reboot $SCRIPT_PATH background >/dev/null 2>&1") | crontab -
+        
+        # 设置to命令别名
+        echo "🔧 设置命令别名..."
+        for user_dir in /home/* /root; do
+            [ -d "$user_dir" ] || continue
+            bashrc="$user_dir/.bashrc"
+            [ -f "$bashrc" ] || continue
+            if ! grep -q "alias to=" "$bashrc" 2>/dev/null; then
+                echo "alias to='$SCRIPT_PATH to'" >> "$bashrc"
+                echo "✅ 已为 $user_dir 设置别名"
+            fi
+        done
+        
+        echo ""
+        echo "🎉 安装完成!"
+        echo "========================"
+        echo "立即使用:"
+        echo "  to              - 切换前后台模式"
+        echo "  $SCRIPT_PATH foreground  - 前台模式"
+        echo "  $SCRIPT_PATH background  - 后台模式"
+        echo "  $SCRIPT_PATH stop        - 停止监控"
+        echo "  $SCRIPT_PATH status      - 查看状态"
+        echo ""
+        echo "请运行: source ~/.bashrc"
+        ;;
+        
+    logs)
+        if [ -f "$LOG_DIR/monitor.log" ]; then
+            tail -f "$LOG_DIR/monitor.log"
+        else
+            echo "日志文件不存在: $LOG_DIR/monitor.log"
+        fi
+        ;;
+        
     *)
-        echo "使用方法: $0 {foreground|background|stop|to}"
+        echo "命令监控系统"
+        echo "========================"
+        echo "使用方法: $0 {foreground|background|stop|status|install|logs|to}"
+        echo ""
+        echo "命令说明:"
+        echo "  install    - 安装并配置系统"
+        echo "  foreground - 前台监控模式"
+        echo "  background - 后台监控模式" 
+        echo "  to         - 切换前后台模式"
+        echo "  stop       - 停止监控"
+        echo "  status     - 查看状态"
+        echo "  logs       - 查看实时日志"
+        echo ""
+        echo "安装后直接使用 'to' 命令切换模式"
         ;;
 esac
 EOF
 
-chmod +x /root/install/cmd_monitor_fixed.sh
+# 给脚本执行权限
+chmod +x /root/monitor/cmd_monitor.sh
+
+# 创建日志目录
+mkdir -p /root/command_logs
+
+# 执行安装
+echo "开始安装监控系统..."
+/root/monitor/cmd_monitor.sh install
+
+# 重新加载bash配置
+source ~/.bashrc
+
+echo ""
+echo "✅ 安装完成！"
+echo "💡 现在可以测试: to"
