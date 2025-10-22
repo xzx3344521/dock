@@ -1,27 +1,21 @@
-# 创建完整的修复脚本
-cat > /tmp/fix_alias.sh << 'EOF'
+# 停止所有可能的监控进程
+pkill -f "cmd_monitor" 2>/dev/null
+rm -f /tmp/cmd_monitor.pid
+rm -f /tmp/cmd_monitor.last_cmd
+
+# 创建监控目录
+mkdir -p /root/monitor
+mkdir -p /root/command_logs
+
+# 创建新的监控脚本
+cat > /root/monitor/monitor.sh << 'EOF'
 #!/bin/bash
 
-echo "=== 修复别名设置 ==="
-
-# 检查脚本是否存在
-SCRIPT_PATH="/root/monitor/cmd_monitor_fixed.sh"
-if [ ! -f "$SCRIPT_PATH" ]; then
-    echo "❌ 监控脚本不存在，重新创建..."
-    
-    # 创建监控目录
-    mkdir -p /root/monitor
-    
-    # 重新创建监控脚本
-    cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
-#!/bin/bash
-
-INSTALL_DIR="/root/monitor"
-SCRIPT_PATH="$INSTALL_DIR/cmd_monitor_fixed.sh"
+SCRIPT_PATH="/root/monitor/monitor.sh"
 LOG_DIR="/root/command_logs"
 PID_FILE="/tmp/cmd_monitor.pid"
 
-# 获取客户端IP和地理位置
+# 获取客户端IP
 get_client_ip() {
     local ip="unknown"
     [ -n "$SSH_CLIENT" ] && ip=$(echo "$SSH_CLIENT" | awk '{print $1}')
@@ -29,22 +23,7 @@ get_client_ip() {
     echo "$ip"
 }
 
-get_ip_location() {
-    local ip="$1"
-    [ "$ip" = "unknown" ] && echo "unknown" && return
-    [ "$ip" = "127.0.0.1" ] && echo "localhost" && return
-    
-    # 使用简单的地理位置查询
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        # 这里可以添加更复杂的地理位置查询
-        # 现在先用简单的方式显示IP段
-        echo "$(echo $ip | cut -d. -f1-2).x.x"
-    else
-        echo "unknown"
-    fi
-}
-
-# 检查是否已经运行
+# 检查是否运行中
 is_running() {
     if [ -f "$PID_FILE" ]; then
         local pid=$(cat "$PID_FILE" 2>/dev/null)
@@ -57,104 +36,16 @@ is_running() {
     return 1
 }
 
-# 检查to命令
+# to命令处理
 if [ "$1" = "to" ]; then
     if is_running; then
-        echo "切换到前台显示模式..."
-        exec "$SCRIPT_PATH" display
-    else
-        echo "启动后台监控+前台显示模式..."
-        exec "$SCRIPT_PATH" both
-    fi
-    exit 0
-fi
-
-case "$1" in
-    both|start)
-        if is_running; then
-            echo "监控已经在运行中"
-            exec "$SCRIPT_PATH" display
-            exit 0
-        fi
-        
-        echo "启动后台监控+前台显示模式..."
-        
-        # 设置实时history
-        for user_dir in /home/* /root; do
-            [ -d "$user_dir" ] || continue
-            bashrc="$user_dir/.bashrc"
-            [ -f "$bashrc" ] || continue
-            if ! grep -q "PROMPT_COMMAND.*history" "$bashrc" 2>/dev/null; then
-                echo 'export PROMPT_COMMAND="history -a; history -c; history -r"' >> "$bashrc"
-            fi
-        done
-        
-        # 启动后台监控
-        (
-            mkdir -p "$LOG_DIR"
-            echo "=== 后台监控启动: $(date) ===" >> "$LOG_DIR/monitor.log"
-            declare -A last_sizes
-            
-            # 初始化文件大小
-            for user_dir in /home/* /root; do
-                [ -d "$user_dir" ] || continue
-                user=$(basename "$user_dir")
-                history_file="$user_dir/.bash_history"
-                [ -f "$history_file" ] && last_sizes["$user"]=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-            done
-            
-            while true; do
-                for user_dir in /home/* /root; do
-                    [ -d "$user_dir" ] || continue
-                    user=$(basename "$user_dir")
-                    history_file="$user_dir/.bash_history"
-                    [ -f "$history_file" ] || continue
-                    
-                    current_size=$(stat -c%s "$history_file" 2>/dev/null || echo 0)
-                    last_size=${last_sizes["$user"]:-0}
-                    
-                    if [ "$current_size" -gt "$last_size" ]; then
-                        new_cmd=$(tail -n 1 "$history_file" 2>/dev/null | sed 's/^[ \t]*//;s/[ \t]*$//')
-                        if [ -n "$new_cmd" ] && [ ${#new_cmd} -gt 1 ]; then
-                            # 过滤简单命令
-                            case "$new_cmd" in
-                                ls|cd|pwd|ll|history|exit|clear|to|"."|"..")
-                                    continue
-                                    ;;
-                                *)
-                                    client_ip=$(get_client_ip)
-                                    location=$(get_ip_location "$client_ip")
-                                    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                                    log_entry="[$timestamp] 用户:$user | 命令:$new_cmd | 来源IP:$client_ip | 位置:$location"
-                                    echo "$log_entry" >> "$LOG_DIR/monitor.log"
-                                    # 同时输出到前台
-                                    echo "$log_entry" > /tmp/cmd_monitor.last_cmd
-                                    ;;
-                            esac
-                        fi
-                        last_sizes["$user"]=$current_size
-                    fi
-                done
-                sleep 2
-            done
-        ) &
-        
-        echo $! > "$PID_FILE"
-        echo "✅ 后台监控已启动 (PID: $!)"
-        
-        # 启动前台显示
-        echo "🔍 启动前台显示..."
-        exec "$SCRIPT_PATH" display
-        ;;
-        
-    display|foreground)
-        echo "🔍 前台显示模式启动..."
-        echo "💡 后台监控持续运行中"
-        echo "💡 输入 'to' 退出显示（后台继续运行）"
-        echo "⏹️  按 Ctrl+C 停止显示"
+        echo "🔄 切换到前台显示模式..."
+        # 前台显示模式
+        echo "🔍 实时监控显示中..."
+        echo "💡 输入 'exit' 返回后台模式"
         echo "================================"
         
-        # 显示最后几条记录
+        # 显示最近记录
         if [ -f "$LOG_DIR/monitor.log" ]; then
             echo "最近记录:"
             tail -5 "$LOG_DIR/monitor.log" | while read line; do
@@ -163,89 +54,7 @@ case "$1" in
             echo "------------------------"
         fi
         
-        # 设置信号处理
-        trap 'echo -e "\n🛑 停止前台显示（后台监控继续运行）"; exit 0' INT TERM
-        
         # 实时显示新命令
         while true; do
-            # 检测to命令输入
-            if read -t 1 -n 2 input 2>/dev/null; then
-                if [ "$input" = "to" ]; then
-                    echo "🔄 退出前台显示..."
-                    echo "✅ 后台监控继续运行中"
-                    exit 0
-                fi
-            fi
-            
-            # 显示新命令
-            if [ -f /tmp/cmd_monitor.last_cmd ]; then
-                echo "🆕 $(cat /tmp/cmd_monitor.last_cmd)"
-                rm -f /tmp/cmd_monitor.last_cmd
-            fi
-        done
-        ;;
-        
-    stop)
-        if [ -f "$PID_FILE" ]; then
-            pid=$(cat "$PID_FILE")
-            if ps -p "$pid" >/dev/null 2>&1; then
-                kill "$pid" 2>/dev/null
-                rm -f "$PID_FILE"
-                rm -f /tmp/cmd_monitor.last_cmd
-                echo "✅ 监控已停止 (PID: $pid)"
-            else
-                rm -f "$PID_FILE"
-                echo "⚠️  监控进程不存在，已清理"
-            fi
-        else
-            echo "ℹ️  监控未运行"
-        fi
-        ;;
-        
-    status)
-        if is_running; then
-            pid=$(cat "$PID_FILE")
-            echo "✅ 监控运行中 (PID: $pid)"
-            echo "📝 日志文件: $LOG_DIR/monitor.log"
-        else
-            echo "❌ 监控未运行"
-        fi
-        ;;
-        
-    *)
-        echo "命令监控系统"
-        echo "使用方法: $0 {both|display|stop|status|to}"
-        echo ""
-        echo "示例:"
-        echo "  to        - 启动/切换模式"
-        echo "  $0 both   - 后台监控+前台显示"
-        echo "  $0 display - 仅前台显示"
-        echo "  $0 stop   - 停止监控"
-        ;;
-esac
-SCRIPT_EOF
-
-    chmod +x "$SCRIPT_PATH"
-    echo "✅ 监控脚本已创建: $SCRIPT_PATH"
-fi
-
-# 修复别名
-echo "修复别名设置..."
-# 删除所有旧的to别名
-sed -i '/alias to=/d' ~/.bashrc
-
-# 添加新的别名
-echo 'alias to="/root/monitor/cmd_monitor_fixed.sh to"' >> ~/.bashrc
-
-# 重新加载bash配置
-source ~/.bashrc
-
-echo ""
-echo "✅ 修复完成！"
-echo "测试命令:"
-echo "  to          # 启动监控"
-echo "  或者直接运行: /root/monitor/cmd_monitor_fixed.sh both"
-EOF
-
-chmod +x /tmp/fix_alias.sh
-/tmp/fix_alias.sh
+            # 检查退出命令
+            if read -t 1 -n 4 input 2>/dev
