@@ -1,103 +1,89 @@
 #!/bin/bash
 
-# 设置变量
-SCRIPT_DIR="/boot/scripts"
-COMPOSE_FILE="$SCRIPT_DIR/nginx-proxy-manager.yaml"
-PROJECT_NAME="nginx-proxy-manager"
+# 设置变量，提高可维护性
+DATA_DIR="/data"
+SCRIPT_DIR="/boot/脚本"
+COMPOSE_FILE="$SCRIPT_DIR/ru.yaml"
 
-echo "正在部署 Nginx Proxy Manager..."
-
-# 检查 Docker 是否安装
-if ! command -v docker &> /dev/null; then
-    echo "错误: Docker 未安装，请先安装 Docker"
+# 检查是否以 root 权限运行
+if [ "$EUID" -ne 0 ]; then
+    echo "请使用 sudo 运行此脚本"
     exit 1
 fi
 
-# 检查 Docker Compose 是否可用
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo "错误: Docker Compose 不可用"
-    exit 1
-fi
-
-# 创建目录（使用当前用户权限）
-echo "创建目录..."
+# 创建目录
+echo "创建必要的目录..."
+mkdir -p "$DATA_DIR"
 mkdir -p "$SCRIPT_DIR"
-mkdir -p "$SCRIPT_DIR/data"
-mkdir -p "$SCRIPT_DIR/letsencrypt"
 
-# 设置目录权限
-sudo chown -R $USER:$USER "$SCRIPT_DIR"
-chmod -R 755 "$SCRIPT_DIR"
+# 检查目录是否创建成功
+if [ ! -d "$SCRIPT_DIR" ]; then
+    echo "错误：无法创建目录 $SCRIPT_DIR"
+    exit 1
+fi
 
 # 创建 Docker Compose 配置文件
-echo "创建配置文件..."
+echo "创建 Docker Compose 配置文件..."
 cat > "$COMPOSE_FILE" << 'EOF'
 # Nginx Proxy Manager 配置
-# 访问地址: http://服务器IP:81
-# 默认账号: admin@example.com
-# 默认密码: changeme
-
-version: '3.8'
+# 初始登录信息：
+# 邮箱: admin@example.com
+# 密码: changeme
+# 管理界面: http://服务器IP:81
 
 services:
-  nginx-proxy-manager:
-    image: docker.io/jc21/nginx-proxy-manager:latest
+  app:
+    image: 'docker.io/jc21/nginx-proxy-manager:latest'
     container_name: nginx-proxy-manager
     restart: unless-stopped
     ports:
       - '80:80'    # HTTP 流量
-      - '443:443'  # HTTPS 流量
       - '81:81'    # 管理界面
-    environment:
-      - DISABLE_IPV6=false
+      - '443:443'  # HTTPS 流量
     volumes:
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
-    networks:
-      - npm-network
-
-networks:
-  npm-network:
-    driver: bridge
-
-volumes:
-  data:
-  letsencrypt:
+    environment:
+      - DISABLE_IPV6=false
 EOF
 
-echo "配置文件已创建: $COMPOSE_FILE"
+# 检查文件是否创建成功
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "错误：无法创建配置文件 $COMPOSE_FILE"
+    exit 1
+fi
+
+# 切换到脚本目录
+cd "$SCRIPT_DIR" || exit 1
+
+# 检查 Docker 是否运行
+if ! systemctl is-active --quiet docker; then
+    echo "启动 Docker 服务..."
+    systemctl start docker
+    sleep 5
+fi
 
 # 部署服务
 echo "启动 Nginx Proxy Manager..."
-cd "$SCRIPT_DIR"
+docker compose -p nginx -f "$COMPOSE_FILE" up -d
 
-# 检测使用 docker-compose 还是 docker compose
-if command -v docker-compose &> /dev/null; then
-    COMPOSE_CMD="docker-compose"
-else
-    COMPOSE_CMD="docker compose"
-fi
-
-$COMPOSE_CMD -f "$COMPOSE_FILE" -p "$PROJECT_NAME" up -d
-
-# 检查服务状态
-sleep 5
-if docker ps | grep -q "nginx-proxy-manager"; then
-    echo "✓ Nginx Proxy Manager 启动成功!"
-    echo ""
-    echo "=================== 访问信息 ==================="
+# 检查部署是否成功
+if [ $? -eq 0 ]; then
+    echo "等待服务启动..."
+    sleep 5
+    
+    echo "=================================================="
+    echo "Nginx Proxy Manager 部署完成！"
     echo "管理界面: http://$(hostname -I | awk '{print $1}'):81"
-    echo "默认邮箱: admin@example.com"
-    echo "默认密码: changeme"
-    echo "================================================"
+    echo "初始账号: admin@example.com"
+    echo "初始密码: changeme"
+    echo "=================================================="
     echo ""
-    echo "重要提示:"
+    echo "重要提示："
     echo "1. 首次登录后请立即修改密码"
-    echo "2. 数据存储在: $SCRIPT_DIR/"
-    echo "3. 查看日志: docker logs nginx-proxy-manager"
-    echo "4. 停止服务: cd $SCRIPT_DIR && $COMPOSE_CMD -p $PROJECT_NAME down"
+    echo "2. 确保防火墙已开放端口 80、81、443"
+    echo "3. 数据保存在: $SCRIPT_DIR/data"
 else
-    echo "✗ 服务启动失败，请检查日志"
-    docker logs nginx-proxy-manager 2>/dev/null || echo "无法获取容器日志"
+    echo "错误：容器启动失败"
     exit 1
 fi
