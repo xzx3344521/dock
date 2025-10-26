@@ -63,6 +63,8 @@ if docker ps | grep -q sublinkx; then
     echo "查看日志: docker logs -f sublinkx"
     echo "停止服务: docker compose down"
     echo "重启服务: docker compose restart"
+    echo "初始账号: admin"
+    echo "初始密码:: 123456"
 else
     echo "❌ SublinkX 启动失败，请检查日志: docker logs sublinkx"
     exit 1
