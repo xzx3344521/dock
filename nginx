@@ -11,215 +11,218 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 函数：检查端口是否被占用
-check_port() {
-    local port=$1
-    if netstat -tulpn 2>/dev/null | grep -q ":${port} "; then
-        return 1  # 端口被占用
-    else
-        return 0  # 端口可用
-    fi
-}
-
-# 函数：显示端口占用信息
-show_port_info() {
-    local port=$1
-    echo "端口 $port 被以下进程占用："
-    netstat -tulpn 2>/dev/null | grep ":${port} " || lsof -i :${port} 2>/dev/null
-    echo "----------------------------------------"
-}
-
-# 函数：生成 Docker Compose 配置
-generate_compose_config() {
-    local http_port=$1
-    local admin_port=$2
-    local https_port=$3
+# 函数：彻底清理 Docker 资源
+cleanup_docker() {
+    echo "清理 Docker 资源..."
     
-    cat > "$COMPOSE_FILE" << EOF
-# Nginx Proxy Manager 配置
-# 初始登录信息：
-# 邮箱: admin@example.com
-# 密码: changeme
-# 管理界面: http://服务器IP:${admin_port}
+    # 停止并删除所有相关容器
+    docker stop nginx-proxy-manager 2>/dev/null || true
+    docker rm nginx-proxy-manager 2>/dev/null || true
+    
+    # 删除 Docker Compose 项目
+    docker compose -p nginx down 2>/dev/null || true
+    
+    # 清理网络
+    docker network prune -f
+    
+    # 检查并删除占用端口的僵尸容器
+    echo "检查占用端口的容器..."
+    docker ps -a --format "table {{.Names}}\t{{.Ports}}" | grep -E "(80|81|443)" || echo "未发现明显端口冲突"
+}
 
+# 函数：更准确的端口检查
+check_port_advanced() {
+    local port=$1
+    echo "深度检查端口 $port ..."
+    
+    # 方法1: netstat
+    if netstat -tulpn 2>/dev/null | grep -q ":${port} "; then
+        echo "netstat 发现端口 $port 被占用"
+        netstat -tulpn | grep ":${port} "
+        return 1
+    fi
+    
+    # 方法2: ss
+    if ss -tulpn 2>/dev/null | grep -q ":${port} "; then
+        echo "ss 发现端口 $port 被占用"
+        ss -tulpn | grep ":${port} "
+        return 1
+    fi
+    
+    # 方法3: lsof
+    if lsof -i :${port} 2>/dev/null | grep -q "LISTEN"; then
+        echo "lsof 发现端口 $port 被占用"
+        lsof -i :${port}
+        return 1
+    fi
+    
+    # 方法4: 检查 Docker 容器映射
+    if docker ps --format "table {{.Names}}\t{{.Ports}}" 2>/dev/null | grep -q ":${port}->"; then
+        echo "Docker 容器正在使用端口 $port"
+        docker ps --format "table {{.Names}}\t{{.Ports}}" | grep ":${port}->"
+        return 1
+    fi
+    
+    echo "端口 $port 可用"
+    return 0
+}
+
+# 函数：使用备用端口部署
+deploy_with_alternate_ports() {
+    local http_port="8080"
+    local admin_port="8081"
+    local https_port="8443"
+    
+    echo "使用备用端口部署: HTTP=$http_port, 管理界面=$admin_port, HTTPS=$https_port"
+    
+    # 创建配置
+    cat > "$COMPOSE_FILE" << EOF
+# Nginx Proxy Manager 配置（备用端口）
 services:
   app:
     image: 'docker.io/jc21/nginx-proxy-manager:latest'
     container_name: nginx-proxy-manager
     restart: unless-stopped
     ports:
-      - '${http_port}:80'    # HTTP 流量
-      - '${admin_port}:81'   # 管理界面
-      - '${https_port}:443'  # HTTPS 流量
+      - '${http_port}:80'
+      - '${admin_port}:81'
+      - '${https_port}:443'
     volumes:
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
     environment:
       - DISABLE_IPV6=false
 EOF
+
+    deploy_service $http_port $admin_port $https_port
 }
 
-# 创建目录
+# 函数：部署服务
+deploy_service() {
+    local http_port=$1
+    local admin_port=$2
+    local https_port=$3
+    
+    # 切换到脚本目录
+    cd "$SCRIPT_DIR" || exit 1
+
+    # 检查 Docker 是否运行
+    if ! systemctl is-active --quiet docker; then
+        echo "启动 Docker 服务..."
+        systemctl start docker
+        sleep 5
+    fi
+
+    # 部署服务
+    echo "启动 Nginx Proxy Manager..."
+    docker compose -p nginx -f "$COMPOSE_FILE" up -d
+
+    if [ $? -eq 0 ]; then
+        echo "等待服务启动..."
+        sleep 10
+        
+        SERVER_IP=$(hostname -I | awk '{print $1}')
+        echo "=================================================="
+        echo "✅ Nginx Proxy Manager 部署成功！"
+        echo "管理界面: http://${SERVER_IP}:${admin_port}"
+        echo "HTTP 端口: ${http_port}"
+        echo "HTTPS 端口: ${https_port}"
+        echo "初始账号: admin@example.com"
+        echo "初始密码: changeme"
+        echo "=================================================="
+    else
+        echo "❌ 容器启动失败"
+        echo "检查 Docker 日志：docker logs nginx-proxy-manager"
+        return 1
+    fi
+}
+
+# 主程序
 echo "创建必要的目录..."
 mkdir -p "$DATA_DIR"
 mkdir -p "$SCRIPT_DIR"
 
-# 默认端口配置
-DEFAULT_HTTP_PORT="80"
-DEFAULT_ADMIN_PORT="81"
-DEFAULT_HTTPS_PORT="443"
+# 显示当前状态
+echo "=== 系统状态检查 ==="
+check_port_advanced 80
+check_port_advanced 81
+check_port_advanced 443
 
-# 备用端口配置
-ALTERNATE_HTTP_PORT="8080"
-ALTERNATE_ADMIN_PORT="8081"
-ALTERNATE_HTTPS_PORT="8443"
+echo ""
+echo "=== Docker 状态 ==="
+docker ps -a | grep nginx || echo "未发现 nginx 相关容器"
 
-# 检查默认端口是否可用
-echo "检查端口占用情况..."
+echo ""
+echo "请选择部署方案："
+echo "1) 彻底清理后使用默认端口重试"
+echo "2) 直接使用备用端口 (8080, 8081, 8443) - 推荐"
+echo "3) 手动指定端口"
+echo "4) 退出"
 
-http_port_used=0
-admin_port_used=0
-https_port_used=0
+read -p "请输入选择 (1-4): " choice
 
-check_port $DEFAULT_HTTP_PORT || http_port_used=1
-check_port $DEFAULT_ADMIN_PORT || admin_port_used=1
-check_port $DEFAULT_HTTPS_PORT || https_port_used=1
-
-# 如果有端口被占用，显示信息
-if [ $http_port_used -eq 1 ] || [ $admin_port_used -eq 1 ] || [ $https_port_used -eq 1 ]; then
-    echo "发现端口被占用："
-    [ $http_port_used -eq 1 ] && echo " - 端口 $DEFAULT_HTTP_PORT (HTTP) 被占用" && show_port_info $DEFAULT_HTTP_PORT
-    [ $admin_port_used -eq 1 ] && echo " - 端口 $DEFAULT_ADMIN_PORT (管理界面) 被占用" && show_port_info $DEFAULT_ADMIN_PORT
-    [ $https_port_used -eq 1 ] && echo " - 端口 $DEFAULT_HTTPS_PORT (HTTPS) 被占用" && show_port_info $DEFAULT_HTTPS_PORT
-    
-    echo ""
-    echo "请选择操作："
-    echo "1) 自动使用备用端口 (8080, 8081, 8443)"
-    echo "2) 手动指定端口"
-    echo "3) 停止占用端口的进程后重试"
-    echo "4) 退出脚本"
-    
-    read -p "请输入选择 (1-4): " choice
-    
-    case $choice in
-        1)
-            HTTP_PORT=$ALTERNATE_HTTP_PORT
-            ADMIN_PORT=$ALTERNATE_ADMIN_PORT
-            HTTPS_PORT=$ALTERNATE_HTTPS_PORT
-            echo "使用备用端口: HTTP=$HTTP_PORT, 管理界面=$ADMIN_PORT, HTTPS=$HTTPS_PORT"
-            ;;
-        2)
-            echo "请手动指定端口："
-            read -p "HTTP 端口 (默认 $ALTERNATE_HTTP_PORT): " custom_http
-            read -p "管理界面端口 (默认 $ALTERNATE_ADMIN_PORT): " custom_admin
-            read -p "HTTPS 端口 (默认 $ALTERNATE_HTTPS_PORT): " custom_https
-            
-            HTTP_PORT=${custom_http:-$ALTERNATE_HTTP_PORT}
-            ADMIN_PORT=${custom_admin:-$ALTERNATE_ADMIN_PORT}
-            HTTPS_PORT=${custom_https:-$ALTERNATE_HTTPS_PORT}
-            
-            # 检查手动指定的端口是否可用
-            echo "检查手动指定端口..."
-            check_port $HTTP_PORT && http_ok=1 || http_ok=0
-            check_port $ADMIN_PORT && admin_ok=1 || admin_ok=0
-            check_port $HTTPS_PORT && https_ok=1 || https_ok=0
-            
-            if [ $http_ok -eq 0 ] || [ $admin_ok -eq 0 ] || [ $https_ok -eq 0 ]; then
-                echo "错误：以下端口仍被占用："
-                [ $http_ok -eq 0 ] && echo " - 端口 $HTTP_PORT" && show_port_info $HTTP_PORT
-                [ $admin_ok -eq 0 ] && echo " - 端口 $ADMIN_PORT" && show_port_info $ADMIN_PORT
-                [ $https_ok -eq 0 ] && echo " - 端口 $HTTPS_PORT" && show_port_info $HTTPS_PORT
-                echo "请重新运行脚本选择其他端口"
-                exit 1
-            fi
-            ;;
-        3)
-            echo "停止占用端口的进程..."
-            [ $http_port_used -eq 1 ] && sudo fuser -k $DEFAULT_HTTP_PORT/tcp 2>/dev/null
-            [ $admin_port_used -eq 1 ] && sudo fuser -k $DEFAULT_ADMIN_PORT/tcp 2>/dev/null
-            [ $https_port_used -eq 1 ] && sudo fuser -k $DEFAULT_HTTPS_PORT/tcp 2>/dev/null
-            sleep 2
-            
-            # 重新检查端口
-            echo "重新检查端口..."
-            check_port $DEFAULT_HTTP_PORT && http_port_used=0 || http_port_used=1
-            check_port $DEFAULT_ADMIN_PORT && admin_port_used=0 || admin_port_used=1
-            check_port $DEFAULT_HTTPS_PORT && https_port_used=0 || https_port_used=1
-            
-            if [ $http_port_used -eq 0 ] && [ $admin_port_used -eq 0 ] && [ $https_port_used -eq 0 ]; then
-                HTTP_PORT=$DEFAULT_HTTP_PORT
-                ADMIN_PORT=$DEFAULT_ADMIN_PORT
-                HTTPS_PORT=$DEFAULT_HTTPS_PORT
-                echo "端口现在可用，使用默认端口"
-            else
-                echo "无法释放所有端口，请使用备用端口选项"
-                exit 1
-            fi
-            ;;
-        4)
-            echo "退出脚本"
-            exit 0
-            ;;
-        *)
-            echo "无效选择，使用备用端口"
-            HTTP_PORT=$ALTERNATE_HTTP_PORT
-            ADMIN_PORT=$ALTERNATE_ADMIN_PORT
-            HTTPS_PORT=$ALTERNATE_HTTPS_PORT
-            ;;
-    esac
-else
-    # 所有默认端口都可用
-    HTTP_PORT=$DEFAULT_HTTP_PORT
-    ADMIN_PORT=$DEFAULT_ADMIN_PORT
-    HTTPS_PORT=$DEFAULT_HTTPS_PORT
-    echo "所有默认端口都可用"
-fi
-
-# 创建 Docker Compose 配置文件
-echo "创建 Docker Compose 配置文件..."
-generate_compose_config $HTTP_PORT $ADMIN_PORT $HTTPS_PORT
-
-# 检查文件是否创建成功
-if [ ! -f "$COMPOSE_FILE" ]; then
-    echo "错误：无法创建配置文件 $COMPOSE_FILE"
-    exit 1
-fi
-
-# 切换到脚本目录
-cd "$SCRIPT_DIR" || exit 1
-
-# 检查 Docker 是否运行
-if ! systemctl is-active --quiet docker; then
-    echo "启动 Docker 服务..."
-    systemctl start docker
-    sleep 5
-fi
-
-# 部署服务
-echo "启动 Nginx Proxy Manager..."
-docker compose -p nginx -f "$COMPOSE_FILE" up -d
-
-# 检查部署是否成功
-if [ $? -eq 0 ]; then
-    echo "等待服务启动..."
-    sleep 5
-    
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    echo "=================================================="
-    echo "Nginx Proxy Manager 部署完成！"
-    echo "管理界面: http://${SERVER_IP}:${ADMIN_PORT}"
-    echo "HTTP 端口: ${HTTP_PORT}"
-    echo "HTTPS 端口: ${HTTPS_PORT}"
-    echo "初始账号: admin@example.com"
-    echo "初始密码: changeme"
-    echo "=================================================="
-    echo ""
-    echo "重要提示："
-    echo "1. 首次登录后请立即修改密码"
-    echo "2. 确保防火墙已开放端口 ${HTTP_PORT}, ${ADMIN_PORT}, ${HTTPS_PORT}"
-    echo "3. 数据保存在: $SCRIPT_DIR/data"
-else
-    echo "错误：容器启动失败"
-    echo "请检查 Docker 日志：docker logs nginx-proxy-manager"
-    exit 1
-fi
+case $choice in
+    1)
+        echo "执行彻底清理并使用默认端口..."
+        cleanup_docker
+        sleep 3
+        
+        # 使用默认端口
+        cat > "$COMPOSE_FILE" << EOF
+services:
+  app:
+    image: 'docker.io/jc21/nginx-proxy-manager:latest'
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+EOF
+        deploy_service 80 81 443
+        ;;
+    2)
+        cleanup_docker
+        deploy_with_alternate_ports
+        ;;
+    3)
+        echo "请手动指定端口："
+        read -p "HTTP 端口 (推荐 8080): " custom_http
+        read -p "管理界面端口 (推荐 8081): " custom_admin  
+        read -p "HTTPS 端口 (推荐 8443): " custom_https
+        
+        HTTP_PORT=${custom_http:-8080}
+        ADMIN_PORT=${custom_admin:-8081}
+        HTTPS_PORT=${custom_https:-8443}
+        
+        cleanup_docker
+        
+        cat > "$COMPOSE_FILE" << EOF
+services:
+  app:
+    image: 'docker.io/jc21/nginx-proxy-manager:latest'
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      - '${HTTP_PORT}:80'
+      - '${ADMIN_PORT}:81'
+      - '${HTTPS_PORT}:443'
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+EOF
+        deploy_service $HTTP_PORT $ADMIN_PORT $HTTPS_PORT
+        ;;
+    4)
+        echo "退出脚本"
+        exit 0
+        ;;
+    *)
+        echo "无效选择，使用备用端口"
+        cleanup_docker
+        deploy_with_alternate_ports
+        ;;
+esac
