@@ -43,3 +43,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E5%AE%9E%E6%97%B6%20history%20%E7%9B%91%E6%8E%A7)
 ```
+# SublinkX订阅转换
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/SublinkX)
+```
