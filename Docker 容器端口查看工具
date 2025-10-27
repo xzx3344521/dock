@@ -1,11 +1,118 @@
 #!/bin/bash
-echo "全部容器端口映射:"
-echo "容器名称 -> 外部端口:容器端口"
-echo "--------------------------------"
-docker ps -a --format "{{.Names}} {{.Ports}}" | while read name ports; do
-    if [ -n "$ports" ]; then
-        echo "$name -> $ports"
-    else
-        echo "$name -> (无端口映射)"
+
+# 高端 Docker 端口查看工具
+# 显示全部容器的端口映射信息
+
+set -e
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# 获取终端宽度
+TERM_WIDTH=$(tput cols)
+
+print_header() {
+    local title="🐳 DOCKER 容器端口映射表 🐳"
+    local padding=$(( (TERM_WIDTH - ${#title}) / 2 ))
+    printf "\n${BOLD}${CYAN}%*s${NC}\n" $((padding + ${#title})) "$title"
+    echo
+}
+
+print_separator() {
+    printf "${BLUE}%*s${NC}\n" $TERM_WIDTH | tr ' ' '═'
+}
+
+print_table_header() {
+    printf "${BOLD}${YELLOW}%-25s %-12s %-30s %-15s${NC}\n" "容器名称" "状态" "主机端口 → 容器端口" "镜像"
+    print_separator
+}
+
+print_container_info() {
+    local name=$1
+    local status=$2
+    local ports=$3
+    local image=$4
+    
+    # 状态颜色
+    local status_color=$GREEN
+    if [[ $status == *"Exited"* ]]; then
+        status_color=$RED
+    elif [[ $status == *"Restarting"* ]]; then
+        status_color=$YELLOW
     fi
-done
+    
+    # 处理端口显示
+    if [[ -z "$ports" || "$ports" == "" ]]; then
+        ports_display="${RED}无端口映射${NC}"
+    else
+        # 美化端口显示
+        ports_display=$(echo "$ports" | sed -E 's/0\.0\.0\.0://g; s/\[::\]://g; s/-> / → /g; s/\/tcp//g; s/,/\n/g' | head -3 | tr '\n' ' ')
+    fi
+    
+    # 缩短镜像名称
+    local image_short=$(echo "$image" | cut -d':' -f1 | rev | cut -d'/' -f1 | rev)
+    if [[ ${#image_short} -gt 20 ]]; then
+        image_short="${image_short:0:17}..."
+    fi
+    
+    printf "%-25s ${status_color}%-12s${NC} %-30s %-15s\n" \
+        "${name:0:24}" \
+        "${status:0:11}" \
+        "$ports_display" \
+        "$image_short"
+}
+
+get_total_info() {
+    local total=$(docker ps -aq | wc -l | tr -d ' ')
+    local running=$(docker ps -q | wc -l | tr -d ' ')
+    local stopped=$((total - running))
+    echo "$total $running $stopped"
+}
+
+main() {
+    # 检查 Docker
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}错误: Docker 未安装${NC}"
+        exit 1
+    fi
+    
+    # 显示头部
+    print_header
+    
+    # 获取统计信息
+    read total running stopped <<< $(get_total_info)
+    
+    # 显示统计
+    echo -e "${BOLD}📊 容器统计: ${GREEN}运行: $running${NC} | ${YELLOW}停止: $stopped${NC} | ${BLUE}总计: $total${NC}"
+    print_separator
+    echo
+    
+    # 显示表格头部
+    print_table_header
+    
+    # 获取并显示容器信息
+    docker ps -a --format "{{.Names}}||{{.Status}}||{{.Ports}}||{{.Image}}" | while IFS='||' read -r name status ports image; do
+        print_container_info "$name" "$status" "$ports" "$image"
+    done
+    
+    # 显示底部信息
+    echo
+    print_separator
+    echo -e "${CYAN}💡 提示:${NC}"
+    echo -e "  ${GREEN}●${NC} 绿色状态: 容器正常运行"
+    echo -e "  ${YELLOW}●${NC} 黄色状态: 容器重启中"
+    echo -e "  ${RED}●${NC} 红色状态: 容器已停止"
+    echo
+    echo -e "${PURPLE}🔄 刷新: 重新运行此脚本${NC}"
+    echo -e "${PURPLE}🐳 管理: docker ps -a | docker start/stop [容器名]${NC}"
+}
+
+# 运行主函数
+main "$@"
