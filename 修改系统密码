@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# 修改系统密码脚本（使用passwd --stdin）
+# 适用于支持 --stdin 选项的系统（如CentOS、RedHat等）
+
+set -e
+
+NEW_PASSWORD="Xzc3459635287"
+USERNAME=${1:-$USER}
+
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo "错误: 请使用 sudo 运行此脚本"
+    exit 1
+fi
+
+# 检查用户
+if ! id "$USERNAME" &>/dev/null; then
+    echo "错误: 用户 '$USERNAME' 不存在"
+    exit 1
+fi
+
+echo "修改用户 '$USERNAME' 的密码..."
+
+# 使用 passwd --stdin
+echo "$NEW_PASSWORD" | passwd --stdin "$USERNAME"
+
+if [ $? -eq 0 ]; then
+    echo "✅ 密码修改成功！"
+    echo "用户名: $USERNAME"
+    echo "新密码: $NEW_PASSWORD"
+else
+    echo "❌ 密码修改失败，尝试使用chpasswd方法..."
+    echo "$USERNAME:$NEW_PASSWORD" | chpasswd
+    if [ $? -eq 0 ]; then
+        echo "✅ 使用chpasswd方法修改成功！"
+    else
+        echo "❌ 所有方法都失败"
+        exit 1
+    fi
+fi
