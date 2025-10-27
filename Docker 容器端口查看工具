@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 高端 Docker 端口查看工具
+# 高端 Docker 端口查看工具 - 修复版
 # 显示全部容器的端口映射信息
 
 set -e
@@ -16,7 +16,7 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # 获取终端宽度
-TERM_WIDTH=$(tput cols)
+TERM_WIDTH=$(tput cols 2>/dev/null || echo 80)
 
 print_header() {
     local title="🐳 DOCKER 容器端口映射表 🐳"
@@ -30,43 +30,58 @@ print_separator() {
 }
 
 print_table_header() {
-    printf "${BOLD}${YELLOW}%-25s %-12s %-30s %-15s${NC}\n" "容器名称" "状态" "主机端口 → 容器端口" "镜像"
+    printf "${BOLD}${YELLOW}%-25s %-12s %-35s %-20s${NC}\n" "容器名称" "状态" "主机端口 → 容器端口" "镜像"
     print_separator
 }
 
+format_ports() {
+    local ports="$1"
+    if [[ -z "$ports" || "$ports" == "" ]]; then
+        echo -e "${RED}无端口映射${NC}"
+        return
+    fi
+    
+    # 提取并格式化端口信息
+    echo "$ports" | sed -E '
+        s/0\.0\.0\.0:([0-9]+)->([0-9]+)\/tcp/\1 → \2/g;
+        s/\[::\]:([0-9]+)->([0-9]+)\/tcp/\1 → \2/g;
+        s/, /\\n/g;
+    ' | while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            echo -e "  ${GREEN}${line}${NC}"
+        fi
+    done
+}
+
 print_container_info() {
-    local name=$1
-    local status=$2
-    local ports=$3
-    local image=$4
+    local name="$1"
+    local status="$2"
+    local ports="$3"
+    local image="$4"
     
     # 状态颜色
     local status_color=$GREEN
-    if [[ $status == *"Exited"* ]]; then
+    if [[ "$status" == *"Exited"* ]]; then
         status_color=$RED
-    elif [[ $status == *"Restarting"* ]]; then
+    elif [[ "$status" == *"Restarting"* ]]; then
         status_color=$YELLOW
-    fi
-    
-    # 处理端口显示
-    if [[ -z "$ports" || "$ports" == "" ]]; then
-        ports_display="${RED}无端口映射${NC}"
-    else
-        # 美化端口显示
-        ports_display=$(echo "$ports" | sed -E 's/0\.0\.0\.0://g; s/\[::\]://g; s/-> / → /g; s/\/tcp//g; s/,/\n/g' | head -3 | tr '\n' ' ')
     fi
     
     # 缩短镜像名称
     local image_short=$(echo "$image" | cut -d':' -f1 | rev | cut -d'/' -f1 | rev)
-    if [[ ${#image_short} -gt 20 ]]; then
-        image_short="${image_short:0:17}..."
+    if [[ ${#image_short} -gt 18 ]]; then
+        image_short="${image_short:0:15}..."
     fi
     
-    printf "%-25s ${status_color}%-12s${NC} %-30s %-15s\n" \
+    # 打印容器基本信息
+    printf "%-25s ${status_color}%-12s${NC} %-35s %-20s\n" \
         "${name:0:24}" \
         "${status:0:11}" \
-        "$ports_display" \
+        "" \
         "$image_short"
+    
+    # 打印端口信息
+    format_ports "$ports"
 }
 
 get_total_info() {
@@ -100,6 +115,7 @@ main() {
     # 获取并显示容器信息
     docker ps -a --format "{{.Names}}||{{.Status}}||{{.Ports}}||{{.Image}}" | while IFS='||' read -r name status ports image; do
         print_container_info "$name" "$status" "$ports" "$image"
+        echo
     done
     
     # 显示底部信息
