@@ -1,75 +1,11 @@
 #!/bin/bash
-
-# 简洁版 Docker 端口查看工具
-# 只显示容器名称和端口映射关系
-
-set -e
-
-# 颜色定义
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-show_help() {
-    echo "使用方法: $0 [容器名称]"
-    echo "示例:"
-    echo "  $0          # 查看所有容器端口"
-    echo "  $0 nginx    # 查看特定容器端口"
-    echo "  $0 -a       # 查看所有容器（包括停止的）"
-}
-
-show_ports() {
-    local container_name=$1
-    local show_all=$2
-    
-    echo -e "${YELLOW}容器端口映射表:${NC}"
-    echo -e "${BLUE}容器名称 -> 主机端口:容器端口${NC}"
-    echo "----------------------------------------"
-    
-    if [ "$show_all" = "true" ]; then
-        containers=$(docker ps -a --format "{{.Names}}")
+echo "全部容器端口映射:"
+echo "容器名称 -> 外部端口:容器端口"
+echo "--------------------------------"
+docker ps -a --format "{{.Names}} {{.Ports}}" | while read name ports; do
+    if [ -n "$ports" ]; then
+        echo "$name -> $ports"
     else
-        containers=$(docker ps --format "{{.Names}}")
+        echo "$name -> (无端口映射)"
     fi
-    
-    for container in $containers; do
-        if [ -n "$container_name" ] && [[ ! "$container" =~ $container_name ]]; then
-            continue
-        fi
-        
-        # 获取端口映射信息
-        ports=$(docker port "$container" 2>/dev/null | while read line; do
-            if [[ $line == *"->"* ]]; then
-                echo "$line" | sed 's/.*-> //'
-            fi
-        done)
-        
-        if [ -n "$ports" ]; then
-            echo -e "${GREEN}$container${NC}"
-            echo "$ports" | while read port; do
-                if [ -n "$port" ]; then
-                    echo "  ↳ $port"
-                fi
-            done
-        else
-            echo -e "${GREEN}$container${NC} (无端口映射)"
-        fi
-    done
-}
-
-# 主程序
-case "$1" in
-    "-h"|"--help")
-        show_help
-        ;;
-    "-a"|"--all")
-        show_ports "" "true"
-        ;;
-    "")
-        show_ports "" "false"
-        ;;
-    *)
-        show_ports "$1" "false"
-        ;;
-esac
+done
