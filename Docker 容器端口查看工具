@@ -1,273 +1,75 @@
 #!/bin/bash
 
-# Docker 容器端口查看工具
-# 作者: 自动生成
-# 功能: 查看 Docker 容器的端口映射和网络信息
+# 简洁版 Docker 端口查看工具
+# 只显示容器名称和端口映射关系
 
 set -e
 
 # 颜色定义
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 显示帮助信息
 show_help() {
-    cat << EOF
-${GREEN}Docker 容器端口查看工具${NC}
-
-${YELLOW}使用方法:${NC}
-  $0 [选项] [容器名称/ID]
-
-${YELLOW}选项:${NC}
-  -a, --all         显示所有容器（包括停止的）
-  -r, --running     只显示运行中的容器（默认）
-  -l, --list        简洁列表模式
-  -d, --detailed    详细模式（显示所有信息）
-  -p, --port PORT   查找使用特定端口的容器
-  -n, --network     显示网络信息
-  -s, --stats       显示统计信息
-  -h, --help        显示此帮助信息
-
-${YELLOW}示例:${NC}
-  $0                      # 显示运行中容器的端口
-  $0 -a                   # 显示所有容器的端口
-  $0 -l                   # 简洁列表
-  $0 nginx                # 查看特定容器
-  $0 -p 80                # 查找使用80端口的容器
-  $0 -n                   # 显示网络信息
-  $0 -s                   # 显示统计信息
-
-${YELLOW}快捷键:${NC}
-  Enter    - 刷新显示
-  Ctrl+C   - 退出
-EOF
+    echo "使用方法: $0 [容器名称]"
+    echo "示例:"
+    echo "  $0          # 查看所有容器端口"
+    echo "  $0 nginx    # 查看特定容器端口"
+    echo "  $0 -a       # 查看所有容器（包括停止的）"
 }
 
-# 检查 Docker 是否可用
-check_docker() {
-    if ! command -v docker &> /dev/null; then
-        echo -e "${RED}错误: Docker 未安装或未在 PATH 中${NC}"
-        exit 1
-    fi
-    
-    if ! docker info &> /dev/null; then
-        echo -e "${RED}错误: Docker 守护进程未运行或无权限${NC}"
-        echo "请确保 Docker 正在运行，并且你有执行权限"
-        exit 1
-    fi
-}
-
-# 显示容器端口列表
-show_container_ports() {
-    local container_filter=$1
+show_ports() {
+    local container_name=$1
     local show_all=$2
-    local list_mode=$3
     
-    local docker_cmd="docker ps --format \"table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\""
+    echo -e "${YELLOW}容器端口映射表:${NC}"
+    echo -e "${BLUE}容器名称 -> 主机端口:容器端口${NC}"
+    echo "----------------------------------------"
     
     if [ "$show_all" = "true" ]; then
-        docker_cmd="docker ps -a --format \"table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\""
-    fi
-    
-    if [ "$list_mode" = "true" ]; then
-        docker_cmd="docker ps --format \"{{.Names}}\t{{.Ports}}\""
-    fi
-    
-    if [ -n "$container_filter" ]; then
-        echo -e "${CYAN}查找容器: $container_filter${NC}"
-        eval "$docker_cmd" | grep -E "(NAMES|$container_filter)"
+        containers=$(docker ps -a --format "{{.Names}}")
     else
-        eval "$docker_cmd"
+        containers=$(docker ps --format "{{.Names}}")
     fi
-}
-
-# 显示详细端口信息
-show_detailed_ports() {
-    echo -e "${YELLOW}=== 详细端口信息 ===${NC}"
-    
-    # 获取所有运行中容器
-    local containers=$(docker ps --format "{{.Names}}")
     
     for container in $containers; do
-        echo -e "\n${GREEN}容器: $container${NC}"
-        echo -e "${CYAN}端口映射:${NC}"
-        docker port "$container"
-        echo -e "${CYAN}网络设置:${NC}"
-        docker inspect "$container" --format '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} -> {{(index $conf 0).HostPort}}
-{{end}}' | grep -v '^$'
-    done
-}
-
-# 查找使用特定端口的容器
-find_port_usage() {
-    local port=$1
-    echo -e "${YELLOW}查找使用端口 $port 的容器...${NC}"
-    
-    # 方法1: 使用 docker ps 查找
-    echo -e "${CYAN}方法1 - 通过端口映射查找:${NC}"
-    docker ps --format "table {{.Names}}\t{{.Ports}}" | grep -E "0.0.0.0:$port|::$port|0.0.0.0:.*->.*:$port" || echo "未找到"
-    
-    # 方法2: 检查每个容器的端口映射
-    echo -e "\n${CYAN}方法2 - 详细端口检查:${NC}"
-    local containers=$(docker ps --format "{{.Names}}")
-    local found=0
-    
-    for container in $containers; do
-        local port_info=$(docker port "$container" | grep -E ":$port" || true)
-        if [ -n "$port_info" ]; then
-            echo -e "${GREEN}容器: $container${NC}"
-            echo "$port_info"
-            found=1
+        if [ -n "$container_name" ] && [[ ! "$container" =~ $container_name ]]; then
+            continue
+        fi
+        
+        # 获取端口映射信息
+        ports=$(docker port "$container" 2>/dev/null | while read line; do
+            if [[ $line == *"->"* ]]; then
+                echo "$line" | sed 's/.*-> //'
+            fi
+        done)
+        
+        if [ -n "$ports" ]; then
+            echo -e "${GREEN}$container${NC}"
+            echo "$ports" | while read port; do
+                if [ -n "$port" ]; then
+                    echo "  ↳ $port"
+                fi
+            done
+        else
+            echo -e "${GREEN}$container${NC} (无端口映射)"
         fi
     done
-    
-    if [ $found -eq 0 ]; then
-        echo "未找到使用端口 $port 的容器"
-    fi
-    
-    # 方法3: 使用 netstat 检查主机端口
-    echo -e "\n${CYAN}方法3 - 主机端口使用情况:${NC}"
-    if command -v netstat &> /dev/null; then
-        netstat -tulpn | grep ":$port " || echo "主机上未发现该端口监听"
-    elif command -v ss &> /dev/null; then
-        ss -tulpn | grep ":$port " || echo "主机上未发现该端口监听"
-    else
-        echo "无法检查主机端口使用情况（netstat/ss 不可用）"
-    fi
 }
 
-# 显示网络信息
-show_network_info() {
-    echo -e "${YELLOW}=== Docker 网络信息 ===${NC}"
-    
-    echo -e "\n${CYAN}网络列表:${NC}"
-    docker network ls
-    
-    echo -e "\n${CYAN}容器网络详情:${NC}"
-    local containers=$(docker ps --format "{{.Names}}")
-    
-    for container in $containers; do
-        echo -e "\n${GREEN}容器: $container${NC}"
-        docker inspect "$container" --format '{{range $net, $conf := .NetworkSettings.Networks}}
-网络: {{$net}}
-IP地址: {{$conf.IPAddress}}
-网关: {{$conf.Gateway}}
-MAC地址: {{$conf.MacAddress}}
-{{end}}' | grep -v '^$'
-    done
-}
-
-# 显示统计信息
-show_stats() {
-    echo -e "${YELLOW}=== Docker 统计信息 ===${NC}"
-    
-    local total_containers=$(docker ps -q | wc -l)
-    local running_containers=$(docker ps -q --filter status=running | wc -l)
-    local stopped_containers=$(docker ps -q --filter status=exited | wc -l)
-    
-    echo -e "${CYAN}容器统计:${NC}"
-    echo -e "总容器数: $total_containers"
-    echo -e "运行中: $running_containers"
-    echo -e "已停止: $stopped_containers"
-    
-    echo -e "\n${CYAN}资源使用:${NC}"
-    docker stats --no-stream --format "table {{.Container}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}" | head -10
-}
-
-# 交互式模式
-interactive_mode() {
-    echo -e "${GREEN}进入交互式模式 (按 Ctrl+C 退出)${NC}"
-    
-    while true; do
-        echo -e "\n${YELLOW}选择操作:${NC}"
-        echo "1) 查看运行中容器端口"
-        echo "2) 查看所有容器端口"
-        echo "3) 简洁列表"
-        echo "4) 详细端口信息"
-        echo "5) 查找端口使用"
-        echo "6) 网络信息"
-        echo "7) 统计信息"
-        echo "8) 刷新显示"
-        echo "9) 退出"
-        
-        read -p "请输入选择 (1-9): " choice
-        
-        case $choice in
-            1) show_container_ports "" "false" "false" ;;
-            2) show_container_ports "" "true" "false" ;;
-            3) show_container_ports "" "false" "true" ;;
-            4) show_detailed_ports ;;
-            5) 
-                read -p "请输入要查找的端口: " port
-                find_port_usage "$port"
-                ;;
-            6) show_network_info ;;
-            7) show_stats ;;
-            8) clear; echo -e "${GREEN}显示已刷新${NC}" ;;
-            9) break ;;
-            *) echo -e "${RED}无效选择${NC}" ;;
-        esac
-        
-        echo
-        read -p "按 Enter 继续..." dummy
-        clear
-    done
-}
-
-# 主函数
-main() {
-    check_docker
-    
-    # 如果没有参数，显示运行中容器
-    if [ $# -eq 0 ]; then
-        echo -e "${YELLOW}=== 运行中容器端口信息 ===${NC}"
-        show_container_ports "" "false" "false"
-        exit 0
-    fi
-    
-    case $1 in
-        -a|--all)
-            show_container_ports "" "true" "false"
-            ;;
-        -r|--running)
-            show_container_ports "" "false" "false"
-            ;;
-        -l|--list)
-            show_container_ports "" "false" "true"
-            ;;
-        -d|--detailed)
-            show_detailed_ports
-            ;;
-        -p|--port)
-            if [ -z "$2" ]; then
-                echo -e "${RED}错误: 请指定要查找的端口${NC}"
-                exit 1
-            fi
-            find_port_usage "$2"
-            ;;
-        -n|--network)
-            show_network_info
-            ;;
-        -s|--stats)
-            show_stats
-            ;;
-        -h|--help)
-            show_help
-            ;;
-        -i|--interactive)
-            interactive_mode
-            ;;
-        *)
-            # 如果参数不是选项，认为是容器名称
-            show_container_ports "$1" "false" "false"
-            ;;
-    esac
-}
-
-# 运行主函数
-main "$@"
+# 主程序
+case "$1" in
+    "-h"|"--help")
+        show_help
+        ;;
+    "-a"|"--all")
+        show_ports "" "true"
+        ;;
+    "")
+        show_ports "" "false"
+        ;;
+    *)
+        show_ports "$1" "false"
+        ;;
+esac
