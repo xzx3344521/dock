@@ -1,25 +1,24 @@
 #!/bin/bash
-echo "🚀 一键网络测速（精确版）"
+echo "🚀 一键网络测速（稳定版）"
 
-# 延迟测试 - 20次ping取平均值
-echo "🔄 测试网络延迟..."
-ping -c 20 8.8.8.8 | tail -1 | awk -F'/' '{print "网络延迟: " $4 " ms"}'
+# 延迟测试
+echo "1. 网络延迟测试（10次）："
+ping -c 10 114.114.114.114 | tail -1 | awk -F'/' '{print "   平均延迟: "$4" ms"}'
 
-# 下载速度测试 - 使用 dd 命令持续测试10秒
-echo "⬇️ 测试下载速度..."
-# 创建测试URL（使用不同CDN确保稳定性）
-test_urls=(
-    "http://cachefly.cachefly.net/100mb.test"
-    "http://speedtest.ftp.otenet.gr/files/test100Mb.db"
-    "http://proof.ovh.net/files/100Mb.dat"
-)
-
-for url in "${test_urls[@]}"; do
-    echo "正在从 $(echo $url | cut -d'/' -f3) 测试..."
-    speed=$(curl -s -w "%{speed_download}" -o /dev/null --max-time 10 "$url")
-    speed_mbps=$(echo "scale=2; $speed / 1024 / 1024" | bc)
-    echo "下载速度: $speed_mbps MB/s"
-    break
+# 下载速度测试（确保测试10秒）
+echo "2. 下载速度测试（10秒）："
+for i in {1..3}; do
+    echo "   第$i次测试..."
+    start=$(date +%s)
+    speed=$(curl -s -w "%{speed_download}" -o /dev/null --max-time 10 http://cachefly.cachefly.net/100mb.test)
+    end=$(date +%s)
+    duration=$((end - start))
+    
+    if [ $duration -ge 5 ]; then
+        speed_mbps=$(echo "scale=2; $speed / 1024 / 1024" | bc)
+        echo "   下载速度: $speed_mbps MB/s"
+        break
+    fi
 done
 
 echo "✅ 测速完成"
