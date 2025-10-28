@@ -1,22 +1,11 @@
 #!/bin/bash
 
-echo "🚀 一键网络测速脚本"
+echo "🚀 一键网络测速脚本 (自动切换备用方案)"
 
 # 安装必要工具
 echo "📦 安装必要工具..."
 apt-get update >/dev/null 2>&1
 apt-get install -y curl wget iputils-ping bc dnsutils >/dev/null 2>&1
-
-# 安装speedtest
-if ! command -v speedtest-cli &>/dev/null; then
-    if apt-get install -y speedtest-cli >/dev/null 2>&1 || pip3 install speedtest-cli >/dev/null 2>&1; then
-        echo "✅ speedtest安装成功"
-    else
-        wget -q -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
-        chmod +x speedtest-cli
-        mv speedtest-cli /usr/local/bin/
-    fi
-fi
 
 # 测试网络连通性
 echo "🌐 测试网络连接..."
@@ -27,29 +16,86 @@ else
     exit 1
 fi
 
-# 测速
-echo "📊 开始测速..."
-if command -v speedtest-cli &>/dev/null; then
-    result=$(speedtest-cli --simple)
-    # 转换为中文显示
-    echo "$result" | sed '
-        s/Ping:/网络延迟:/
-        s/Download:/下载速度:/
-        s/Upload:/上传速度:/
-        s/ ms/ 毫秒/
-        s/ Mbit\/s/ Mbit\/秒/
-        s/ Gbit\/s/ Gbit\/秒/
-    '
-else
-    # 备用测速方法
-    start_time=$(date +%s.%N)
-    curl -L --max-time 30 --progress-bar -o /dev/null http://cachefly.cachefly.net/100mb.test >/dev/null 2>&1
-    end_time=$(date +%s.%N)
-    download_time=$(echo "$end_time - $start_time" | bc)
-    speed_mbps=$(echo "scale=2; (100 * 8) / $download_time" | bc)
-    echo "网络延迟: 0.0 毫秒"
-    echo "下载速度: ${speed_mbps} Mbit/秒"
-    echo "上传速度: 0.0 Mbit/秒"
+# 尝试官方speedtest
+echo "📊 尝试官方speedtest测速..."
+if command -v speedtest &>/dev/null || command -v speedtest-cli &>/dev/null; then
+    if speedtest --simple 2>/dev/null || speedtest-cli --simple 2>/dev/null; then
+        echo "✅ 官方speedtest测速完成"
+        exit 0
+    fi
 fi
 
-echo "✅ 测速完成"
+# 安装官方speedtest
+echo "🔧 安装官方speedtest..."
+if curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash >/dev/null 2>&1; then
+    if sudo apt-get install -y speedtest >/dev/null 2>&1; then
+        echo "✅ 官方speedtest安装成功"
+        if speedtest --simple 2>/dev/null; then
+            echo "✅ 官方speedtest测速完成"
+            exit 0
+        fi
+    fi
+fi
+
+# 安装非官方speedtest-cli
+echo "🔄 安装非官方speedtest-cli..."
+if ! command -v speedtest-cli &>/dev/null; then
+    if apt-get install -y speedtest-cli >/dev/null 2>&1 || pip3 install speedtest-cli >/dev/null 2>&1; then
+        echo "✅ speedtest-cli安装成功"
+    else
+        wget -q -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+        chmod +x speedtest-cli
+        mv speedtest-cli /usr/local/bin/ >/dev/null 2>&1
+    fi
+fi
+
+# 尝试非官方speedtest-cli
+if command -v speedtest-cli &>/dev/null; then
+    echo "📊 尝试非官方speedtest-cli测速..."
+    if speedtest-cli --simple 2>/dev/null; then
+        echo "✅ 非官方speedtest-cli测速完成"
+        exit 0
+    fi
+fi
+
+# 备用测速方法
+echo "🔄 切换到备用测速方法..."
+start_time=$(date +%s.%N)
+if curl -L --max-time 30 --progress-bar -o /dev/null http://cachefly.cachefly.net/100mb.test >/dev/null 2>&1; then
+    end_time=$(date +%s.%N)
+    download_time=$(echo "$end_time - $start_time" | bc)
+    if [ -n "$download_time" ] && [ "$(echo "$download_time > 0.1" | bc -l)" -eq 1 ]; then
+        speed_mbps=$(echo "scale=2; (100 * 8) / $download_time" | bc)
+        echo "网络延迟: 0.0 毫秒"
+        echo "下载速度: ${speed_mbps} Mbit/秒"
+        echo "上传速度: 0.0 Mbit/秒"
+        echo "✅ 备用测速完成"
+        exit 0
+    fi
+fi
+
+# 最终备用方案
+echo "🔄 尝试最终备用方案..."
+test_urls=(
+    "http://speedtest.ftp.otenet.gr/files/test100Mb.db"
+    "http://ipv4.download.thinkbroadband.com/100MB.zip"
+)
+
+for url in "${test_urls[@]}"; do
+    echo "尝试: $(echo $url | cut -d'/' -f3)"
+    start_time=$(date +%s.%N)
+    if curl -L --max-time 30 -o /dev/null "$url" >/dev/null 2>&1; then
+        end_time=$(date +%s.%N)
+        download_time=$(echo "$end_time - $start_time" | bc)
+        if [ -n "$download_time" ] && [ "$(echo "$download_time > 0.1" | bc -l)" -eq 1 ]; then
+            speed_mbps=$(echo "scale=2; (100 * 8) / $download_time" | bc)
+            echo "网络延迟: 0.0 毫秒"
+            echo "下载速度: ${speed_mbps} Mbit/秒"
+            echo "上传速度: 0.0 Mbit/秒"
+            echo "✅ 最终备用测速完成"
+            exit 0
+        fi
+    fi
+done
+
+echo "❌ 所有测速方法都失败了"
