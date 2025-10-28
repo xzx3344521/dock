@@ -1,17 +1,19 @@
 #!/bin/bash
-echo "🌐 网络测速工具"
-echo "测试中..."
+echo "🌐 网络速度测试"
+echo "正在启动..."
 
-result=$(curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple)
+# 直接运行测速，不下载文件
+result=$(curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple 2>/dev/null)
 
-echo "$result" | while read line; do
-    if [[ $line == Ping:* ]]; then
-        echo "🔄 延迟: $(echo $line | cut -d' ' -f2-)"
-    elif [[ $line == Download:* ]]; then
-        echo "⬇️ 下载: $(echo $line | cut -d' ' -f2-)"
-    elif [[ $line == Upload:* ]]; then
-        echo "⬆️ 上传: $(echo $line | cut -d' ' -f2-)"
-    fi
-done
+if [ $? -ne 0 ] || [ -z "$result" ]; then
+    echo "❌ 测速失败，请检查网络连接"
+    exit 1
+fi
 
-echo "✅ 测试完成"
+# 快速解析结果
+echo "✅ 测试完成："
+echo "$result" | awk '
+/Ping:/ {printf "🔄 延迟: %s %s\n", $2, $3}
+/Download:/ {printf "⬇️ 下载: %s %s\n", $2, $3}  
+/Upload:/ {printf "⬆️ 上传: %s %s\n", $2, $3}
+'
