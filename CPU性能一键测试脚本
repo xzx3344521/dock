@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# VPS CPU性能一键测试脚本
-# 用法: curl -sL https://raw.githubusercontent.com/username/vpsbench.sh | bash
+# VPS CPU性能测试和对比脚本
+# 用法: bash <(curl -sSL https://raw.githubusercontent.com/username/vpsbench/main/cpu_bench.sh)
 
 # 颜色定义
 RED='\033[0;31m'
@@ -10,253 +10,292 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 打印带颜色的信息
-print_info() {
-    echo -e "${GREEN}[信息]${NC} $1"
-}
+# 结果文件
+RESULTS_FILE="/tmp/vps_benchmark_results.txt"
+COMPARE_FILE="/tmp/vps_comparison.txt"
 
-print_warning() {
-    echo -e "${YELLOW}[警告]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[错误]${NC} $1"
-}
-
-print_result() {
-    echo -e "${CYAN}[结果]${NC} $1"
-}
-
-print_section() {
-    echo -e "${PURPLE}=== $1 ===${NC}"
-}
-
-# 检查并安装必要工具
+# 安装工具
 install_tools() {
-    print_info "检查系统环境..."
-    
+    echo "安装必要工具..."
     if command -v yum >/dev/null 2>&1; then
-        print_info "检测到 CentOS/RHEL 系统"
-        yum update -y >/dev/null 2>&1
         yum install -y sysbench bc wget curl >/dev/null 2>&1
     elif command -v apt-get >/dev/null 2>&1; then
-        print_info "检测到 Debian/Ubuntu 系统"
         apt-get update >/dev/null 2>&1
         apt-get install -y sysbench bc wget curl >/dev/null 2>&1
-    elif command -v apk >/dev/null 2>&1; then
-        print_info "检测到 Alpine Linux 系统"
-        apk update >/dev/null 2>&1
-        apk add sysbench bc wget curl >/dev/null 2>&1
-    else
-        print_error "不支持的Linux发行版"
-        exit 1
     fi
 }
 
 # 获取系统信息
 get_system_info() {
-    print_section "系统信息"
-    
-    CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')
+    CPU_NAME=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')
     CPU_CORES=$(nproc)
-    MEMORY_TOTAL=$(free -h | grep Mem | awk '{print $2}')
-    OS_INFO=$(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')
-    ARCH=$(uname -m)
-    
-    print_result "CPU型号: $CPU_MODEL"
-    print_result "CPU核心: $CPU_CORES"
-    print_result "内存总量: $MEMORY_TOTAL"
-    print_result "系统版本: $OS_INFO"
-    print_result "系统架构: $ARCH"
+    MEMORY=$(free -h | grep Mem | awk '{print $2}')
+    OS=$(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')
+    HOSTNAME=$(hostname)
 }
 
-# 单核性能测试
-single_core_test() {
-    print_section "单核性能测试"
+# 性能测试
+run_benchmarks() {
+    echo "开始性能测试..."
     
-    if ! command -v sysbench >/dev/null 2>&1; then
-        print_error "sysbench 未安装，跳过单核测试"
-        return
-    fi
-    
-    print_info "正在进行单核性能测试..."
+    # 单核测试
     SINGLE_SCORE=$(sysbench cpu --threads=1 --cpu-max-prime=20000 run 2>/dev/null | grep "events per second" | awk '{printf "%.2f", $4}')
     
-    if [ -n "$SINGLE_SCORE" ]; then
-        print_result "单核性能得分: $SINGLE_SCORE"
-        
-        # 简单的性能评级
-        if (( $(echo "$SINGLE_SCORE > 800" | bc -l) )); then
-            print_result "单核性能: ${GREEN}优秀${NC}"
-        elif (( $(echo "$SINGLE_SCORE > 500" | bc -l) )); then
-            print_result "单核性能: ${YELLOW}良好${NC}"
-        else
-            print_result "单核性能: ${RED}一般${NC}"
-        fi
-    else
-        print_error "单核测试失败"
-    fi
-}
-
-# 多核性能测试
-multi_core_test() {
-    print_section "多核性能测试"
-    
-    if ! command -v sysbench >/dev/null 2>&1; then
-        print_error "sysbench 未安装，跳过多核测试"
-        return
-    fi
-    
-    print_info "正在进行多核性能测试..."
+    # 多核测试
     MULTI_SCORE=$(sysbench cpu --threads=$CPU_CORES --cpu-max-prime=20000 run 2>/dev/null | grep "events per second" | awk '{printf "%.2f", $4}')
     
-    if [ -n "$MULTI_SCORE" ]; then
-        print_result "多核性能得分: $MULTI_SCORE"
-        
-        # 计算多核效率
-        if [ -n "$SINGLE_SCORE" ] && [ "$SINGLE_SCORE" != "0" ]; then
-            EFFICIENCY=$(echo "scale=2; $MULTI_SCORE / ($SINGLE_SCORE * $CPU_CORES) * 100" | bc)
-            print_result "多核效率: $EFFICIENCY%"
-        fi
-        
-        # 简单的性能评级
-        if (( $(echo "$MULTI_SCORE > $((CPU_CORES * 400))" | bc -l) )); then
-            print_result "多核性能: ${GREEN}优秀${NC}"
-        elif (( $(echo "$MULTI_SCORE > $((CPU_CORES * 250))" | bc -l) )); then
-            print_result "多核性能: ${YELLOW}良好${NC}"
-        else
-            print_result "多核性能: ${RED}一般${NC}"
-        fi
-    else
-        print_error "多核测试失败"
-    fi
-}
-
-# 浮点性能测试
-float_point_test() {
-    print_section "浮点运算性能测试"
-    
-    if ! command -v bc >/dev/null 2>&1; then
-        print_error "bc 未安装，跳过浮点测试"
-        return
-    fi
-    
-    print_info "正在进行圆周率计算测试..."
+    # 浮点测试
     START_TIME=$(date +%s.%N)
-    echo "scale=5000; 4*a(1)" | bc -l -q >/dev/null 2>&1
+    echo "scale=3000; 4*a(1)" | bc -l -q >/dev/null 2>&1
     END_TIME=$(date +%s.%N)
     FLOAT_TIME=$(echo "$END_TIME - $START_TIME" | bc)
     
-    print_result "圆周率计算5000位耗时: ${FLOAT_TIME}秒"
+    # 内存测试
+    START_TIME=$(date +%s.%N)
+    dd if=/dev/zero of=/tmp/test.bin bs=1M count=100 status=none 2>/dev/null
+    END_TIME=$(date +%s.%N)
+    MEM_WRITE=$(echo "scale=2; 100 / ($END_TIME - $START_TIME)" | bc)
+    rm -f /tmp/test.bin
+}
+
+# 保存结果
+save_results() {
+    cat > $RESULTS_FILE << EOF
+VPS名称: $HOSTNAME
+测试时间: $(date)
+CPU型号: $CPU_NAME
+CPU核心: $CPU_CORES
+内存大小: $MEMORY
+系统版本: $OS
+单核得分: $SINGLE_SCORE
+多核得分: $MULTI_SCORE
+浮点耗时: ${FLOAT_TIME}秒
+内存写入: ${MEM_WRITE} MB/s
+EOF
+
+    echo "结果已保存到: $RESULTS_FILE"
+}
+
+# 显示当前结果
+show_current_results() {
+    echo ""
+    echo -e "${PURPLE}=== 当前VPS测试结果 ===${NC}"
+    echo "VPS名称: $HOSTNAME"
+    echo "CPU: $CPU_NAME"
+    echo "核心: $CPU_CORES"
+    echo "单核得分: $SINGLE_SCORE"
+    echo "多核得分: $MULTI_SCORE"
+    echo "浮点耗时: ${FLOAT_TIME}秒"
+    echo "内存写入: ${MEM_WRITE} MB/s"
+}
+
+# 性能评级
+get_rating() {
+    local score=$1
+    local type=$2
     
-    # 简单的性能评级
-    if (( $(echo "$FLOAT_TIME < 5" | bc -l) )); then
-        print_result "浮点性能: ${GREEN}优秀${NC}"
-    elif (( $(echo "$FLOAT_TIME < 10" | bc -l) )); then
-        print_result "浮点性能: ${YELLOW}良好${NC}"
-    else
-        print_result "浮点性能: ${RED}一般${NC}"
+    case $type in
+        "single")
+            if (( $(echo "$score > 800" | bc -l) )); then
+                echo "${GREEN}优秀${NC}"
+            elif (( $(echo "$score > 500" | bc -l) )); then
+                echo "${YELLOW}良好${NC}"
+            else
+                echo "${RED}一般${NC}"
+            fi
+            ;;
+        "multi")
+            local expected=$(echo "$CPU_CORES * 400" | bc)
+            if (( $(echo "$score > $expected" | bc -l) )); then
+                echo "${GREEN}优秀${NC}"
+            elif (( $(echo "$score > $(echo "$CPU_CORES * 250" | bc)" | bc -l) )); then
+                echo "${YELLOW}良好${NC}"
+            else
+                echo "${RED}一般${NC}"
+            fi
+            ;;
+        "float")
+            if (( $(echo "$score < 5" | bc -l) )); then
+                echo "${GREEN}优秀${NC}"
+            elif (( $(echo "$score < 10" | bc -l) )); then
+                echo "${YELLOW}良好${NC}"
+            else
+                echo "${RED}一般${NC}"
+            fi
+            ;;
+    esac
+}
+
+# 显示对比参考
+show_reference() {
+    echo ""
+    echo -e "${CYAN}=== 性能对比参考 ===${NC}"
+    echo "单核性能参考:"
+    echo -e "  ${GREEN}优秀: >800  ${YELLOW}良好: 500-800  ${RED}一般: <500${NC}"
+    echo ""
+    echo "多核性能参考 (以单核500为基准):"
+    echo -e "  ${GREEN}优秀: 核心数 × 400+  ${YELLOW}良好: 核心数 × 250+  ${RED}一般: 低于核心数 × 250${NC}"
+    echo ""
+    echo "浮点性能参考:"
+    echo -e "  ${GREEN}优秀: <5秒  ${YELLOW}良好: 5-10秒  ${RED}一般: >10秒${NC}"
+}
+
+# 添加对比数据
+add_comparison() {
+    echo ""
+    echo -e "${YELLOW}是否将当前结果添加到对比数据库？(y/N)${NC}"
+    read -r answer
+    
+    if [[ $answer == "y" || $answer == "Y" ]]; then
+        echo "请输入这个VPS的标识名称（如: Vultr-2C4G, AWS-t2-medium）:"
+        read -r vps_name
+        
+        if [ -n "$vps_name" ]; then
+            cat >> $COMPARE_FILE << EOF
+----------------------------------------
+VPS名称: $vps_name
+测试时间: $(date)
+CPU型号: $CPU_NAME
+CPU核心: $CPU_CORES
+单核得分: $SINGLE_SCORE
+多核得分: $MULTI_SCORE
+浮点耗时: ${FLOAT_TIME}秒
+内存写入: ${MEM_WRITE} MB/s
+EOF
+            echo -e "${GREEN}已添加到对比数据库: $COMPARE_FILE${NC}"
+        fi
     fi
 }
 
-# 内存性能测试
-memory_test() {
-    print_section "内存性能测试"
-    
-    print_info "正在进行内存读写测试..."
-    
-    # 内存写入测试
-    START_TIME=$(date +%s.%N)
-    dd if=/dev/zero of=/tmp/testfile bs=1M count=100 status=none 2>/dev/null
-    END_TIME=$(date +%s.%N)
-    WRITE_TIME=$(echo "$END_TIME - $START_TIME" | bc)
-    WRITE_SPEED=$(echo "scale=2; 100 / $WRITE_TIME" | bc)
-    
-    # 内存读取测试
-    START_TIME=$(date +%s.%N)
-    dd if=/tmp/testfile of=/dev/null bs=1M status=none 2>/dev/null
-    END_TIME=$(date +%s.%N)
-    READ_TIME=$(echo "$END_TIME - $START_TIME" | bc)
-    READ_SPEED=$(echo "scale=2; 100 / $READ_TIME" | bc)
-    
-    # 清理测试文件
-    rm -f /tmp/testfile
-    
-    print_result "内存写入速度: ${WRITE_SPEED} MB/s"
-    print_result "内存读取速度: ${READ_SPEED} MB/s"
-}
-
-# 性能对比参考
+# 显示对比结果
 show_comparison() {
-    print_section "性能对比参考"
-    
-    echo -e "常见VPS单核性能参考:"
-    echo -e "${GREEN}优秀: >800 ${YELLOW}良好: 500-800 ${RED}一般: <500${NC}"
-    echo ""
-    echo -e "多核性能参考 (以4核为例):"
-    echo -e "${GREEN}优秀: >1600 ${YELLOW}良好: 1000-1600 ${RED}一般: <1000${NC}"
-    echo ""
-    echo -e "浮点性能参考 (计算5000位圆周率):"
-    echo -e "${GREEN}优秀: <5秒 ${YELLOW}良好: 5-10秒 ${RED}一般: >10秒${NC}"
-}
-
-# 生成测试报告
-generate_report() {
-    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-    
-    echo ""
-    print_section "测试报告"
-    echo "测试时间: $TIMESTAMP"
-    echo "VPS标识: $(hostname)"
-    
-    if [ -n "$SINGLE_SCORE" ]; then
-        echo "单核得分: $SINGLE_SCORE"
-    fi
-    
-    if [ -n "$MULTI_SCORE" ]; then
-        echo "多核得分: $MULTI_SCORE"
-    fi
-    
-    if [ -n "$FLOAT_TIME" ]; then
-        echo "浮点耗时: ${FLOAT_TIME}秒"
-    fi
-    
-    if [ -n "$WRITE_SPEED" ] && [ -n "$READ_SPEED" ]; then
-        echo "内存写入: ${WRITE_SPEED} MB/s"
-        echo "内存读取: ${READ_SPEED} MB/s"
-    fi
-    
-    print_info "测试完成！建议保存以上结果用于后续对比。"
-}
-
-# 主函数
-main() {
-    echo ""
-    print_section "VPS CPU性能测试工具"
-    echo ""
-    
-    # 检查root权限
-    if [ "$EUID" -ne 0 ]; then
-        print_warning "建议使用root权限运行以获得更准确的结果"
+    if [ -f "$COMPARE_FILE" ]; then
         echo ""
+        echo -e "${PURPLE}=== 历史对比结果 ===${NC}"
+        cat $COMPARE_FILE
+    else
+        echo ""
+        echo -e "${YELLOW}暂无对比数据，请先添加一些测试结果${NC}"
     fi
-    
-    # 安装必要工具
-    install_tools
-    
-    # 执行各项测试
-    get_system_info
-    single_core_test
-    multi_core_test
-    float_point_test
-    memory_test
-    
-    # 显示对比参考和生成报告
-    show_comparison
-    generate_report
 }
 
-# 运行主函数
-main "$@"
+# 生成对比表格
+generate_comparison_table() {
+    if [ ! -f "$COMPARE_FILE" ]; then
+        return
+    fi
+    
+    echo ""
+    echo -e "${CYAN}=== 性能对比表格 ===${NC}"
+    printf "%-20s %-8s %-12s %-12s %-12s\n" "VPS名称" "核心数" "单核得分" "多核得分" "浮点耗时"
+    echo "----------------------------------------------------------------"
+    
+    # 从对比文件中提取数据
+    while IFS= read -r line; do
+        if [[ $line == "VPS名称:"* ]]; then
+            vps_name=$(echo "$line" | cut -d: -f2 | sed 's/^ *//')
+        elif [[ $line == "CPU核心:"* ]]; then
+            cores=$(echo "$line" | cut -d: -f2 | sed 's/^ *//')
+        elif [[ $line == "单核得分:"* ]]; then
+            single=$(echo "$line" | cut -d: -f2 | sed 's/^ *//')
+        elif [[ $line == "多核得分:"* ]]; then
+            multi=$(echo "$line" | cut -d: -f2 | sed 's/^ *//')
+        elif [[ $line == "浮点耗时:"* ]]; then
+            float=$(echo "$line" | cut -d: -f2 | sed 's/^ *//' | awk '{print $1}')
+            # 输出一行数据
+            if [ -n "$vps_name" ] && [ -n "$single" ]; then
+                printf "%-20s %-8s %-12s %-12s %-12s\n" "$vps_name" "$cores" "$single" "$multi" "${float}秒"
+                # 重置变量
+                vps_name=""; cores=""; single=""; multi=""; float=""
+            fi
+        fi
+    done < "$COMPARE_FILE"
+}
+
+# 清理对比数据
+clear_comparison() {
+    if [ -f "$COMPARE_FILE" ]; then
+        rm -f $COMPARE_FILE
+        echo -e "${GREEN}已清空对比数据${NC}"
+    else
+        echo -e "${YELLOW}暂无对比数据可清理${NC}"
+    fi
+}
+
+# 主菜单
+main_menu() {
+    while true; do
+        echo ""
+        echo -e "${BLUE}=== VPS性能测试工具 ===${NC}"
+        echo "1. 运行性能测试"
+        echo "2. 显示当前结果"
+        echo "3. 添加到对比数据库"
+        echo "4. 显示对比结果"
+        echo "5. 生成对比表格"
+        echo "6. 清空对比数据"
+        echo "7. 显示性能参考"
+        echo "8. 退出"
+        echo ""
+        echo -n "请选择操作 (1-8): "
+        read -r choice
+        
+        case $choice in
+            1)
+                install_tools
+                get_system_info
+                run_benchmarks
+                save_results
+                show_current_results
+                ;;
+            2)
+                if [ -f "$RESULTS_FILE" ]; then
+                    show_current_results
+                else
+                    echo -e "${RED}请先运行性能测试${NC}"
+                fi
+                ;;
+            3)
+                if [ -f "$RESULTS_FILE" ]; then
+                    add_comparison
+                else
+                    echo -e "${RED}请先运行性能测试${NC}"
+                fi
+                ;;
+            4)
+                show_comparison
+                ;;
+            5)
+                generate_comparison_table
+                ;;
+            6)
+                clear_comparison
+                ;;
+            7)
+                show_reference
+                ;;
+            8)
+                echo "再见!"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}无效选择${NC}"
+                ;;
+        esac
+    done
+}
+
+# 直接运行测试并显示对比
+if [ "$1" == "auto" ]; then
+    install_tools
+    get_system_info
+    run_benchmarks
+    show_current_results
+    show_reference
+    if [ -f "$COMPARE_FILE" ]; then
+        generate_comparison_table
+    fi
+else
+    main_menu
+fi
