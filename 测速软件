@@ -1,22 +1,37 @@
 #!/bin/bash
-echo "Looking Glass 安装脚本"
+echo "Looking Glass 测速软件安装脚本"
 
 # 检查 Docker
 if ! command -v docker &> /dev/null; then
     echo "错误: 请先安装 Docker"
+    echo "安装命令: curl -fsSL https://get.docker.com | sh"
     exit 1
 fi
 
+# 拉取镜像
+echo "正在下载镜像..."
+docker pull wikihostinc/looking-glass-server
+
 # 停止并删除旧容器
+echo "清理旧容器..."
 docker stop looking-glass 2>/dev/null
 docker rm looking-glass 2>/dev/null
 
-# 运行新容器
+# 创建新容器
+echo "启动容器..."
 docker run -d \
     --name looking-glass \
     -p 801:80 \
-    --restart always \
+    --restart unless-stopped \
     wikihostinc/looking-glass-server
 
+# 等待启动
+sleep 3
+
+# 检查状态
+echo "检查状态..."
+docker ps | grep looking-glass
+
 echo "安装完成!"
-echo "访问地址: http://服务器IP:801"
+echo "访问地址: http://你的服务器IP:801"
+echo "查看日志: docker logs looking-glass"
