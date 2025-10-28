@@ -2,7 +2,7 @@
 set -e
 
 echo "=========================================="
-echo " 修复Docker服务问题"
+echo " 修复Docker服务未找到问题"
 echo "=========================================="
 
 # 颜色定义
@@ -15,130 +15,258 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 检查Docker状态
-check_docker_status() {
-    log_info "检查Docker服务状态..."
-    systemctl status docker --no-pager -l
+# 检查Docker安装状态
+check_docker_installation() {
+    log_info "检查Docker安装状态..."
+    
+    if command -v docker &> /dev/null; then
+        docker --version
+        log_info "✅ Docker CLI 已安装"
+        return 0
+    else
+        log_error "❌ Docker CLI 未安装"
+        return 1
+    fi
 }
 
-# 修复Docker服务
-fix_docker_service() {
-    log_info "修复Docker服务..."
+# 检查服务文件
+check_service_files() {
+    log_info "检查Docker服务文件..."
     
-    # 停止服务
+    local services=(
+        "/lib/systemd/system/docker.service"
+        "/usr/lib/systemd/system/docker.service"
+        "/etc/systemd/system/docker.service"
+    )
+    
+    for service in "${services[@]}"; do
+        if [ -f "$service" ]; then
+            log_info "找到服务文件: $service"
+            return 0
+        fi
+    done
+    
+    log_warn "未找到Docker服务文件"
+    return 1
+}
+
+# 重新安装Docker服务
+reinstall_docker_service() {
+    log_info "重新安装Docker服务..."
+    
+    # 彻底清理
+    log_info "彻底清理Docker..."
     systemctl stop docker 2>/dev/null || true
     systemctl stop containerd 2>/dev/null || true
     
-    # 清理可能的问题
-    pkill -f docker 2>/dev/null || true
-    pkill -f containerd 2>/dev/null || true
+    # 卸载现有docker
+    apt-get remove -y --purge docker docker-engine docker.io containerd runc docker-ce docker-ce-cli 2>/dev/null || true
     
-    # 重新配置containerd
-    log_info "重新配置containerd..."
-    containerd config default > /etc/containerd/config.toml 2>/dev/null || true
+    # 清理文件和目录
+    rm -rf /var/lib/docker
+    rm -rf /var/lib/containerd
+    rm -rf /etc/docker
+    rm -f /etc/apt/sources.list.d/docker*
+    
+    # 重新安装Docker（使用更稳定的方法）
+    log_info "重新安装Docker..."
+    
+    # 方法1：使用官方脚本但跳过服务设置
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    chmod +x get-docker.sh
+    
+    # 修改脚本以跳过systemd检查
+    sed -i 's/systemctl is-active docker/#systemctl is-active docker/g' get-docker.sh
+    sed -i 's/systemctl start docker/#systemctl start docker/g' get-docker.sh
+    sed -i 's/systemctl enable docker/#systemctl enable docker/g' get-docker.sh
+    
+    # 运行修改后的脚本
+    ./get-docker.sh --version 24.0.5
+    
+    if [ $? -eq 0 ]; then
+        log_info "✅ Docker组件安装成功"
+    else
+        log_warn "官方脚本安装有问题，尝试手动安装..."
+        manual_install_docker
+    fi
+}
+
+# 手动安装Docker
+manual_install_docker() {
+    log_info "手动安装Docker..."
+    
+    # 安装依赖
+    apt-get update
+    apt-get install -y \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg2 \
+        software-properties-common
+    
+    # 添加Docker官方GPG密钥
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    
+    # 添加Docker仓库
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # 安装Docker
+    apt-get update
+    apt-get install -y \
+        docker-ce=5:24.0.5-1~debian.12~bookworm \
+        docker-ce-cli=5:24.0.5-1~debian.12~bookworm \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
+}
+
+# 创建Docker服务文件
+create_docker_service() {
+    log_info "创建Docker服务文件..."
+    
+    # 创建服务目录
+    mkdir -p /etc/systemd/system
+    
+    # 创建docker.service文件
+    cat > /etc/systemd/system/docker.service << 'EOF'
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target firewalld.service containerd.service
+Wants=network-online.target
+Requires=containerd.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+RestartSec=2
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 创建containerd服务文件
+    cat > /etc/systemd/system/containerd.service << 'EOF'
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target local-fs.target
+
+[Service]
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/bin/containerd
+Restart=always
+RestartSec=5
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-999
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    log_info "服务文件创建完成"
+}
+
+# 配置和启动服务
+setup_and_start_services() {
+    log_info "配置和启动Docker服务..."
+    
+    # 重新加载systemd
+    systemctl daemon-reload
+    
+    # 启用并启动containerd
     systemctl enable containerd
     systemctl start containerd
     
-    # 重启Docker服务
-    log_info "重启Docker服务..."
+    # 启用并启动docker
     systemctl enable docker
-    systemctl daemon-reload
     systemctl start docker
     
     # 等待服务启动
-    sleep 3
-}
-
-# 检查服务日志
-check_docker_logs() {
-    log_info "检查Docker服务日志..."
-    journalctl -u docker --no-pager -n 20
-}
-
-# 修复权限和配置
-fix_permissions() {
-    log_info "修复Docker相关权限..."
+    sleep 5
     
-    # 创建必要的目录
-    mkdir -p /etc/docker
-    mkdir -p /var/lib/docker
-    mkdir -p /run/docker
-    
-    # 配置docker daemon（简化配置）
-    cat > /etc/docker/daemon.json << 'EOF'
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "50m",
-    "max-file": "3"
-  },
-  "storage-driver": "overlay2"
-}
-EOF
-
-    # 修复权限
-    chmod 755 /etc/docker
-    chmod 644 /etc/docker/daemon.json
-}
-
-# 验证修复
-verify_fix() {
-    log_info "验证Docker修复..."
-    
+    # 检查服务状态
     if systemctl is-active docker &> /dev/null; then
-        log_info "✅ Docker服务现在运行正常！"
-        
-        # 测试基本命令
-        log_info "测试Docker命令..."
-        docker --version
-        docker info --format "{{.ServerVersion}}" && {
-            log_info "✅ Docker服务响应正常！"
-        } || {
-            log_warn "⚠️ Docker服务运行但info命令失败"
-        }
-        
-        # 尝试运行测试容器（不拉取镜像，只测试本地）
-        log_info "测试Docker基本功能..."
-        if docker images -q &> /dev/null; then
-            log_info "✅ Docker镜像列表查询成功！"
-        else
-            log_warn "⚠️ Docker镜像列表查询失败"
-        fi
-        
+        log_info "✅ Docker服务启动成功！"
     else
-        log_error "❌ Docker服务仍然未运行"
+        log_error "❌ Docker服务启动失败"
+        journalctl -u docker --no-pager -n 20
         return 1
     fi
+}
+
+# 验证安装
+verify_installation() {
+    log_info "验证Docker安装..."
+    
+    # 检查docker命令
+    if command -v docker &> /dev/null; then
+        log_info "✅ Docker CLI: $(docker --version)"
+    else
+        log_error "❌ Docker CLI 不可用"
+        return 1
+    fi
+    
+    # 检查服务状态
+    if systemctl is-active docker &> /dev/null; then
+        log_info "✅ Docker服务运行正常"
+    else
+        log_error "❌ Docker服务未运行"
+        return 1
+    fi
+    
+    # 测试docker info
+    if docker info &> /dev/null; then
+        log_info "✅ Docker守护进程响应正常"
+    else
+        log_warn "⚠️ Docker守护进程无响应"
+        return 1
+    fi
+    
+    log_info "🎉 Docker安装验证完成！"
 }
 
 # 安装RustDesk服务器
 install_rustdesk() {
     log_info "开始安装RustDesk服务器..."
     
-    if ! systemctl is-active docker &> /dev/null; then
-        log_error "Docker服务未运行，无法安装RustDesk"
-        return 1
-    fi
-    
-    # 创建RustDesk数据目录
+    # 创建数据目录
     mkdir -p /var/lib/rustdesk-server/{hbbs,hbbr}
     
-    # 拉取RustDesk服务器镜像
+    # 拉取镜像
     log_info "拉取RustDesk服务器镜像..."
     docker pull rustdesk/rustdesk-server:latest
     
-    # 运行hbbs (ID服务器)
+    # 启动hbbs
     log_info "启动RustDesk hbbs服务..."
     docker run -d \
         --name hbbs \
+        --restart unless-stopped \
         --network host \
         -v /var/lib/rustdesk-server/hbbs:/root \
         rustdesk/rustdesk-server:latest hbbs
     
-    # 运行hbbr (中继服务器)  
+    # 启动hbbr
     log_info "启动RustDesk hbbr服务..."
     docker run -d \
         --name hbbr \
+        --restart unless-stopped \
         --network host \
         -v /var/lib/rustdesk-server/hbbr:/root \
         rustdesk/rustdesk-server:latest hbbr
@@ -156,42 +284,50 @@ show_rustdesk_info() {
     echo "=========================================="
     echo "服务状态:"
     echo "  docker ps -a                          # 查看容器状态"
-    echo "  docker logs hbbs                     # 查看hbbs日志"
-    echo "  docker logs hbbr                     # 查看hbbr日志"
+    echo "  systemctl status docker              # 查看Docker服务"
     echo ""
     echo "重要信息:"
-    echo "  hbbs容器会生成密钥文件在: /var/lib/rustdesk-server/hbbs"
     echo "  查看密钥: cat /var/lib/rustdesk-server/hbbs/id_ed25519.pub"
+    echo "  服务器IP: $(curl -s ifconfig.me || hostname -I | awk '{print $1}')"
     echo ""
     echo "客户端连接时需要:"
-    echo "  1. 服务器IP地址"
+    echo "  1. 上面显示的IP地址"
     echo "  2. 上面显示的密钥"
     echo "=========================================="
 }
 
 # 主函数
 main() {
-    log_info "开始修复Docker服务..."
+    log_info "开始修复Docker服务未找到问题..."
     
-    check_docker_status
-    fix_permissions
-    fix_docker_service
-    check_docker_logs
-    verify_fix
+    check_docker_installation || {
+        log_error "Docker未正确安装，退出"
+        exit 1
+    }
     
-    if systemctl is-active docker &> /dev/null; then
-        log_info "✅ Docker服务修复成功！"
+    if check_service_files; then
+        log_info "服务文件存在，尝试启动服务..."
+        setup_and_start_services
+    else
+        log_info "服务文件不存在，重新安装..."
+        reinstall_docker_service
+        create_docker_service
+        setup_and_start_services
+    fi
+    
+    verify_installation && {
+        log_info "✅ Docker修复成功！"
         echo ""
         read -p "是否现在安装RustDesk服务器？(y/n): " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             install_rustdesk
         else
-            log_info "您可以稍后手动安装RustDesk"
+            log_info "您可以稍后运行此脚本安装RustDesk"
         fi
-    else
-        log_error "❌ Docker服务修复失败，请检查日志"
-    fi
+    } || {
+        log_error "❌ Docker修复失败"
+    }
 }
 
 # 执行主函数
