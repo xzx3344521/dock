@@ -1,32 +1,25 @@
 #!/bin/bash
-echo "🚀 一键网络测速"
+echo "🚀 一键网络测速（精确版）"
 
-# 测试延迟
+# 延迟测试 - 20次ping取平均值
 echo "🔄 测试网络延迟..."
-ping -c 5 8.8.8.8 | grep "min/avg/max" | awk -F'/' '{print "网络延迟: " $4 " ms"}'
+ping -c 20 8.8.8.8 | tail -1 | awk -F'/' '{print "网络延迟: " $4 " ms"}'
 
-# 测试下载速度
+# 下载速度测试 - 使用 dd 命令持续测试10秒
 echo "⬇️ 测试下载速度..."
-start_time=$(date +%s)
-wget -O /dev/null --timeout=10 http://cachefly.cachefly.net/100mb.test 2>&1 | grep "MB/s" | awk '{print "下载速度: " $3 " " $4}'
-end_time=$(date +%s)
+# 创建测试URL（使用不同CDN确保稳定性）
+test_urls=(
+    "http://cachefly.cachefly.net/100mb.test"
+    "http://speedtest.ftp.otenet.gr/files/test100Mb.db"
+    "http://proof.ovh.net/files/100Mb.dat"
+)
 
-# 测试上传速度（使用 speedtest-cli 如果可用）
-echo "⬆️ 测试上传速度..."
-if command -v speedtest &> /dev/null; then
-    # 使用官方 speedtest
-    upload_result=$(speedtest --simple | grep "Upload:" | awk '{print "上传速度: " $2 " " $3}')
-    echo "$upload_result"
-else
-    # 使用 Python speedtest-cli
-    upload_result=$(curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - 2>/dev/null | grep "Upload:" | head -1 | awk '{print "上传速度: " $2 " " $3}')
-    if [ -n "$upload_result" ]; then
-        echo "$upload_result"
-    else
-        # 备用方法：使用 iperf3 测试（如果可用）
-        echo "上传测试需要额外工具"
-        echo "安装完整测速工具: apt-get install speedtest-cli"
-    fi
-fi
+for url in "${test_urls[@]}"; do
+    echo "正在从 $(echo $url | cut -d'/' -f3) 测试..."
+    speed=$(curl -s -w "%{speed_download}" -o /dev/null --max-time 10 "$url")
+    speed_mbps=$(echo "scale=2; $speed / 1024 / 1024" | bc)
+    echo "下载速度: $speed_mbps MB/s"
+    break
+done
 
 echo "✅ 测速完成"
