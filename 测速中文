@@ -1,35 +1,23 @@
 #!/bin/bash
-echo "🚀 一键网络测速"
-
-# 测试网络连通性
-echo "📡 检查网络连通性..."
-if ping -c 2 8.8.8.8 &> /dev/null; then
-    echo "✅ 网络连接正常"
-else
-    echo "❌ 网络连接失败"
-    exit 1
-fi
+echo "🚀 网络测速工具"
 
 # 延迟测试
-echo ""
-echo "🔄 测试网络延迟..."
-ping -c 8 8.8.8.8 | tail -1 | awk -F'/' '{print "平均延迟: "$4" ms"}'
+echo "1. 延迟测试:"
+ping -c 5 114.114.114.114 | grep "avg" | awk -F'/' '{print "   平均延迟: "$4" ms"}'
 
-# 下载速度测试 - 使用更可靠的方法
-echo ""
-echo "⬇️ 测试下载速度..."
-echo "开始下载测试文件..."
+# 下载速度测试 - 使用系统内置方法
+echo "2. 下载速度测试:"
+echo "   生成测试数据..."
+time dd if=/dev/zero of=/tmp/testfile bs=1M count=100 2>&1 | grep "MB/s" | awk '{print "   磁盘写入速度: "$8" "$9}'
 
-# 使用 time 和 wget 组合
-/usr/bin/time -f "下载速度: %e秒 完成100MB下载" wget -q -O /dev/null --timeout=30 http://cachefly.cachefly.net/100mb.test
-
-# 计算实际速度
-if [ $? -eq 0 ]; then
-    echo "✅ 下载测试完成"
+# 网络下载测试（可选）
+echo "3. 网络下载测试:"
+if command -v curl &> /dev/null; then
+    echo "   正在测试网络下载..."
+    curl -s -w "   下载时间: %{time_total}秒\n" -o /dev/null https://www.baidu.com
 else
-    echo "❌ 下载测试失败，尝试备用服务器..."
-    wget -O /dev/null --progress=dot:giga --timeout=20 http://speedtest.ftp.otenet.gr/files/test100Mb.db
+    echo "   跳过网络下载测试 (curl不可用)"
 fi
 
-echo ""
-echo "🎯 测速完成"
+rm -f /tmp/testfile
+echo "✅ 测试完成"
