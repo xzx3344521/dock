@@ -21,15 +21,9 @@ log_success() { echo -e "${GREEN}[成功]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[警告]${NC} $1"; }
 log_error() { echo -e "${RED}[错误]${NC} $1"; }
 
-# 简单输出函数（不带颜色，用于复杂输出）
-echo_info() { echo "[信息] $1"; }
-echo_success() { echo "[成功] $1"; }
-echo_warning() { echo "[警告] $1"; }
-echo_error() { echo "[错误] $1"; }
-
 # 安全清理函数
 cleanup() {
-    echo_info "执行清理操作..."
+    echo "执行清理操作..."
     rm -f /tmp/rustdesk_keys
     unset admin_password
 }
@@ -40,7 +34,7 @@ trap cleanup EXIT INT TERM
 # 检查命令是否存在
 check_command() {
     if ! command -v "$1" &>/dev/null; then
-        echo_error "必需命令 '$1' 未找到"
+        echo "错误: 必需命令 '$1' 未找到"
         return 1
     fi
     return 0
@@ -50,33 +44,30 @@ check_command() {
 check_port() {
     local port=$1
     
-    # 验证端口范围
     if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1024 || "$port" -gt 65535 ]]; then
-        echo_error "端口号 $port 无效 (必须是1024-65535)"
+        echo "错误: 端口号 $port 无效 (必须是1024-65535)"
         return 2
     fi
     
-    # 检查端口占用
     local port_in_use=false
     
     if command -v netstat &>/dev/null; then
         if netstat -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
-            echo_warning "端口 $port 被占用 (netstat)"
+            echo "警告: 端口 $port 被占用 (netstat)"
             port_in_use=true
         fi
     fi
     
     if command -v ss &>/dev/null; then
         if ss -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
-            echo_warning "端口 $port 被占用 (ss)"
+            echo "警告: 端口 $port 被占用 (ss)"
             port_in_use=true
         fi
     fi
 
-    # 检查 Docker 容器占用
     if command -v docker &>/dev/null; then
         if docker ps --format "table {{.Ports}}" 2>/dev/null | grep -q ":${port}->"; then
-            echo_warning "端口 $port 被 Docker 容器占用"
+            echo "警告: 端口 $port 被 Docker 容器占用"
             port_in_use=true
         fi
     fi
@@ -88,7 +79,7 @@ check_port() {
     return 0
 }
 
-# 检查 Docker 环境
+# 检查 Docker 环境（修复版）
 check_docker() {
     log_info "检查 Docker 环境..."
     
@@ -102,21 +93,17 @@ check_docker() {
         exit 1
     fi
 
-    # 检查 Docker Compose
-    local compose_cmd=""
+    # 检查 Docker Compose 并直接返回命令
     if command -v docker-compose &>/dev/null; then
-        compose_cmd="docker-compose"
         log_info "使用 docker-compose"
+        echo "docker-compose"
     elif docker compose version &>/dev/null; then
-        compose_cmd="docker compose"
         log_info "使用 docker compose"
+        echo "docker compose"
     else
         log_error "Docker Compose 未安装"
         exit 1
     fi
-
-    log_success "Docker 环境检查通过"
-    echo "$compose_cmd"
 }
 
 # 创建目录结构
@@ -134,13 +121,11 @@ create_directories() {
         fi
     done
 
-    # 设置权限
     sudo chmod 755 "$SCRIPT_DIR"
     sudo chmod 755 "$SCRIPT_DIR/server"
     sudo chmod 755 "$SCRIPT_DIR/api"
     sudo chmod 755 "$SCRIPT_DIR/db"
 
-    # 设置所有权
     if [[ "$(id -u)" -ne 0 ]]; then
         sudo chown -R "$(id -u):$(id -g)" "$SCRIPT_DIR"
     fi
@@ -152,7 +137,6 @@ setup_fixed_key() {
     
     log_info "设置固定客户端密钥..."
     
-    # 备份现有密钥
     if [[ -f "$server_dir/id_ed25519" || -f "$server_dir/id_ed25519.pub" ]]; then
         local backup_dir="$SCRIPT_DIR/backup_$(date +%Y%m%d_%H%M%S)"
         mkdir -p "$backup_dir"
@@ -161,20 +145,14 @@ setup_fixed_key() {
         log_info "旧密钥备份到: $backup_dir"
     fi
     
-    # 清理旧密钥
     rm -f "$server_dir/id_ed25519" "$server_dir/id_ed25519.pub"
     
-    # 写入固定公钥
     echo "$FIXED_KEY_PUB" > "$server_dir/id_ed25519.pub"
-    
-    # 创建空的私钥文件
     touch "$server_dir/id_ed25519"
     
-    # 设置文件权限
     chmod 644 "$server_dir/id_ed25519.pub"
     chmod 600 "$server_dir/id_ed25519"
     
-    # 验证密钥文件
     if [[ -f "$server_dir/id_ed25519.pub" ]]; then
         local saved_key=$(cat "$server_dir/id_ed25519.pub")
         if [[ "$saved_key" == "$FIXED_KEY_PUB" ]]; then
@@ -200,13 +178,11 @@ generate_password() {
 get_ip_address() {
     local local_ip public_ip
     
-    # 获取本地IP
     local_ip=$(hostname -I | awk '{print $1}' | head -1)
     if [[ -z "$local_ip" ]]; then
         local_ip="127.0.0.1"
     fi
     
-    # 获取公网IP（带超时）
     public_ip=$(curl -s --connect-timeout 3 -m 5 ifconfig.me 2>/dev/null || echo "无法获取")
     
     echo "$local_ip" "$public_ip"
@@ -220,15 +196,15 @@ validate_input() {
     case $type in
         "project_name")
             [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] && return 0
-            echo_error "项目名称只能包含字母、数字、连字符和下划线"
+            echo "错误: 项目名称只能包含字母、数字、连字符和下划线"
             ;;
         "port")
             [[ "$value" =~ ^[0-9]+$ ]] && [[ "$value" -ge 1024 && "$value" -le 65535 ]] && return 0
-            echo_error "端口号必须是 1024-65535 之间的数字"
+            echo "错误: 端口号必须是 1024-65535 之间的数字"
             ;;
         "password")
             [[ -n "$value" && ${#value} -ge 8 ]] && return 0
-            echo_error "密码不能为空且至少 8 位"
+            echo "错误: 密码不能为空且至少 8 位"
             ;;
     esac
     return 1
@@ -241,7 +217,6 @@ get_user_input() {
     local default_hbbs_port="21116"
     local default_hbbr_port="21117"
     
-    # 读取项目名称
     while true; do
         read -p "请输入项目名称（默认: $default_project）: " input_project
         project_name=$(echo "$input_project" | xargs)
@@ -252,7 +227,6 @@ get_user_input() {
         fi
     done
 
-    # 读取端口配置
     local ports=("api_port" "hbbs_port" "hbbr_port")
     local defaults=("$default_api_port" "$default_hbbs_port" "$default_hbbr_port")
     local descriptions=("API服务端口" "ID服务器端口" "中继服务器端口")
@@ -268,7 +242,7 @@ get_user_input() {
                     declare -g "${ports[i]}=$port_val"
                     break
                 else
-                    echo_warning "端口 $port_val 已被占用"
+                    echo "警告: 端口 $port_val 已被占用"
                     read -p "是否强制使用此端口？(y/N): " use_occupied_port
                     if [[ "$use_occupied_port" =~ ^[Yy]$ ]]; then
                         declare -g "${ports[i]}=$port_val"
@@ -279,7 +253,6 @@ get_user_input() {
         done
     done
 
-    # 密码处理
     read -p "是否生成随机管理员密码？(y/N): " use_random_pwd
     if [[ "$use_random_pwd" =~ ^[Yy]$ ]]; then
         admin_password=$(generate_password)
@@ -295,12 +268,11 @@ get_user_input() {
                 admin_password="$password1"
                 break
             elif [[ "$password1" != "$password2" ]]; then
-                echo_error "两次输入的密码不一致"
+                echo "错误: 两次输入的密码不一致"
             fi
         done
     fi
 
-    # 显示配置摘要
     local ip_info=($(get_ip_address))
     local local_ip="${ip_info[0]}"
     local public_ip="${ip_info[1]}"
@@ -332,7 +304,6 @@ generate_compose_file() {
     local ip_info=($(get_ip_address))
     local local_ip="${ip_info[0]}"
     
-    # 生成 JWT 密钥
     local jwt_key=$(openssl rand -base64 32 2>/dev/null || 
                    echo "fallback_jwt_key_$(date +%s)")
 
@@ -403,7 +374,7 @@ EOF
     log_success "Docker Compose 配置文件已生成: $file_path"
 }
 
-# 部署服务
+# 部署服务（修复版）
 deploy_service() {
     local project_name="$1" admin_password="$2"
     local compose_cmd="$3"
@@ -419,13 +390,13 @@ deploy_service() {
     # 停止现有服务
     if docker ps -a --filter "name=${project_name}-rustdesk" | grep -q "${project_name}-rustdesk"; then
         log_info "停止现有服务..."
-        $compose_cmd -f "$file_path" down || true
+        eval "$compose_cmd -f \"$file_path\" down" || true
         sleep 5
     fi
     
     # 启动服务
     log_info "启动服务..."
-    if ! $compose_cmd -f "$file_path" up -d; then
+    if ! eval "$compose_cmd -f \"$file_path\" up -d"; then
         log_error "服务启动失败"
         log_info "尝试查看 Docker 日志..."
         docker logs "${project_name}-rustdesk" 2>/dev/null | tail -20 || true
@@ -433,7 +404,7 @@ deploy_service() {
     fi
     
     # 等待服务启动
-    sleep 10
+    sleep 15
     
     # 设置管理员密码
     log_info "设置管理员密码..."
@@ -451,7 +422,7 @@ deploy_service() {
     return 0
 }
 
-# 显示部署信息（简化版，避免颜色问题）
+# 显示部署信息
 show_deployment_info() {
     local project_name="$1" api_port="$2" hbbs_port="$3" hbbr_port="$4"
     local admin_password="$5"
@@ -497,8 +468,8 @@ show_deployment_info() {
     echo "=== 管理命令 ==="
     echo "查看服务状态: docker ps -f name=${project_name}"
     echo "查看服务日志: docker logs ${project_name}-rustdesk"
-    echo "停止服务: cd $SCRIPT_DIR && docker compose down"
-    echo "重启服务: cd $SCRIPT_DIR && docker compose restart"
+    echo "停止服务: cd $SCRIPT_DIR && $compose_cmd down"
+    echo "重启服务: cd $SCRIPT_DIR && $compose_cmd restart"
     echo
     echo "=== 重要提示 ==="
     echo "请确保防火墙已开放以下端口:"
@@ -520,8 +491,8 @@ main() {
     echo "========================================"
     
     # 检查依赖
-    local compose_cmd
     compose_cmd=$(check_docker)
+    log_info "使用命令: $compose_cmd"
     
     # 初始化环境
     create_directories
