@@ -51,3 +51,11 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/WebSSH)
 ```
+
+# 一键网络测速脚本
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/%E6%B5%8B%E9%80%9F%E4%B8%AD%E6%96%87)
+```
+
+
+
