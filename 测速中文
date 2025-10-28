@@ -1,27 +1,35 @@
 #!/bin/bash
 echo "🚀 一键网络测速"
 
-# 检查并安装必要工具
-if ! command -v bc &> /dev/null; then
-    echo "安装必要工具..."
-    apt-get update > /dev/null 2>&1 && apt-get install -y bc > /dev/null 2>&1
-fi
-
-# 延迟测试 - 10次ping取平均值
-echo "🔄 测试网络延迟..."
-ping_result=$(ping -c 10 8.8.8.8 | tail -1)
-if echo "$ping_result" | grep -q "/"; then
-    avg_ping=$(echo "$ping_result" | awk -F'/' '{print $5}')
-    echo "网络延迟: $avg_ping ms"
+# 测试网络连通性
+echo "📡 检查网络连通性..."
+if ping -c 2 8.8.8.8 &> /dev/null; then
+    echo "✅ 网络连接正常"
 else
-    echo "网络延迟: 测试失败"
+    echo "❌ 网络连接失败"
+    exit 1
 fi
 
-# 下载速度测试 - 使用 wget 显示实时速度
-echo "⬇️ 测试下载速度（10秒）..."
-echo "正在下载测试文件..."
+# 延迟测试
+echo ""
+echo "🔄 测试网络延迟..."
+ping -c 8 8.8.8.8 | tail -1 | awk -F'/' '{print "平均延迟: "$4" ms"}'
 
-# 使用 wget 并显示进度（会自动显示速度）
-wget -O /dev/null --progress=dot:giga --timeout=15 http://cachefly.cachefly.net/100mb.test 2>&1 | grep --line-buffered -oP '\d+\.\d+ [KM]B/s' | tail -1 | awk '{print "平均下载速度: " $1 " " $2}'
+# 下载速度测试 - 使用更可靠的方法
+echo ""
+echo "⬇️ 测试下载速度..."
+echo "开始下载测试文件..."
 
-echo "✅ 测速完成"
+# 使用 time 和 wget 组合
+/usr/bin/time -f "下载速度: %e秒 完成100MB下载" wget -q -O /dev/null --timeout=30 http://cachefly.cachefly.net/100mb.test
+
+# 计算实际速度
+if [ $? -eq 0 ]; then
+    echo "✅ 下载测试完成"
+else
+    echo "❌ 下载测试失败，尝试备用服务器..."
+    wget -O /dev/null --progress=dot:giga --timeout=20 http://speedtest.ftp.otenet.gr/files/test100Mb.db
+fi
+
+echo ""
+echo "🎯 测速完成"
