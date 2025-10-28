@@ -11,10 +11,9 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # 全局变量
-declare -g SCRIPT_DIR="/data/rustdesk"
-declare -g FIXED_KEY_PUB="Doo0qYGYNSEzxoZRPrnV9AtkeX5FFLjcweiH4K1nIJM="
-declare -g FIXED_KEY_PRIV=""  # 私钥可以为空，RustDesk公钥模式
-declare -g project_name api_port hbbs_port hbbr_port admin_password
+SCRIPT_DIR="/data/rustdesk"
+FIXED_KEY_PUB="Doo0qYGYNSEzxoZRPrnV9AtkeX5FFLjcweiH4K1nIJM="
+FIXED_KEY_PRIV=""
 
 # 日志函数
 log_info() { echo -e "${BLUE}[信息]${NC} $1"; }
@@ -22,9 +21,15 @@ log_success() { echo -e "${GREEN}[成功]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[警告]${NC} $1"; }
 log_error() { echo -e "${RED}[错误]${NC} $1"; }
 
+# 简单输出函数（不带颜色，用于复杂输出）
+echo_info() { echo "[信息] $1"; }
+echo_success() { echo "[成功] $1"; }
+echo_warning() { echo "[警告] $1"; }
+echo_error() { echo "[错误] $1"; }
+
 # 安全清理函数
 cleanup() {
-    log_info "执行清理操作..."
+    echo_info "执行清理操作..."
     rm -f /tmp/rustdesk_keys
     unset admin_password
 }
@@ -35,63 +40,59 @@ trap cleanup EXIT INT TERM
 # 检查命令是否存在
 check_command() {
     if ! command -v "$1" &>/dev/null; then
-        log_error "必需命令 '$1' 未找到"
+        echo_error "必需命令 '$1' 未找到"
         return 1
     fi
     return 0
 }
 
-# 检查端口是否被占用（优化版）
+# 检查端口是否被占用
 check_port() {
     local port=$1
-    local protocol=${2:-tcp}
     
     # 验证端口范围
     if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1024 || "$port" -gt 65535 ]]; then
-        log_error "端口号 $port 无效 (必须是1024-65535)"
+        echo_error "端口号 $port 无效 (必须是1024-65535)"
         return 2
     fi
     
-    # 允许的已占用端口（系统服务）
-    local -a excluded_ports=(21115 21118 21119)
-    for excluded in "${excluded_ports[@]}"; do
-        if [[ "$port" -eq "$excluded" ]]; then
-            log_info "端口 $port 是RustDesk系统端口，允许占用"
-            return 0
-        fi
-    done
-    
     # 检查端口占用
-    if check_command netstat; then
+    local port_in_use=false
+    
+    if command -v netstat &>/dev/null; then
         if netstat -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
-            log_warning "端口 $port 被占用 (netstat)"
-            return 1
+            echo_warning "端口 $port 被占用 (netstat)"
+            port_in_use=true
         fi
     fi
     
-    if check_command ss; then
+    if command -v ss &>/dev/null; then
         if ss -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
-            log_warning "端口 $port 被占用 (ss)"
-            return 1
+            echo_warning "端口 $port 被占用 (ss)"
+            port_in_use=true
         fi
     fi
 
     # 检查 Docker 容器占用
-    if check_command docker; then
+    if command -v docker &>/dev/null; then
         if docker ps --format "table {{.Ports}}" 2>/dev/null | grep -q ":${port}->"; then
-            log_warning "端口 $port 被 Docker 容器占用"
-            return 1
+            echo_warning "端口 $port 被 Docker 容器占用"
+            port_in_use=true
         fi
+    fi
+    
+    if [[ "$port_in_use" == "true" ]]; then
+        return 1
     fi
     
     return 0
 }
 
-# 检查 Docker 环境（优化版）
+# 检查 Docker 环境
 check_docker() {
     log_info "检查 Docker 环境..."
     
-    if ! check_command docker; then
+    if ! command -v docker &>/dev/null; then
         log_error "Docker 未安装，请先安装 Docker"
         exit 1
     fi
@@ -103,7 +104,7 @@ check_docker() {
 
     # 检查 Docker Compose
     local compose_cmd=""
-    if check_command docker-compose; then
+    if command -v docker-compose &>/dev/null; then
         compose_cmd="docker-compose"
         log_info "使用 docker-compose"
     elif docker compose version &>/dev/null; then
@@ -118,39 +119,30 @@ check_docker() {
     echo "$compose_cmd"
 }
 
-# 创建目录结构（权限优化）
+# 创建目录结构
 create_directories() {
     log_info "创建目录结构..."
     
     local dirs=("$SCRIPT_DIR/server" "$SCRIPT_DIR/api" "$SCRIPT_DIR/db")
-    local current_user=$(id -u)
-    local current_group=$(id -g)
     
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
-            if mkdir -p "$dir"; then
-                log_info "创建目录: $dir"
-            else
-                # 如果普通用户创建失败，尝试sudo
-                sudo mkdir -p "$dir"
-                log_warning "使用sudo创建目录: $dir"
-            fi
+            sudo mkdir -p "$dir"
+            log_info "创建目录: $dir"
         else
             log_info "目录已存在: $dir"
         fi
-        
-        # 设置权限
-        if [[ -w "$dir" ]]; then
-            chmod 755 "$dir"
-        else
-            sudo chmod 755 "$dir"
-        fi
     done
 
-    # 设置所有权（仅在需要时使用sudo）
-    if [[ ! -w "$SCRIPT_DIR" ]]; then
-        sudo chown -R "${current_user}:${current_group}" "$SCRIPT_DIR"
-        log_info "设置目录所有权"
+    # 设置权限
+    sudo chmod 755 "$SCRIPT_DIR"
+    sudo chmod 755 "$SCRIPT_DIR/server"
+    sudo chmod 755 "$SCRIPT_DIR/api"
+    sudo chmod 755 "$SCRIPT_DIR/db"
+
+    # 设置所有权
+    if [[ "$(id -u)" -ne 0 ]]; then
+        sudo chown -R "$(id -u):$(id -g)" "$SCRIPT_DIR"
     fi
 }
 
@@ -175,7 +167,7 @@ setup_fixed_key() {
     # 写入固定公钥
     echo "$FIXED_KEY_PUB" > "$server_dir/id_ed25519.pub"
     
-    # 创建空的私钥文件（RustDesk服务器只需要公钥）
+    # 创建空的私钥文件
     touch "$server_dir/id_ed25519"
     
     # 设置文件权限
@@ -187,7 +179,6 @@ setup_fixed_key() {
         local saved_key=$(cat "$server_dir/id_ed25519.pub")
         if [[ "$saved_key" == "$FIXED_KEY_PUB" ]]; then
             log_success "固定密钥设置成功"
-            log_info "客户端密钥: $FIXED_KEY_PUB"
             return 0
         else
             log_error "密钥写入验证失败"
@@ -202,7 +193,6 @@ setup_fixed_key() {
 # 安全密码生成
 generate_password() {
     local length=12
-    # 使用更安全的密码字符集
     tr -dc 'A-Za-z0-9@#$%^&*+' < /dev/urandom 2>/dev/null | head -c $length
 }
 
@@ -230,21 +220,21 @@ validate_input() {
     case $type in
         "project_name")
             [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] && return 0
-            log_error "项目名称只能包含字母、数字、连字符和下划线"
+            echo_error "项目名称只能包含字母、数字、连字符和下划线"
             ;;
         "port")
             [[ "$value" =~ ^[0-9]+$ ]] && [[ "$value" -ge 1024 && "$value" -le 65535 ]] && return 0
-            log_error "端口号必须是 1024-65535 之间的数字"
+            echo_error "端口号必须是 1024-65535 之间的数字"
             ;;
         "password")
             [[ -n "$value" && ${#value} -ge 8 ]] && return 0
-            log_error "密码不能为空且至少 8 位"
+            echo_error "密码不能为空且至少 8 位"
             ;;
     esac
     return 1
 }
 
-# 获取用户输入（优化版）
+# 获取用户输入
 get_user_input() {
     local default_project="rustdesk-server"
     local default_api_port="21114"
@@ -278,7 +268,7 @@ get_user_input() {
                     declare -g "${ports[i]}=$port_val"
                     break
                 else
-                    log_warning "端口 $port_val 已被占用"
+                    echo_warning "端口 $port_val 已被占用"
                     read -p "是否强制使用此端口？(y/N): " use_occupied_port
                     if [[ "$use_occupied_port" =~ ^[Yy]$ ]]; then
                         declare -g "${ports[i]}=$port_val"
@@ -305,7 +295,7 @@ get_user_input() {
                 admin_password="$password1"
                 break
             elif [[ "$password1" != "$password2" ]]; then
-                log_error "两次输入的密码不一致"
+                echo_error "两次输入的密码不一致"
             fi
         done
     fi
@@ -321,7 +311,7 @@ get_user_input() {
     log_info "API服务端口: $api_port"
     log_info "ID服务器端口: $hbbs_port"
     log_info "中继服务器端口: $hbbr_port"
-    log_info "管理员密码: ${admin_password:0:2}******"  # 更安全的显示
+    log_info "管理员密码: ${admin_password:0:2}******"
     log_info "本地 IP: $local_ip"
     log_info "公网 IP: $public_ip"
     echo
@@ -333,7 +323,7 @@ get_user_input() {
     fi
 }
 
-# 生成 Docker Compose 配置（使用固定密钥）
+# 生成 Docker Compose 配置
 generate_compose_file() {
     local project_name="$1" api_port="$2" hbbs_port="$3" hbbr_port="$4"
     local admin_password="$5"
@@ -342,9 +332,9 @@ generate_compose_file() {
     local ip_info=($(get_ip_address))
     local local_ip="${ip_info[0]}"
     
-    # 生成安全的 JWT 密钥
+    # 生成 JWT 密钥
     local jwt_key=$(openssl rand -base64 32 2>/dev/null || 
-                   echo "fallback_jwt_key_$(date +%s)$(generate_password)")
+                   echo "fallback_jwt_key_$(date +%s)")
 
     cat > "$file_path" << EOF
 # RustDesk Server 配置
@@ -385,7 +375,7 @@ services:
       - BIND_PORT=${hbbr_port}
       # 网络配置
       - ALWAYS_USE_RELAY=Y
-      # 固定密钥配置 - 使用预生成的密钥文件
+      # 固定密钥配置
       - KEY_PUB=${FIXED_KEY_PUB}
       # API 配置
       - RUSTDESK_API_RUSTDESK_ID_SERVER=${local_ip}:${hbbs_port}
@@ -408,17 +398,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 EOF
 
     log_success "Docker Compose 配置文件已生成: $file_path"
 }
 
-# 部署服务（优化版）
+# 部署服务
 deploy_service() {
     local project_name="$1" admin_password="$2"
     local compose_cmd="$3"
@@ -442,6 +427,8 @@ deploy_service() {
     log_info "启动服务..."
     if ! $compose_cmd -f "$file_path" up -d; then
         log_error "服务启动失败"
+        log_info "尝试查看 Docker 日志..."
+        docker logs "${project_name}-rustdesk" 2>/dev/null | tail -20 || true
         return 1
     fi
     
@@ -464,7 +451,7 @@ deploy_service() {
     return 0
 }
 
-# 显示部署信息（包含固定密钥）
+# 显示部署信息（简化版，避免颜色问题）
 show_deployment_info() {
     local project_name="$1" api_port="$2" hbbs_port="$3" hbbr_port="$4"
     local admin_password="$5"
@@ -474,28 +461,30 @@ show_deployment_info() {
     local public_ip="${ip_info[1]}"
     
     echo
-    log_success "🎉 RustDesk 部署完成！"
+    echo "========================================"
+    echo "🎉 RustDesk 部署完成！"
+    echo "========================================"
     echo
-    echo "=================== 访问信息 ==================="
-    echo -e "Web管理界面: ${GREEN}http://${local_ip}:${api_port}${NC}"
+    echo "=== 访问信息 ==="
+    echo "Web管理界面: http://${local_ip}:${api_port}"
     if [[ "$public_ip" != "无法获取" ]]; then
-        echo -e "公网访问: ${GREEN}http://${public_ip}:${api_port}${NC}"
+        echo "公网访问: http://${public_ip}:${api_port}"
     fi
     echo
-    echo "=================== 账号信息 ==================="
-    echo -e "管理员账号: ${GREEN}admin${NC}"
-    echo -e "管理员密码: ${GREEN}${admin_password}${NC}"
+    echo "=== 账号信息 ==="
+    echo "管理员账号: admin"
+    echo "管理员密码: ${admin_password}"
     echo
-    echo "=================== 密钥信息 ==================="
-    echo -e "固定客户端密钥: ${GREEN}${FIXED_KEY_PUB}${NC}"
-    echo -e "密钥状态: ${GREEN}已预配置${NC}"
+    echo "=== 密钥信息 ==="
+    echo "固定客户端密钥: ${FIXED_KEY_PUB}"
+    echo "密钥状态: 已预配置"
     echo
-    echo "=================== 服务器配置 ==================="
-    echo -e "ID 服务器: ${GREEN}${local_ip}:${hbbs_port}${NC}"
-    echo -e "中继服务器: ${GREEN}${local_ip}:${hbbr_port}${NC}"
-    echo -e "API 服务器: ${GREEN}http://${local_ip}:${api_port}${NC}"
+    echo "=== 服务器配置 ==="
+    echo "ID 服务器: ${local_ip}:${hbbs_port}"
+    echo "中继服务器: ${local_ip}:${hbbr_port}"
+    echo "API 服务器: http://${local_ip}:${api_port}"
     echo
-    echo "=================== 客户端配置步骤 ==================="
+    echo "=== 客户端配置步骤 ==="
     echo "1. 打开 RustDesk 客户端"
     echo "2. 点击 ID/中继服务器 设置"
     echo "3. 填写以下信息:"
@@ -504,30 +493,26 @@ show_deployment_info() {
     echo "   - Key: ${FIXED_KEY_PUB}"
     echo "4. 点击 '应用' 保存"
     echo "5. 重启 RustDesk 客户端生效"
-    echo "==================================================="
     echo
-    echo "=================== 管理命令 ==================="
-    echo -e "查看服务状态: ${YELLOW}docker ps -f name=${project_name}${NC}"
-    echo -e "查看服务日志: ${YELLOW}docker logs ${project_name}-rustdesk${NC}"
-    echo -e "停止服务: ${YELLOW}cd $SCRIPT_DIR && docker compose down${NC}"
-    echo -e "重启服务: ${YELLOW}cd $SCRIPT_DIR && docker compose restart${NC}"
-    echo "================================================"
+    echo "=== 管理命令 ==="
+    echo "查看服务状态: docker ps -f name=${project_name}"
+    echo "查看服务日志: docker logs ${project_name}-rustdesk"
+    echo "停止服务: cd $SCRIPT_DIR && docker compose down"
+    echo "重启服务: cd $SCRIPT_DIR && docker compose restart"
     echo
-    log_warning "请确保防火墙已开放以下端口:"
-    echo -e "  - API服务端口: ${YELLOW}${api_port}${NC}"
-    echo -e "  - ID服务器端口: ${YELLOW}${hbbs_port}${NC}"
-    echo -e "  - 中继服务器端口: ${YELLOW}${hbbr_port}${NC}"
-    echo -e "  - 其他端口: ${YELLOW}21115, 21118, 21119${NC}"
-    
-    # 显示重要提示
+    echo "=== 重要提示 ==="
+    echo "请确保防火墙已开放以下端口:"
+    echo "  - API服务端口: ${api_port}"
+    echo "  - ID服务器端口: ${hbbs_port}"
+    echo "  - 中继服务器端口: ${hbbr_port}"
+    echo "  - 其他端口: 21115, 21118, 21119"
     echo
-    echo "=================== 重要提示 ==================="
-    log_info "所有客户端必须使用相同的密钥: ${FIXED_KEY_PUB}"
-    log_info "此密钥已预配置，客户端连接时无需额外设置"
-    echo "================================================"
+    echo "所有客户端必须使用相同的密钥: ${FIXED_KEY_PUB}"
+    echo "此密钥已预配置，客户端连接时无需额外设置"
+    echo
 }
 
-# 主函数（修改版）
+# 主函数
 main() {
     echo
     log_info "开始 RustDesk 服务器部署"
@@ -535,7 +520,8 @@ main() {
     echo "========================================"
     
     # 检查依赖
-    local compose_cmd=$(check_docker)
+    local compose_cmd
+    compose_cmd=$(check_docker)
     
     # 初始化环境
     create_directories
@@ -543,7 +529,7 @@ main() {
     # 获取配置
     get_user_input
     
-    # 设置固定密钥（替换原来的密钥生成）
+    # 设置固定密钥
     setup_fixed_key
     
     # 生成配置文件
@@ -561,6 +547,7 @@ main() {
         docker ps -f "name=${project_name}-rustdesk"
     else
         log_error "部署失败，请检查上述错误信息"
+        log_info "尝试手动启动: cd $SCRIPT_DIR && $compose_cmd up -d"
         exit 1
     fi
 }
