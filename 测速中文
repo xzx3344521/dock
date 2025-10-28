@@ -30,7 +30,16 @@ fi
 # 测速
 echo "📊 开始测速..."
 if command -v speedtest-cli &>/dev/null; then
-    speedtest-cli --simple
+    result=$(speedtest-cli --simple)
+    # 转换为中文显示
+    echo "$result" | sed '
+        s/Ping:/网络延迟:/
+        s/Download:/下载速度:/
+        s/Upload:/上传速度:/
+        s/ ms/ 毫秒/
+        s/ Mbit\/s/ Mbit\/秒/
+        s/ Gbit\/s/ Gbit\/秒/
+    '
 else
     # 备用测速方法
     start_time=$(date +%s.%N)
@@ -38,9 +47,9 @@ else
     end_time=$(date +%s.%N)
     download_time=$(echo "$end_time - $start_time" | bc)
     speed_mbps=$(echo "scale=2; (100 * 8) / $download_time" | bc)
-    echo "Ping: 0.0 ms"
-    echo "Download: ${speed_mbps} Mbit/s"
-    echo "Upload: 0.0 Mbit/s"
+    echo "网络延迟: 0.0 毫秒"
+    echo "下载速度: ${speed_mbps} Mbit/秒"
+    echo "上传速度: 0.0 Mbit/秒"
 fi
 
 echo "✅ 测速完成"
