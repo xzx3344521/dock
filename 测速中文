@@ -1,23 +1,383 @@
 #!/bin/bash
-echo "🚀 网络测速工具"
+
+echo "🚀 Debian 12 专用网络测速脚本"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+# 检查系统是否为 Debian
+check_debian() {
+    if [ ! -f /etc/debian_version ]; then
+        log_error "此脚本专为 Debian 系统设计"
+        exit 1
+    fi
+    
+    local version=$(cat /etc/debian_version)
+    log_info "检测到 Debian 版本: $version"
+}
+
+# 检查并安装必要工具
+install_debian_tools() {
+    log_info "更新软件包列表..."
+    sudo apt-get update
+    
+    local tools=("curl" "wget" "iputils-ping" "bc" "dnsutils" "traceroute")
+    local missing_tools=()
+    
+    # 检查缺少的工具
+    for tool in "${tools[@]}"; do
+        if ! dpkg -l | grep -q "^ii  $tool "; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    if [ ${#missing_tools[@]} -ne 0 ]; then
+        log_warning "安装缺少的工具: ${missing_tools[*]}"
+        sudo apt-get install -y "${missing_tools[@]}"
+        
+        if [ $? -eq 0 ]; then
+            log_success "工具安装完成"
+        else
+            log_error "工具安装失败"
+            exit 1
+        fi
+    else
+        log_success "所有必要工具已安装"
+    fi
+}
+
+# 安装 speedtest-cli
+install_speedtest_cli() {
+    if ! command -v speedtest-cli &> /dev/null; then
+        log_info "安装 speedtest-cli..."
+        
+        # 方法1: 使用 apt 安装
+        if sudo apt-get install -y speedtest-cli 2>/dev/null; then
+            log_success "speedtest-cli 安装成功"
+            return 0
+        fi
+        
+        # 方法2: 使用 pip 安装
+        if command -v pip3 &> /dev/null; then
+            log_info "尝试使用 pip3 安装..."
+            if pip3 install speedtest-cli 2>/dev/null; then
+                log_success "speedtest-cli 安装成功"
+                return 0
+            fi
+        fi
+        
+        # 方法3: 直接下载
+        log_info "直接下载 speedtest-cli..."
+        wget -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+        chmod +x speedtest-cli
+        sudo mv speedtest-cli /usr/local/bin/
+        
+        if command -v speedtest-cli &> /dev/null; then
+            log_success "speedtest-cli 安装成功"
+        else
+            log_warning "speedtest-cli 安装失败，跳过"
+        fi
+    fi
+}
+
+# 测试网络连通性
+test_connectivity() {
+    log_info "检查网络连通性..."
+    
+    # 测试多个国内可靠站点
+    local test_hosts=(
+        "223.5.5.5"           # 阿里DNS
+        "114.114.114.114"     # 114DNS
+        "1.1.1.1"            # Cloudflare
+        "8.8.8.8"            # Google DNS
+    )
+    
+    local connected=false
+    
+    for host in "${test_hosts[@]}"; do
+        if ping -c 2 -W 3 "$host" &> /dev/null; then
+            log_success "网络连接正常 ($host)"
+            connected=true
+            break
+        else
+            log_warning "无法连接到 $host"
+        fi
+    done
+    
+    if [ "$connected" = false ]; then
+        log_error "所有网络连接测试均失败"
+        return 1
+    fi
+    
+    return 0
+}
+
+# DNS 解析测试
+test_dns() {
+    log_info "测试 DNS 解析..."
+    
+    local domains=("baidu.com" "qq.com" "github.com" "debian.org")
+    
+    for domain in "${domains[@]}"; do
+        if nslookup "$domain" &> /dev/null; then
+            log_success "DNS 解析正常: $domain"
+        else
+            log_warning "DNS 解析失败: $domain"
+        fi
+    done
+}
 
 # 延迟测试
-echo "1. 延迟测试:"
-ping -c 5 114.114.114.114 | grep "avg" | awk -F'/' '{print "   平均延迟: "$4" ms"}'
+test_latency() {
+    log_info "测试网络延迟..."
+    
+    local latency_hosts=(
+        "223.5.5.5"           # 阿里DNS
+        "114.114.114.114"     # 114DNS
+        "1.1.1.1"            # Cloudflare
+        "8.8.8.8"            # Google DNS
+    )
+    
+    for host in "${latency_hosts[@]}"; do
+        if ping -c 4 -W 2 "$host" &> /dev/null; then
+            local result
+            result=$(ping -c 4 -W 2 "$host" | tail -1 | awk -F'/' '{print "平均延迟: "$4" ms"}')
+            log_info "$host - $result"
+        else
+            log_warning "$host - 延迟测试失败"
+        fi
+    done
+}
 
-# 下载速度测试 - 使用系统内置方法
-echo "2. 下载速度测试:"
-echo "   生成测试数据..."
-time dd if=/dev/zero of=/tmp/testfile bs=1M count=100 2>&1 | grep "MB/s" | awk '{print "   磁盘写入速度: "$8" "$9}'
+# 使用 speedtest-cli 测试
+test_speedtest_cli() {
+    if command -v speedtest-cli &> /dev/null; then
+        log_info "使用 speedtest-cli 进行专业测速..."
+        speedtest-cli --simple
+        return $?
+    else
+        return 1
+    fi
+}
 
-# 网络下载测试（可选）
-echo "3. 网络下载测试:"
-if command -v curl &> /dev/null; then
-    echo "   正在测试网络下载..."
-    curl -s -w "   下载时间: %{time_total}秒\n" -o /dev/null https://www.baidu.com
-else
-    echo "   跳过网络下载测试 (curl不可用)"
-fi
+# 下载速度测试
+test_download_speed() {
+    log_info "测试下载速度..."
+    
+    # 国内测速节点
+    local cn_speed_test_urls=(
+        "http://mirrors.163.com/debian/dists/stable/Release"  # 网易镜像
+        "http://mirrors.aliyun.com/debian/dists/stable/Release" # 阿里云镜像
+        "http://mirrors.tuna.tsinghua.edu.cn/debian/dists/stable/Release" # 清华镜像
+    )
+    
+    # 国际测速节点
+    local speed_test_urls=(
+        "http://speedtest.ftp.otenet.gr/files/test100Mb.db"
+        "http://ipv4.download.thinkbroadband.com/100MB.zip"
+    )
+    
+    local speed_test_success=false
+    
+    # 优先使用 speedtest-cli
+    if test_speedtest_cli; then
+        speed_test_success=true
+        return 0
+    fi
+    
+    log_warning "speedtest-cli 不可用，使用备用方法"
+    
+    # 方法1: 使用 curl 测试下载速度
+    for url in "${cn_speed_test_urls[@]}" "${speed_test_urls[@]}"; do
+        log_info "尝试节点: $(echo "$url" | cut -d'/' -f1-3)"
+        
+        if curl -I --connect-timeout 10 "$url" &> /dev/null; then
+            local start_time end_time download_time speed_mbps
+            
+            start_time=$(date +%s.%N)
+            # 下载 10MB 数据来测试速度
+            curl -L --max-time 30 --progress-bar -o /dev/null "$url" 2>&1 | grep -o '[0-9.]* [GM]B' | tail -1
+            end_time=$(date +%s.%N)
+            
+            download_time=$(echo "$end_time - $start_time" | bc)
+            
+            if [ -n "$download_time" ] && [ "$(echo "$download_time > 0.1" | bc)" -eq 1 ]; then
+                # 假设下载了约10MB数据
+                local file_size_bytes=10000000
+                speed_mbps=$(echo "scale=2; ($file_size_bytes * 8) / ($download_time * 1000000)" | bc)
+                
+                if [ -n "$speed_mbps" ]; then
+                    log_success "下载速度: ${speed_mbps} Mbps"
+                    speed_test_success=true
+                    break
+                fi
+            fi
+        else
+            log_warning "节点不可用: $(echo "$url" | cut -d'/' -f1-3)"
+        fi
+    done
+    
+    # 方法2: 使用 wget 测试
+    if [ "$speed_test_success" = false ] && command -v wget &> /dev/null; then
+        log_info "使用 wget 测试下载速度"
+        
+        for url in "${cn_speed_test_urls[@]}"; do
+            if wget --spider --timeout=10 "$url" &> /dev/null; then
+                log_info "测试节点: $(echo "$url" | cut -d'/' -f1-3)"
+                wget -O /dev/null --progress=dot "$url" 2>&1 | grep --line-buffered -o '[0-9.]* [KMGT]B/s' | tail -1
+                speed_test_success=true
+                break
+            fi
+        done
+    fi
+    
+    if [ "$speed_test_success" = false ]; then
+        log_error "所有下载速度测试方法均失败"
+        return 1
+    fi
+    
+    return 0
+}
 
-rm -f /tmp/testfile
-echo "✅ 测试完成"
+# 路由追踪
+test_traceroute() {
+    log_info "进行路由追踪..."
+    
+    if command -v traceroute &> /dev/null; then
+        traceroute -m 10 223.5.5.5 | head -15
+    else
+        log_warning "traceroute 不可用"
+    fi
+}
+
+# 网络接口信息
+show_network_info() {
+    log_info "网络接口信息:"
+    ip addr show | grep -E "^( |[0-9])" | grep -E "inet|state" | head -10
+    
+    log_info "路由表信息:"
+    ip route | head -5
+}
+
+# 清理函数
+cleanup() {
+    log_info "清理临时文件..."
+    rm -f /tmp/speedtest*.tmp
+    rm -f speedtest-cli
+}
+
+# 主函数
+main() {
+    echo "=================================================="
+    echo "           🚀 Debian 12 网络测速脚本"
+    echo "=================================================="
+    
+    # 设置错误处理
+    set -e
+    trap 'cleanup; log_error "脚本执行中断"; exit 130' INT TERM
+    trap 'cleanup' EXIT
+    
+    # 检查系统
+    check_debian
+    
+    # 安装必要工具
+    install_debian_tools
+    install_speedtest_cli
+    
+    # 测试网络连通性
+    if ! test_connectivity; then
+        log_error "网络连接测试失败，请检查网络设置"
+        exit 1
+    fi
+    
+    echo ""
+    
+    # 显示网络信息
+    show_network_info
+    
+    echo ""
+    
+    # DNS 测试
+    test_dns
+    
+    echo ""
+    
+    # 延迟测试
+    test_latency
+    
+    echo ""
+    
+    # 下载速度测试
+    if ! test_download_speed; then
+        log_warning "下载速度测试遇到问题"
+    fi
+    
+    echo ""
+    
+    # 路由追踪（可选）
+    read -p "是否进行路由追踪？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        test_traceroute
+    fi
+    
+    echo ""
+    echo "=================================================="
+    log_success "网络测速完成"
+    echo "=================================================="
+    
+    # 显示建议
+    log_info "建议:"
+    echo "1. 如果速度较慢，可以尝试更换 DNS 服务器"
+    echo "2. 检查网络连接和路由器设置"
+    echo "3. 联系网络服务提供商"
+}
+
+# 显示使用说明
+show_usage() {
+    echo "使用方法: $0 [选项]"
+    echo "选项:"
+    echo "  -h, --help     显示此帮助信息"
+    echo "  -q, --quick    快速模式（跳过路由追踪）"
+    echo "  -f, --full     完整模式（包含所有测试）"
+}
+
+# 参数解析
+case "${1:-}" in
+    -h|--help)
+        show_usage
+        exit 0
+        ;;
+    -q|--quick)
+        # 快速模式
+        main | grep -E "✅|❌|⚠️|ℹ️|平均延迟|下载速度"
+        ;;
+    -f|--full)
+        # 完整模式
+        main
+        ;;
+    *)
+        main
+        ;;
+esac
