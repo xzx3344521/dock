@@ -1,24 +1,27 @@
 #!/bin/bash
-echo "🚀 一键网络测速（稳定版）"
+echo "🚀 一键网络测速"
 
-# 延迟测试
-echo "1. 网络延迟测试（10次）："
-ping -c 10 114.114.114.114 | tail -1 | awk -F'/' '{print "   平均延迟: "$4" ms"}'
+# 检查并安装必要工具
+if ! command -v bc &> /dev/null; then
+    echo "安装必要工具..."
+    apt-get update > /dev/null 2>&1 && apt-get install -y bc > /dev/null 2>&1
+fi
 
-# 下载速度测试（确保测试10秒）
-echo "2. 下载速度测试（10秒）："
-for i in {1..3}; do
-    echo "   第$i次测试..."
-    start=$(date +%s)
-    speed=$(curl -s -w "%{speed_download}" -o /dev/null --max-time 10 http://cachefly.cachefly.net/100mb.test)
-    end=$(date +%s)
-    duration=$((end - start))
-    
-    if [ $duration -ge 5 ]; then
-        speed_mbps=$(echo "scale=2; $speed / 1024 / 1024" | bc)
-        echo "   下载速度: $speed_mbps MB/s"
-        break
-    fi
-done
+# 延迟测试 - 10次ping取平均值
+echo "🔄 测试网络延迟..."
+ping_result=$(ping -c 10 8.8.8.8 | tail -1)
+if echo "$ping_result" | grep -q "/"; then
+    avg_ping=$(echo "$ping_result" | awk -F'/' '{print $5}')
+    echo "网络延迟: $avg_ping ms"
+else
+    echo "网络延迟: 测试失败"
+fi
+
+# 下载速度测试 - 使用 wget 显示实时速度
+echo "⬇️ 测试下载速度（10秒）..."
+echo "正在下载测试文件..."
+
+# 使用 wget 并显示进度（会自动显示速度）
+wget -O /dev/null --progress=dot:giga --timeout=15 http://cachefly.cachefly.net/100mb.test 2>&1 | grep --line-buffered -oP '\d+\.\d+ [KM]B/s' | tail -1 | awk '{print "平均下载速度: " $1 " " $2}'
 
 echo "✅ 测速完成"
