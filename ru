@@ -16,7 +16,143 @@ declare -g FIXED_KEY_PUB="Doo0qYGYNSEzxoZRPrnV9AtkeX5FFLjcweiH4K1nIJM="
 declare -g FIXED_KEY_PRIV=""  # 私钥可以为空，RustDesk公钥模式
 declare -g project_name api_port hbbs_port hbbr_port admin_password
 
-# 其他函数保持不变...
+# 日志函数
+log_info() { echo -e "${BLUE}[信息]${NC} $1"; }
+log_success() { echo -e "${GREEN}[成功]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[警告]${NC} $1"; }
+log_error() { echo -e "${RED}[错误]${NC} $1"; }
+
+# 安全清理函数
+cleanup() {
+    log_info "执行清理操作..."
+    rm -f /tmp/rustdesk_keys
+    unset admin_password
+}
+
+# 信号处理
+trap cleanup EXIT INT TERM
+
+# 检查命令是否存在
+check_command() {
+    if ! command -v "$1" &>/dev/null; then
+        log_error "必需命令 '$1' 未找到"
+        return 1
+    fi
+    return 0
+}
+
+# 检查端口是否被占用（优化版）
+check_port() {
+    local port=$1
+    local protocol=${2:-tcp}
+    
+    # 验证端口范围
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1024 || "$port" -gt 65535 ]]; then
+        log_error "端口号 $port 无效 (必须是1024-65535)"
+        return 2
+    fi
+    
+    # 允许的已占用端口（系统服务）
+    local -a excluded_ports=(21115 21118 21119)
+    for excluded in "${excluded_ports[@]}"; do
+        if [[ "$port" -eq "$excluded" ]]; then
+            log_info "端口 $port 是RustDesk系统端口，允许占用"
+            return 0
+        fi
+    done
+    
+    # 检查端口占用
+    if check_command netstat; then
+        if netstat -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
+            log_warning "端口 $port 被占用 (netstat)"
+            return 1
+        fi
+    fi
+    
+    if check_command ss; then
+        if ss -tuln 2>/dev/null | grep -q ":${port}[[:space:]]"; then
+            log_warning "端口 $port 被占用 (ss)"
+            return 1
+        fi
+    fi
+
+    # 检查 Docker 容器占用
+    if check_command docker; then
+        if docker ps --format "table {{.Ports}}" 2>/dev/null | grep -q ":${port}->"; then
+            log_warning "端口 $port 被 Docker 容器占用"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# 检查 Docker 环境（优化版）
+check_docker() {
+    log_info "检查 Docker 环境..."
+    
+    if ! check_command docker; then
+        log_error "Docker 未安装，请先安装 Docker"
+        exit 1
+    fi
+
+    if ! docker info &>/dev/null; then
+        log_error "Docker 服务异常，请检查 Docker 状态"
+        exit 1
+    fi
+
+    # 检查 Docker Compose
+    local compose_cmd=""
+    if check_command docker-compose; then
+        compose_cmd="docker-compose"
+        log_info "使用 docker-compose"
+    elif docker compose version &>/dev/null; then
+        compose_cmd="docker compose"
+        log_info "使用 docker compose"
+    else
+        log_error "Docker Compose 未安装"
+        exit 1
+    fi
+
+    log_success "Docker 环境检查通过"
+    echo "$compose_cmd"
+}
+
+# 创建目录结构（权限优化）
+create_directories() {
+    log_info "创建目录结构..."
+    
+    local dirs=("$SCRIPT_DIR/server" "$SCRIPT_DIR/api" "$SCRIPT_DIR/db")
+    local current_user=$(id -u)
+    local current_group=$(id -g)
+    
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            if mkdir -p "$dir"; then
+                log_info "创建目录: $dir"
+            else
+                # 如果普通用户创建失败，尝试sudo
+                sudo mkdir -p "$dir"
+                log_warning "使用sudo创建目录: $dir"
+            fi
+        else
+            log_info "目录已存在: $dir"
+        fi
+        
+        # 设置权限
+        if [[ -w "$dir" ]]; then
+            chmod 755 "$dir"
+        else
+            sudo chmod 755 "$dir"
+        fi
+    done
+
+    # 设置所有权（仅在需要时使用sudo）
+    if [[ ! -w "$SCRIPT_DIR" ]]; then
+        sudo chown -R "${current_user}:${current_group}" "$SCRIPT_DIR"
+        log_info "设置目录所有权"
+    fi
+}
 
 # 固定密钥设置函数
 setup_fixed_key() {
@@ -60,6 +196,140 @@ setup_fixed_key() {
     else
         log_error "密钥文件创建失败"
         return 1
+    fi
+}
+
+# 安全密码生成
+generate_password() {
+    local length=12
+    # 使用更安全的密码字符集
+    tr -dc 'A-Za-z0-9@#$%^&*+' < /dev/urandom 2>/dev/null | head -c $length
+}
+
+# 获取本机IP
+get_ip_address() {
+    local local_ip public_ip
+    
+    # 获取本地IP
+    local_ip=$(hostname -I | awk '{print $1}' | head -1)
+    if [[ -z "$local_ip" ]]; then
+        local_ip="127.0.0.1"
+    fi
+    
+    # 获取公网IP（带超时）
+    public_ip=$(curl -s --connect-timeout 3 -m 5 ifconfig.me 2>/dev/null || echo "无法获取")
+    
+    echo "$local_ip" "$public_ip"
+}
+
+# 验证用户输入
+validate_input() {
+    local type=$1
+    local value=$2
+    
+    case $type in
+        "project_name")
+            [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] && return 0
+            log_error "项目名称只能包含字母、数字、连字符和下划线"
+            ;;
+        "port")
+            [[ "$value" =~ ^[0-9]+$ ]] && [[ "$value" -ge 1024 && "$value" -le 65535 ]] && return 0
+            log_error "端口号必须是 1024-65535 之间的数字"
+            ;;
+        "password")
+            [[ -n "$value" && ${#value} -ge 8 ]] && return 0
+            log_error "密码不能为空且至少 8 位"
+            ;;
+    esac
+    return 1
+}
+
+# 获取用户输入（优化版）
+get_user_input() {
+    local default_project="rustdesk-server"
+    local default_api_port="21114"
+    local default_hbbs_port="21116"
+    local default_hbbr_port="21117"
+    
+    # 读取项目名称
+    while true; do
+        read -p "请输入项目名称（默认: $default_project）: " input_project
+        project_name=$(echo "$input_project" | xargs)
+        project_name=${project_name:-$default_project}
+        
+        if validate_input "project_name" "$project_name"; then
+            break
+        fi
+    done
+
+    # 读取端口配置
+    local ports=("api_port" "hbbs_port" "hbbr_port")
+    local defaults=("$default_api_port" "$default_hbbs_port" "$default_hbbr_port")
+    local descriptions=("API服务端口" "ID服务器端口" "中继服务器端口")
+    
+    for i in "${!ports[@]}"; do
+        while true; do
+            read -p "请输入${descriptions[i]}（默认: ${defaults[i]}）: " input_port
+            local port_val=$(echo "$input_port" | xargs)
+            port_val=${port_val:-${defaults[i]}}
+            
+            if validate_input "port" "$port_val"; then
+                if check_port "$port_val"; then
+                    declare -g "${ports[i]}=$port_val"
+                    break
+                else
+                    log_warning "端口 $port_val 已被占用"
+                    read -p "是否强制使用此端口？(y/N): " use_occupied_port
+                    if [[ "$use_occupied_port" =~ ^[Yy]$ ]]; then
+                        declare -g "${ports[i]}=$port_val"
+                        break
+                    fi
+                fi
+            fi
+        done
+    done
+
+    # 密码处理
+    read -p "是否生成随机管理员密码？(y/N): " use_random_pwd
+    if [[ "$use_random_pwd" =~ ^[Yy]$ ]]; then
+        admin_password=$(generate_password)
+        log_info "已生成随机密码"
+    else
+        while true; do
+            read -sp "请输入管理员密码（最少 8 位）: " password1
+            echo
+            read -sp "请确认管理员密码: " password2
+            echo
+            
+            if validate_input "password" "$password1" && [[ "$password1" == "$password2" ]]; then
+                admin_password="$password1"
+                break
+            elif [[ "$password1" != "$password2" ]]; then
+                log_error "两次输入的密码不一致"
+            fi
+        done
+    fi
+
+    # 显示配置摘要
+    local ip_info=($(get_ip_address))
+    local local_ip="${ip_info[0]}"
+    local public_ip="${ip_info[1]}"
+    
+    echo
+    log_info "配置摘要:"
+    log_info "项目名称: $project_name"
+    log_info "API服务端口: $api_port"
+    log_info "ID服务器端口: $hbbs_port"
+    log_info "中继服务器端口: $hbbr_port"
+    log_info "管理员密码: ${admin_password:0:2}******"  # 更安全的显示
+    log_info "本地 IP: $local_ip"
+    log_info "公网 IP: $public_ip"
+    echo
+    
+    read -p "确认开始部署？(Y/n): " confirm
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        log_info "部署已取消"
+        exit 0
     fi
 }
 
@@ -146,6 +416,52 @@ services:
 EOF
 
     log_success "Docker Compose 配置文件已生成: $file_path"
+}
+
+# 部署服务（优化版）
+deploy_service() {
+    local project_name="$1" admin_password="$2"
+    local compose_cmd="$3"
+    local file_path="$SCRIPT_DIR/docker-compose.yml"
+    
+    log_info "开始部署 RustDesk 服务..."
+    
+    cd "$SCRIPT_DIR" || {
+        log_error "无法进入目录: $SCRIPT_DIR"
+        return 1
+    }
+    
+    # 停止现有服务
+    if docker ps -a --filter "name=${project_name}-rustdesk" | grep -q "${project_name}-rustdesk"; then
+        log_info "停止现有服务..."
+        $compose_cmd -f "$file_path" down || true
+        sleep 5
+    fi
+    
+    # 启动服务
+    log_info "启动服务..."
+    if ! $compose_cmd -f "$file_path" up -d; then
+        log_error "服务启动失败"
+        return 1
+    fi
+    
+    # 等待服务启动
+    sleep 10
+    
+    # 设置管理员密码
+    log_info "设置管理员密码..."
+    for ((i=1; i<=5; i++)); do
+        if docker exec "${project_name}-rustdesk" sh -c "./apimain reset-admin-pwd \"$admin_password\"" 2>/dev/null; then
+            log_success "管理员密码设置成功"
+            return 0
+        fi
+        log_warning "密码设置失败，重试第 $i 次..."
+        sleep 10
+    done
+    
+    log_warning "密码设置失败，请手动执行:"
+    log_info "docker exec ${project_name}-rustdesk ./apimain reset-admin-pwd \"YOUR_PASSWORD\""
+    return 0
 }
 
 # 显示部署信息（包含固定密钥）
