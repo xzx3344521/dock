@@ -1,19 +1,12 @@
 #!/bin/bash
-echo "🌐 网络速度测试"
-echo "正在启动..."
-
-# 直接运行测速，不下载文件
-result=$(curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple 2>/dev/null)
-
-if [ $? -ne 0 ] || [ -z "$result" ]; then
-    echo "❌ 测速失败，请检查网络连接"
-    exit 1
-fi
-
-# 快速解析结果
-echo "✅ 测试完成："
-echo "$result" | awk '
-/Ping:/ {printf "🔄 延迟: %s %s\n", $2, $3}
-/Download:/ {printf "⬇️ 下载: %s %s\n", $2, $3}  
-/Upload:/ {printf "⬆️ 上传: %s %s\n", $2, $3}
-'
+echo "🌐 开始测速..."
+{
+    curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple
+} 2>/dev/null | while IFS= read -r line; do
+    case $line in
+        *Ping:*) echo "🔄 延迟: ${line#*:}" ;;
+        *Download:*) echo "⬇️ 下载: ${line#*:}" ;;
+        *Upload:*) echo "⬆️ 上传: ${line#*:}" ;;
+    esac
+done
+echo "✅ 完成"
