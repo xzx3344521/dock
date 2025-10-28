@@ -1,10 +1,8 @@
 #!/bin/bash
 echo "🚀 一键网络测速"
-
-# 使用原始输出，手动提取信息
-curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - | awk '
-/Testing from/ {ip=$5; print "🌐 IP地址: " ip}
-/Ping:/ {print "🔄 网络延迟: " $2 " " $3}
-/Download:/ {print "⬇️ 下载速度: " $2 " " $3}
-/Upload:/ {print "⬆️ 上传速度: " $2 " " $3}
-' | head -4
+curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - | grep -E "(Testing from|Ping:|Download:|Upload:)" | head -4 | sed '
+s/Testing from/🌐 IP地址:/
+s/Ping:/🔄 网络延迟:/
+s/Download:/⬇️ 下载速度:/
+s/Upload:/⬆️ 上传速度:/
+'
