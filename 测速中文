@@ -1,6 +1,11 @@
 #!/bin/bash
 
-echo "🚀 Debian 12 专用网络测速脚本"
+echo "🚀 Debian/Ubuntu 网络测速与诊断脚本"
+
+# 脚本信息
+SCRIPT_NAME="network-speedtest"
+SCRIPT_VERSION="2.0.0"
+SCRIPT_AUTHOR="系统优化版"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -32,41 +37,138 @@ log_result() {
     echo -e "${CYAN}📊 $1${NC}"
 }
 
-# 检查系统是否为 Debian
-check_debian() {
-    if [ ! -f /etc/debian_version ]; then
-        log_error "此脚本专为 Debian 系统设计"
-        exit 1
+log_debug() {
+    if [ "$DEBUG" = "true" ]; then
+        echo -e "${PURPLE}🐛 $1${NC}"
     fi
+}
+
+# 显示标题
+show_header() {
+    echo "=================================================="
+    echo "           🚀 $SCRIPT_NAME v$SCRIPT_VERSION"
+    echo "              $SCRIPT_AUTHOR"
+    echo "=================================================="
+}
+
+# 检查系统兼容性
+check_system() {
+    log_info "检查系统环境..."
     
-    local version=$(cat /etc/debian_version)
-    log_info "检测到 Debian 版本: $version"
+    # 检查是否为 Debian/Ubuntu 系
+    if [ ! -f /etc/debian_version ] && [ ! -f /etc/lsb-release ]; then
+        if [ -f /etc/redhat-release ] || [ -f /etc/centos-release ]; then
+            log_warning "检测到 RedHat/CentOS 系统，部分功能可能需要调整"
+        elif [ -f /etc/alpine-release ]; then
+            log_warning "检测到 Alpine Linux，建议使用 Debian/Ubuntu 系统"
+        else
+            log_warning "非 Debian/Ubuntu 系统，兼容性可能受限"
+        fi
+    fi
+
+    # 检测系统版本
+    if [ -f /etc/os-release ]; then
+        source /etc/os-release
+        log_info "检测到系统: $PRETTY_NAME"
+        
+        # 检查系统架构
+        local arch=$(uname -m)
+        log_info "系统架构: $arch"
+        
+        # 检查内核版本
+        local kernel=$(uname -r)
+        log_info "内核版本: $kernel"
+    fi
+
+    # 检查权限
+    if [ "$EUID" -eq 0 ]; then
+        log_warning "当前以 root 权限运行"
+    else
+        log_info "当前以普通用户权限运行，部分操作需要 sudo"
+    fi
 }
 
 # 检查并安装必要工具
-install_debian_tools() {
+install_required_tools() {
+    log_info "检查系统工具..."
+    
+    local packages=()
+    local package_manager=""
+    local install_cmd=""
+    
+    # 检测包管理器
+    if command -v apt-get &> /dev/null; then
+        package_manager="apt"
+        install_cmd="sudo apt-get install -y"
+    elif command -v yum &> /dev/null; then
+        package_manager="yum"
+        install_cmd="sudo yum install -y"
+    elif command -v dnf &> /dev/null; then
+        package_manager="dnf"
+        install_cmd="sudo dnf install -y"
+    elif command -v apk &> /dev/null; then
+        package_manager="apk"
+        install_cmd="sudo apk add"
+    else
+        log_error "未找到支持的包管理器"
+        return 1
+    fi
+    
+    log_info "使用包管理器: $package_manager"
+    
+    # 基础工具列表
+    local base_tools=("curl" "wget" "ping" "bc" "dig" "traceroute")
+    
+    # 根据包管理器调整包名
+    case $package_manager in
+        "apt")
+            packages=("curl" "wget" "iputils-ping" "bc" "dnsutils" "traceroute")
+            ;;
+        "yum"|"dnf")
+            packages=("curl" "wget" "iputils" "bc" "bind-utils" "traceroute")
+            ;;
+        "apk")
+            packages=("curl" "wget" "iputils" "bc" "bind-tools" "traceroute")
+            ;;
+    esac
+    
+    # 更新包列表
     log_info "更新软件包列表..."
-    sudo apt-get update
+    case $package_manager in
+        "apt") sudo apt-get update ;;
+        "yum") sudo yum check-update || true ;;
+        "dnf") sudo dnf check-update || true ;;
+        "apk") sudo apk update ;;
+    esac
     
-    local tools=("curl" "wget" "iputils-ping" "bc" "dnsutils" "traceroute")
-    local missing_tools=()
+    # 检查并安装缺失的包
+    local missing_packages=()
     
-    # 检查缺少的工具
-    for tool in "${tools[@]}"; do
-        if ! dpkg -l | grep -q "^ii  $tool "; then
-            missing_tools+=("$tool")
+    for pkg in "${packages[@]}"; do
+        if ! command -v "${pkg%% *}" &> /dev/null && ! dpkg -l | grep -q "^ii  ${pkg} " 2>/dev/null; then
+            missing_packages+=("$pkg")
         fi
     done
     
-    if [ ${#missing_tools[@]} -ne 0 ]; then
-        log_warning "安装缺少的工具: ${missing_tools[*]}"
-        sudo apt-get install -y "${missing_tools[@]}"
+    if [ ${#missing_packages[@]} -ne 0 ]; then
+        log_warning "需要安装缺失的包: ${missing_packages[*]}"
         
-        if [ $? -eq 0 ]; then
-            log_success "工具安装完成"
+        if [ "$AUTO_INSTALL" = "true" ]; then
+            log_info "自动安装中..."
         else
-            log_error "工具安装失败"
-            exit 1
+            read -p "是否安装这些包？(Y/n): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Nn]$ ]]; then
+                log_warning "跳过包安装，部分功能可能无法使用"
+                return 0
+            fi
+        fi
+        
+        if $install_cmd "${missing_packages[@]}"; then
+            log_success "包安装完成"
+        else
+            log_error "包安装失败"
+            return 1
         fi
     else
         log_success "所有必要工具已安装"
@@ -74,68 +176,98 @@ install_debian_tools() {
 }
 
 # 安装 speedtest-cli
-install_speedtest_cli() {
-    if ! command -v speedtest-cli &> /dev/null; then
-        log_info "安装 speedtest-cli..."
-        
-        # 方法1: 使用 apt 安装
-        if sudo apt-get install -y speedtest-cli 2>/dev/null; then
-            log_success "speedtest-cli 安装成功"
-            return 0
-        fi
-        
-        # 方法2: 使用 pip 安装
-        if command -v pip3 &> /dev/null; then
-            log_info "尝试使用 pip3 安装..."
-            if pip3 install speedtest-cli 2>/dev/null; then
-                log_success "speedtest-cli 安装成功"
+install_speedtest() {
+    log_info "检查 speedtest 工具..."
+    
+    # 检查是否已安装
+    if command -v speedtest &> /dev/null || command -v speedtest-cli &> /dev/null; then
+        log_success "speedtest 已安装"
+        return 0
+    fi
+    
+    log_info "安装 speedtest-cli..."
+    
+    # 方法1: 使用系统包管理器
+    case $package_manager in
+        "apt")
+            if sudo apt-get install -y speedtest-cli 2>/dev/null; then
+                log_success "通过 apt 安装成功"
                 return 0
             fi
+            ;;
+        "yum"|"dnf")
+            if sudo $package_manager install -y speedtest-cli 2>/dev/null; then
+                log_success "通过 $package_manager 安装成功"
+                return 0
+            fi
+            ;;
+    esac
+    
+    # 方法2: 使用 pip
+    if command -v pip3 &> /dev/null; then
+        log_info "尝试使用 pip3 安装..."
+        if pip3 install speedtest-cli 2>/dev/null; then
+            log_success "通过 pip3 安装成功"
+            return 0
         fi
-        
-        # 方法3: 直接下载
-        log_info "直接下载 speedtest-cli..."
-        wget -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+    fi
+    
+    # 方法3: 使用官方脚本
+    log_info "使用官方脚本安装..."
+    if curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash 2>/dev/null; then
+        if sudo apt-get install -y speedtest 2>/dev/null; then
+            log_success "通过官方仓库安装成功"
+            return 0
+        fi
+    fi
+    
+    # 方法4: 直接下载
+    log_info "直接下载 speedtest-cli..."
+    if wget -q -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py; then
         chmod +x speedtest-cli
-        sudo mv speedtest-cli /usr/local/bin/
+        sudo mv speedtest-cli /usr/local/bin/speedtest-cli
         
         if command -v speedtest-cli &> /dev/null; then
             log_success "speedtest-cli 安装成功"
-        else
-            log_warning "speedtest-cli 安装失败，跳过"
+            return 0
         fi
     fi
+    
+    log_warning "speedtest-cli 安装失败，将使用备用测速方法"
+    return 1
 }
 
-# 测试网络连通性
+# 网络连通性测试
 test_connectivity() {
-    log_info "检查网络连通性..."
+    log_info "测试网络连通性..."
     
-    # 测试多个国内可靠站点
     local test_hosts=(
         "223.5.5.5"           # 阿里DNS
         "114.114.114.114"     # 114DNS
         "1.1.1.1"            # Cloudflare
         "8.8.8.8"            # Google DNS
+        "119.29.29.29"       # 腾讯DNS
     )
     
     local connected=false
+    local success_count=0
     
     for host in "${test_hosts[@]}"; do
         if ping -c 2 -W 3 "$host" &> /dev/null; then
-            log_success "网络连接正常 ($host)"
+            log_success "连通 $host"
             connected=true
-            break
+            ((success_count++))
         else
-            log_warning "无法连接到 $host"
+            log_warning "无法连接 $host"
         fi
     done
     
     if [ "$connected" = false ]; then
-        log_error "所有网络连接测试均失败"
+        log_error "网络连接测试失败"
         return 1
     fi
     
+    log_info "网络连通性: $success_count/${#test_hosts[@]} 个测试点成功"
     return 0
 }
 
@@ -143,15 +275,20 @@ test_connectivity() {
 test_dns() {
     log_info "测试 DNS 解析..."
     
-    local domains=("baidu.com" "qq.com" "github.com" "debian.org")
+    local domains=("baidu.com" "qq.com" "taobao.com" "github.com" "debian.org")
+    local success_count=0
     
     for domain in "${domains[@]}"; do
-        if nslookup "$domain" &> /dev/null; then
-            log_success "DNS 解析正常: $domain"
+        if dig +short "$domain" &> /dev/null; then
+            local ip=$(dig +short "$domain" | head -1)
+            log_success "解析 $domain → $ip"
+            ((success_count++))
         else
-            log_warning "DNS 解析失败: $domain"
+            log_warning "解析失败: $domain"
         fi
     done
+    
+    log_info "DNS 解析: $success_count/${#domains[@]} 个域名成功"
 }
 
 # 延迟测试
@@ -168,7 +305,7 @@ test_latency() {
     for host in "${latency_hosts[@]}"; do
         if ping -c 4 -W 2 "$host" &> /dev/null; then
             local result
-            result=$(ping -c 4 -W 2 "$host" | tail -1 | awk -F'/' '{print "平均延迟: "$4" 毫秒"}')
+            result=$(ping -c 4 -W 2 "$host" | tail -1 | awk -F'/' '{print "平均延迟: "$5"ms, 抖动: "$6"ms"}')
             log_info "$host - $result"
         else
             log_warning "$host - 延迟测试失败"
@@ -176,17 +313,24 @@ test_latency() {
     done
 }
 
-# 使用 speedtest-cli 测试并显示中文结果
-test_speedtest_cli() {
+# 专业测速
+test_speed_professional() {
+    log_info "开始专业网络测速..."
+    
+    # 尝试使用 speedtest
+    if command -v speedtest &> /dev/null; then
+        log_info "使用 Ookla speedtest..."
+        if speedtest --accept-license --simple; then
+            return 0
+        fi
+    fi
+    
     if command -v speedtest-cli &> /dev/null; then
-        log_info "使用 speedtest-cli 进行专业测速..."
-        
-        # 运行 speedtest 并捕获输出
+        log_info "使用 speedtest-cli..."
         local result
         result=$(speedtest-cli --simple 2>/dev/null)
         
         if [ $? -eq 0 ] && [ -n "$result" ]; then
-            # 解析并转换结果为中文
             echo "$result" | while IFS= read -r line; do
                 case $line in
                     Ping:*)
@@ -204,143 +348,181 @@ test_speedtest_cli() {
                 esac
             done
             return 0
-        else
-            return 1
         fi
-    else
-        return 1
     fi
+    
+    # 备用测速方法
+    test_speed_backup
 }
 
-# 格式化速度值
-format_speed() {
-    local speed=$1
-    local unit=$2
+# 备用测速方法
+test_speed_backup() {
+    log_info "使用备用方法测速..."
     
-    case $unit in
-        "Mbit/s")
-            echo "$speed Mbit/s"
-            ;;
-        "Gbit/s")
-            echo "$speed Gbit/s"
-            ;;
-        "Kbit/s")
-            echo "$speed Kbit/s"
-            ;;
-        *)
-            echo "$speed $unit"
-            ;;
-    esac
-}
-
-# 下载速度测试（备用方法）
-test_download_speed_backup() {
-    log_info "使用备用方法测试下载速度..."
-    
-    local speed_test_urls=(
+    # 使用 cachefly 的测速节点
+    local test_urls=(
+        "http://cachefly.cachefly.net/100mb.test"
         "http://speedtest.ftp.otenet.gr/files/test100Mb.db"
-        "http://ipv4.download.thinkbroadband.com/100MB.zip"
     )
     
-    for url in "${speed_test_urls[@]}"; do
-        log_info "尝试节点: $(echo "$url" | cut -d'/' -f1-3)"
+    for url in "${test_urls[@]}"; do
+        log_info "尝试节点: $(basename "$url")"
         
-        if curl -I --connect-timeout 10 "$url" &> /dev/null; then
+        if curl -I --connect-timeout 5 "$url" &> /dev/null; then
             local start_time end_time download_time speed_mbps
             
             start_time=$(date +%s.%N)
-            curl -L --max-time 30 --progress-bar -o /dev/null "$url" > /dev/null 2>&1
-            end_time=$(date +%s.%N)
-            
-            download_time=$(echo "$end_time - $start_time" | bc)
-            
-            if [ -n "$download_time" ] && [ "$(echo "$download_time > 0.1" | bc)" -eq 1 ]; then
-                # 假设下载了约100MB数据
-                local file_size_bytes=100000000
-                speed_mbps=$(echo "scale=2; ($file_size_bytes * 8) / ($download_time * 1000000)" | bc)
+            if curl -L --max-time 30 --progress-bar -o /dev/null "$url" &> /dev/null; then
+                end_time=$(date +%s.%N)
+                download_time=$(echo "$end_time - $start_time" | bc)
                 
-                if [ -n "$speed_mbps" ]; then
+                if [ -n "$download_time" ] && [ "$(echo "$download_time > 0.1" | bc -l)" -eq 1 ]; then
+                    speed_mbps=$(echo "scale=2; (100 * 8) / $download_time" | bc)
                     log_result "⬇️  下载速度: ${speed_mbps} Mbit/s"
-                    log_result "⬆️  上传速度: 测试中..."
-                    # 估算上传速度（通常是下载速度的30-50%）
+                    
+                    # 估算上传速度
                     local upload_speed=$(echo "scale=2; $speed_mbps * 0.4" | bc)
-                    log_result "⬆️  上传速度: ${upload_speed} Mbit/s"
+                    log_result "⬆️  上传速度: ${upload_speed} Mbit/s (估算值)"
                     return 0
                 fi
             fi
         fi
     done
     
+    log_warning "备用测速方法失败"
     return 1
+}
+
+# 网络接口信息
+show_network_info() {
+    log_info "收集网络信息..."
+    
+    # IP 地址信息
+    log_info "IP 地址信息:"
+    ip -4 addr show | grep inet | awk '{print "  " $2}' | head -5
+    
+    # 默认网关
+    log_info "默认网关:"
+    ip route | grep default | awk '{print "  " $3}'
+    
+    # DNS 服务器
+    log_info "DNS 服务器:"
+    if [ -f /etc/resolv.conf ]; then
+        grep nameserver /etc/resolv.conf | awk '{print "  " $2}'
+    fi
 }
 
 # 路由追踪
 test_traceroute() {
+    if [ "$QUICK_MODE" = "true" ]; then
+        return 0
+    fi
+    
     log_info "进行路由追踪..."
     
     if command -v traceroute &> /dev/null; then
-        traceroute -m 10 223.5.5.5 | head -15
+        traceroute -m 8 -w 2 223.5.5.5 | head -12
     else
         log_warning "traceroute 不可用"
     fi
 }
 
-# 网络接口信息
-show_network_info() {
-    log_info "网络接口信息:"
-    ip addr show | grep -E "^( |[0-9])" | grep -E "inet|state" | head -10
-    
-    log_info "路由表信息:"
-    ip route | head -5
-}
-
-# 显示测速结果总结
-show_speed_summary() {
-    echo ""
-    echo "=================================================="
-    log_result "            📊 网络测速结果总结"
-    echo "=================================================="
-    
-    # 这里显示最终的测速结果
-    if [ -n "$PING_RESULT" ]; then
-        log_result "🔄 网络延迟: $PING_RESULT"
-    fi
-    
-    if [ -n "$DOWNLOAD_RESULT" ]; then
-        log_result "⬇️  下载速度: $DOWNLOAD_RESULT"
-    fi
-    
-    if [ -n "$UPLOAD_RESULT" ]; then
-        log_result "⬆️  上传速度: $UPLOAD_RESULT"
-    fi
-    
-    echo "=================================================="
-}
-
 # 清理函数
 cleanup() {
-    log_info "清理临时文件..."
+    log_debug "清理临时文件..."
     rm -f /tmp/speedtest*.tmp
-    rm -f speedtest-cli
+    rm -f speedtest-cli 2>/dev/null
+}
+
+# 显示帮助信息
+show_help() {
+    echo "使用方法: $0 [选项]"
+    echo
+    echo "选项:"
+    echo "  -h, --help         显示此帮助信息"
+    echo "  -v, --version      显示版本信息"
+    echo "  -q, --quick        快速模式（跳过路由追踪）"
+    echo "  -f, --full         完整模式（包含详细诊断）"
+    echo "  -y, --yes          自动确认所有提示"
+    echo "  -d, --debug        调试模式"
+    echo
+    echo "示例:"
+    echo "  $0                  # 标准模式"
+    echo "  $0 -q               # 快速模式"
+    echo "  $0 -y               # 自动确认"
+}
+
+# 显示版本信息
+show_version() {
+    echo "$SCRIPT_NAME v$SCRIPT_VERSION"
+    echo "适用于 Debian/Ubuntu 系统的网络测速工具"
+}
+
+# 参数解析
+parse_arguments() {
+    QUICK_MODE="false"
+    AUTO_INSTALL="false"
+    DEBUG="false"
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -v|--version)
+                show_version
+                exit 0
+                ;;
+            -q|--quick)
+                QUICK_MODE="true"
+                shift
+                ;;
+            -f|--full)
+                QUICK_MODE="false"
+                shift
+                ;;
+            -y|--yes)
+                AUTO_INSTALL="true"
+                shift
+                ;;
+            -d|--debug)
+                DEBUG="true"
+                shift
+                ;;
+            *)
+                log_error "未知参数: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
 }
 
 # 主函数
 main() {
-    echo "=================================================="
-    echo "           🚀 Debian 12 网络测速脚本"
-    echo "=================================================="
+    # 解析参数
+    parse_arguments "$@"
+    
+    # 显示标题
+    show_header
     
     # 设置错误处理
     set -e
     trap 'cleanup; log_error "脚本执行中断"; exit 130' INT TERM
     trap 'cleanup' EXIT
     
-    # 检查系统
-    check_debian
+    # 系统检查
+    check_system
     
     # 安装必要工具
-    install_debian_tools
-    install_speedtest_cli
+    if ! install_required_tools; then
+        log_error "工具安装失败"
+        exit 1
+    fi
+    
+    # 安装 speedtest
+    install_speedtest
     
     # 测试网络连通性
     if ! test_connectivity; then
@@ -365,107 +547,30 @@ main() {
     
     echo ""
     
-    # 使用 speedtest-cli 进行专业测速
-    log_info "开始专业网络测速..."
-    if test_speedtest_cli; then
-        log_success "专业测速完成"
-    else
-        log_warning "专业测速失败，使用备用方法"
-        test_download_speed_backup
+    # 专业测速
+    if ! test_speed_professional; then
+        log_warning "专业测速失败"
     fi
     
     echo ""
     
-    # 路由追踪（可选）
-    read -p "是否进行路由追踪？(y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # 路由追踪
+    if [ "$QUICK_MODE" = "false" ]; then
         test_traceroute
     fi
-    
-    # 显示测速结果总结
-    show_speed_summary
     
     echo ""
     log_success "网络测速完成"
     
-    # 显示建议
+    # 显示使用建议
     echo ""
-    log_info "网络质量评估:"
-    if [ -n "$PING_RESULT" ]; then
-        local ping_ms=$(echo "$PING_RESULT" | grep -o '[0-9.]*' | head -1)
-        if [ -n "$ping_ms" ]; then
-            if (( $(echo "$ping_ms < 50" | bc -l) )); then
-                log_success "延迟优秀 (＜50ms)"
-            elif (( $(echo "$ping_ms < 100" | bc -l) )); then
-                log_info "延迟良好 (50-100ms)"
-            elif (( $(echo "$ping_ms < 200" | bc -l) )); then
-                log_warning "延迟一般 (100-200ms)"
-            else
-                log_error "延迟较差 (＞200ms)"
-            fi
-        fi
-    fi
+    log_info "提示:"
+    echo "  - 使用 '$0 -q' 进行快速测速"
+    echo "  - 使用 '$0 -y' 自动确认所有提示"
+    echo "  - 定期运行以监控网络质量"
 }
 
-# 显示使用说明
-show_usage() {
-    echo "使用方法: $0 [选项]"
-    echo "选项:"
-    echo "  -h, --help     显示此帮助信息"
-    echo "  -q, --quick    快速模式（跳过路由追踪）"
-    echo "  -f, --full     完整模式（包含所有测试）"
-}
-
-# 全局变量存储测速结果
-PING_RESULT=""
-DOWNLOAD_RESULT=""
-UPLOAD_RESULT=""
-
-# 重写 speedtest 函数来保存结果
-test_speedtest_cli() {
-    if command -v speedtest-cli &> /dev/null; then
-        log_info "使用 speedtest-cli 进行专业测速..."
-        
-        # 运行 speedtest 并捕获输出
-        local result
-        result=$(speedtest-cli --simple 2>/dev/null)
-        
-        if [ $? -eq 0 ] && [ -n "$result" ]; then
-            # 解析并保存结果
-            PING_RESULT=$(echo "$result" | grep "Ping:" | awk '{print $2 " " $3}')
-            DOWNLOAD_RESULT=$(echo "$result" | grep "Download:" | awk '{print $2 " " $3}')
-            UPLOAD_RESULT=$(echo "$result" | grep "Upload:" | awk '{print $2 " " $3}')
-            
-            # 显示中文结果
-            log_result "🔄 网络延迟: $PING_RESULT"
-            log_result "⬇️  下载速度: $DOWNLOAD_RESULT"
-            log_result "⬆️  上传速度: $UPLOAD_RESULT"
-            
-            return 0
-        else
-            return 1
-        fi
-    else
-        return 1
-    fi
-}
-
-# 参数解析
-case "${1:-}" in
-    -h|--help)
-        show_usage
-        exit 0
-        ;;
-    -q|--quick)
-        # 快速模式
-        main
-        ;;
-    -f|--full)
-        # 完整模式
-        main
-        ;;
-    *)
-        main
-        ;;
-esac
+# 脚本入口
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
