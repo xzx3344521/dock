@@ -1,0 +1,280 @@
+#!/bin/bash
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# 日志函数
+log_info() { echo -e "${BLUE}📦 $1${NC}"; }
+log_success() { echo -e "${GREEN}✅ $1${NC}"; }
+log_warning() { echo -e "${YELLOW}⚠️  $1${NC}"; }
+log_error() { echo -e "${RED}❌ $1${NC}"; }
+log_result() { echo -e "${CYAN}📊 $1${NC}"; }
+
+# DNS提供商配置
+declare -A DNS_PROVIDERS=(
+    ["1"]="腾讯DNS:119.29.29.29,119.28.28.28"
+    ["2"]="阿里DNS:223.5.5.5,223.6.6.6"
+    ["3"]="114DNS:114.114.114.114,114.114.115.115"
+    ["4"]="Cloudflare:1.1.1.1,1.0.0.1"
+    ["5"]="GoogleDNS:8.8.8.8,8.8.4.4"
+    ["6"]="OpenDNS:208.67.222.222,208.67.220.220"
+    ["7"]="百度DNS:180.76.76.76"
+    ["8"]="CNNICSDNS:1.2.4.8,210.2.4.8"
+)
+
+# 检测当前DNS
+detect_current_dns() {
+    echo -e "${PURPLE}"
+    echo "=================================================="
+    echo "              🌈 当前DNS检测结果"
+    echo "=================================================="
+    echo -e "${NC}"
+    
+    if [ -f /etc/resolv.conf ]; then
+        current_dns=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ' ')
+        if [ -n "$current_dns" ]; then
+            log_result "当前DNS服务器: $current_dns"
+            
+            # 识别DNS提供商
+            for provider in "${!DNS_PROVIDERS[@]}"; do
+                dns_ips=${DNS_PROVIDERS[$provider]#*:}
+                primary_dns=${dns_ips%,*}
+                if [[ "$current_dns" == *"$primary_dns"* ]]; then
+                    provider_name=${DNS_PROVIDERS[$provider]%:*}
+                    log_success "识别为: $provider_name"
+                    break
+                fi
+            done
+        else
+            log_warning "未检测到DNS配置"
+        fi
+    else
+        log_error "未找到 resolv.conf 文件"
+    fi
+    echo ""
+}
+
+# 测试DNS速度
+test_dns_speed() {
+    local dns_ips=$1
+    local provider_name=$2
+    
+    log_info "测试 $provider_name 速度..."
+    IFS=',' read -ra dns_array <<< "$dns_ips"
+    
+    for dns_ip in "${dns_array[@]}"; do
+        if ping -c 2 -W 2 "$dns_ip" >/dev/null 2>&1; then
+            start_time=$(date +%s%N)
+            nslookup baidu.com "$dns_ip" >/dev/null 2>&1
+            end_time=$(date +%s%N)
+            time_ms=$(( (end_time - start_time) / 1000000 ))
+            
+            if [ $time_ms -lt 50 ]; then
+                echo -e "  ${GREEN}$dns_ip: ${time_ms}ms ✅${NC}"
+            elif [ $time_ms -lt 100 ]; then
+                echo -e "  ${YELLOW}$dns_ip: ${time_ms}ms ⚠️${NC}"
+            else
+                echo -e "  ${RED}$dns_ip: ${time_ms}ms ❌${NC}"
+            fi
+        else
+            echo -e "  ${RED}$dns_ip: 无法连接 ❌${NC}"
+        fi
+    done
+}
+
+# 显示DNS菜单
+show_dns_menu() {
+    echo -e "${PURPLE}"
+    echo "=================================================="
+    echo "              🌈 主流DNS提供商"
+    echo "=================================================="
+    echo -e "${NC}"
+    
+    for key in "${!DNS_PROVIDERS[@]}"; do
+        provider_name=${DNS_PROVIDERS[$key]%:*}
+        dns_ips=${DNS_PROVIDERS[$key]#*:}
+        echo -e "  ${CYAN}$key. $provider_name${NC}"
+        echo -e "     ${BLUE}$dns_ips${NC}"
+    done
+    echo ""
+}
+
+# 临时设置DNS
+set_dns_temporary() {
+    local provider_key=$1
+    local provider_name=${DNS_PROVIDERS[$provider_key]%:*}
+    local dns_ips=${DNS_PROVIDERS[$provider_key]#*:}
+    
+    log_info "临时设置为: $provider_name"
+    
+    # 备份当前配置
+    cp /etc/resolv.conf /etc/resolv.conf.backup.$(date +%Y%m%d_%H%M%S)
+    
+    # 生成新的resolv.conf
+    echo "# 临时设置 - $provider_name ($(date))" > /etc/resolv.conf
+    IFS=',' read -ra dns_array <<< "$dns_ips"
+    for dns_ip in "${dns_array[@]}"; do
+        echo "nameserver $dns_ip" >> /etc/resolv.conf
+    done
+    echo "options timeout:2 attempts:3" >> /etc/resolv.conf
+    
+    log_success "临时DNS设置完成 (重启后恢复)"
+}
+
+# 永久设置DNS
+set_dns_permanent() {
+    local provider_key=$1
+    local provider_name=${DNS_PROVIDERS[$provider_key]%:*}
+    local dns_ips=${DNS_PROVIDERS[$provider_key]#*:}
+    
+    log_info "永久设置为: $provider_name"
+    
+    # 备份当前配置
+    cp /etc/resolv.conf /etc/resolv.conf.backup.$(date +%Y%m%d_%H%M%S)
+    
+    # 检查并禁用systemd-resolved
+    if systemctl is-active systemd-resolved >/dev/null 2>&1; then
+        log_warning "检测到systemd-resolved，正在禁用..."
+        systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
+    fi
+    
+    # 生成永久配置
+    echo "# 永久设置 - $provider_name ($(date))" > /etc/resolv.conf
+    IFS=',' read -ra dns_array <<< "$dns_ips"
+    for dns_ip in "${dns_array[@]}"; do
+        echo "nameserver $dns_ip" >> /etc/resolv.conf
+    done
+    echo "options timeout:2 attempts:3" >> /etc/resolv.conf
+    
+    # 防止NetworkManager覆盖
+    if command -v NetworkManager >/dev/null 2>&1; then
+        log_info "配置NetworkManager..."
+        nmcli connection show | grep -v NAME | awk '{print $1}' | while read conn; do
+            nmcli connection modify "$conn" ipv4.ignore-auto-dns yes
+            for dns_ip in "${dns_array[@]}"; do
+                nmcli connection modify "$conn" ipv4.dns "$dns_ip"
+            done
+        done
+    fi
+    
+    # 设置文件属性防止被覆盖
+    chattr +i /etc/resolv.conf 2>/dev/null || true
+    
+    log_success "永久DNS设置完成"
+}
+
+# 恢复备份
+restore_backup() {
+    local backup_files=($(ls -t /etc/resolv.conf.backup.* 2>/dev/null))
+    
+    if [ ${#backup_files[@]} -eq 0 ]; then
+        log_error "未找到备份文件"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}可用的备份文件:${NC}"
+    for i in "${!backup_files[@]}"; do
+        echo "  $((i+1)). ${backup_files[$i]}"
+    done
+    
+    read -p "选择要恢复的备份编号 (1-${#backup_files[@]}): " backup_choice
+    if [[ $backup_choice =~ ^[0-9]+$ ]] && [ $backup_choice -ge 1 ] && [ $backup_choice -le ${#backup_files[@]} ]; then
+        selected_backup="${backup_files[$((backup_choice-1))]}"
+        
+        # 解除文件锁定
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        
+        cp "$selected_backup" /etc/resolv.conf
+        log_success "已从 $selected_backup 恢复DNS设置"
+    else
+        log_error "无效的选择"
+    fi
+}
+
+# 主函数
+main() {
+    # 检测当前DNS
+    detect_current_dns
+    
+    while true; do
+        echo -e "${PURPLE}"
+        echo "=================================================="
+        echo "              🌈 DNS切换管理脚本"
+        echo "=================================================="
+        echo -e "${NC}"
+        
+        echo -e "${CYAN}请选择操作:${NC}"
+        echo "  1. 切换DNS提供商"
+        echo "  2. 测试所有DNS速度"
+        echo "  3. 恢复DNS备份"
+        echo "  4. 显示当前DNS"
+        echo "  5. 退出"
+        echo ""
+        
+        read -p "请输入选择 (1-5): " main_choice
+        
+        case $main_choice in
+            1)
+                show_dns_menu
+                read -p "选择DNS提供商 (1-8): " dns_choice
+                if [[ -n "${DNS_PROVIDERS[$dns_choice]}" ]]; then
+                    echo ""
+                    echo -e "${CYAN}请选择设置方式:${NC}"
+                    echo "  1. 临时设置 (重启后失效)"
+                    echo "  2. 永久设置"
+                    read -p "请输入选择 (1-2): " set_type
+                    
+                    case $set_type in
+                        1) set_dns_temporary "$dns_choice" ;;
+                        2) set_dns_permanent "$dns_choice" ;;
+                        *) log_error "无效的选择" ;;
+                    esac
+                else
+                    log_error "无效的DNS选择"
+                fi
+                ;;
+            2)
+                echo ""
+                log_info "测试所有DNS提供商速度..."
+                for key in "${!DNS_PROVIDERS[@]}"; do
+                    provider_name=${DNS_PROVIDERS[$key]%:*}
+                    dns_ips=${DNS_PROVIDERS[$key]#*:}
+                    test_dns_speed "$dns_ips" "$provider_name"
+                    echo ""
+                done
+                ;;
+            3)
+                restore_backup
+                ;;
+            4)
+                detect_current_dns
+                ;;
+            5)
+                log_success "再见！"
+                exit 0
+                ;;
+            *)
+                log_error "无效的选择"
+                ;;
+        esac
+        
+        echo ""
+        read -p "按回车键继续..."
+        clear
+    done
+}
+
+# 脚本入口
+if [ "$(id -u)" -ne 0 ]; then
+    log_error "请使用root权限运行此脚本"
+    exit 1
+fi
+
+main
