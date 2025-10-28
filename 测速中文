@@ -1,0 +1,42 @@
+#!/bin/bash
+echo "=== 网络速度测试工具 ==="
+echo ""
+
+# 下载测速脚本
+if [ ! -f speedtest.py ]; then
+    echo "下载测速脚本中..."
+    wget -q https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+fi
+
+# 检查依赖
+if ! command -v python3 &> /dev/null; then
+    echo "错误: 请先安装 python3"
+    exit 1
+fi
+
+echo "正在测试网络速度，请稍候..."
+echo "================================"
+
+# 运行测速并中文化输出
+python3 speedtest.py --simple | while IFS= read -r line; do
+    case $line in
+        *Ping:*)
+            ping_value=$(echo "$line" | awk '{print $2}')
+            ping_unit=$(echo "$line" | awk '{print $3}')
+            echo "🔄 网络延迟: $ping_value $ping_unit"
+            ;;
+        *Download:*)
+            download_value=$(echo "$line" | awk '{print $2}')
+            download_unit=$(echo "$line" | awk '{print $3}')
+            echo "⬇️ 下载速度: $download_value $download_unit"
+            ;;
+        *Upload:*)
+            upload_value=$(echo "$line" | awk '{print $2}')
+            upload_unit=$(echo "$line" | awk '{print $3}')
+            echo "⬆️ 上传速度: $upload_value $upload_unit"
+            ;;
+    esac
+done
+
+echo "================================"
+echo "测试完成！"
