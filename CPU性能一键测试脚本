@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 简化版VPS性能对比测试脚本
-# 用法: bash <(curl -sSL https://raw.githubusercontent.com/username/vpsbench/main/simple_bench.sh)
+# 真实场景VPS性能测试脚本
+# 用法: bash <(curl -sSL https://raw.githubusercontent.com/username/vpsbench/main/real_bench.sh)
 
 # 颜色定义
 RED='\033[0;31m'
@@ -10,96 +10,152 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 安装工具
-echo "安装测试工具..."
+echo "安装必要工具..."
 if command -v yum >/dev/null 2>&1; then
-    yum install -y sysbench bc >/dev/null 2>&1
+    yum install -y bc time gzip git >/dev/null 2>&1
 elif command -v apt-get >/dev/null 2>&1; then
     apt-get update >/dev/null 2>&1
-    apt-get install -y sysbench bc >/dev/null 2>&1
+    apt-get install -y bc time gzip git >/dev/null 2>&1
 fi
 
-# 获取系统信息
+# 获取基础信息
 CPU_CORES=$(nproc)
-CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//' | cut -c 1-30)
-HOSTNAME=$(hostname)
+CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//')
+MEM_TOTAL=$(free -h | grep Mem | awk '{print $2}')
 
-# 运行测试
-echo "正在测试CPU性能..."
-
-# 单核测试
-SINGLE=$(sysbench cpu --threads=1 --cpu-max-prime=20000 run 2>/dev/null | grep "events per second" | awk '{printf "%.1f", $4}')
-
-# 多核测试
-MULTI=$(sysbench cpu --threads=$CPU_CORES --cpu-max-prime=20000 run 2>/dev/null | grep "events per second" | awk '{printf "%.1f", $4}')
-
-# 浮点测试
-echo "scale=2000; 4*a(1)" | bc -l -q >/dev/null 2>&1 &
-FLOAT_PID=$!
-sleep 3
-if ps -p $FLOAT_PID > /dev/null; then
-    FLOAT_TIME=">3秒"
-    kill $FLOAT_PID 2>/dev/null
-else
-    FLOAT_TIME="<3秒"
-fi
-
-# 显示对比结果
-echo ""
+echo -e "\n${BLUE}=========================================${NC}"
+echo -e "${BLUE}         真实场景性能测试${NC}"
 echo -e "${BLUE}=========================================${NC}"
-echo -e "${BLUE}          VPS性能对比结果${NC}"
-echo -e "${BLUE}=========================================${NC}"
-echo "主机: $HOSTNAME"
 echo "CPU: $CPU_MODEL"
-echo "核心: $CPU_CORES"
+echo "核心: $CPU_CORES | 内存: $MEM_TOTAL"
 echo ""
-echo -e "${BLUE}性能指标${NC}        ${BLUE}当前VPS${NC}    ${BLUE}评级${NC}"
-echo "-----------------------------------------"
 
-# 单核性能对比
-if (( $(echo "$SINGLE > 800" | bc -l) )); then
-    SINGLE_RATING="${GREEN}优秀${NC}"
-elif (( $(echo "$SINGLE > 500" | bc -l) )); then
-    SINGLE_RATING="${YELLOW}良好${NC}"
-else
-    SINGLE_RATING="${RED}一般${NC}"
-fi
-printf "单核性能:    %-10s %-10s\n" "$SINGLE" "$SINGLE_RATING"
+# 测试1: 编译压力测试 (模拟真实应用编译)
+echo -e "${YELLOW}1. 编译性能测试...${NC}"
+cat > /tmp/test_compile.c << 'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
 
-# 多核性能对比
-EXPECTED_MULTI=$(echo "$SINGLE * $CPU_CORES * 0.8" | bc | awk '{printf "%.1f", $1}')
-if (( $(echo "$MULTI > $EXPECTED_MULTI" | bc -l) )); then
-    MULTI_RATING="${GREEN}优秀${NC}"
-elif (( $(echo "$MULTI > $(echo "$SINGLE * $CPU_CORES * 0.6" | bc)" | bc -l) )); then
-    MULTI_RATING="${YELLOW}良好${NC}"
-else
-    MULTI_RATING="${RED}一般${NC}"
-fi
-printf "多核性能:    %-10s %-10s\n" "$MULTI" "$MULTI_RATING"
+#define SIZE 1000000
 
-# 浮点性能对比
-if [ "$FLOAT_TIME" = "<3秒" ]; then
-    FLOAT_RATING="${GREEN}优秀${NC}"
-else
-    FLOAT_RATING="${RED}一般${NC}"
-fi
-printf "浮点性能:    %-10s %-10s\n" "$FLOAT_TIME" "$FLOAT_RATING"
+void process_data() {
+    double *data = malloc(SIZE * sizeof(double));
+    for (int i = 0; i < SIZE; i++) {
+        data[i] = sin(i * 0.01) * cos(i * 0.005);
+    }
+    
+    // 模拟一些数据处理
+    double sum = 0;
+    for (int i = 0; i < SIZE; i++) {
+        sum += data[i];
+        if (i % 100000 == 0) {
+            // 模拟内存访问
+            data[i] = data[i] * 0.5 + data[SIZE - i - 1] * 0.5;
+        }
+    }
+    free(data);
+}
 
-echo "-----------------------------------------"
-
-# 显示参考标准
-echo ""
-echo -e "${YELLOW}参考标准:${NC}"
-echo -e "${GREEN}优秀${NC}: 单核>800, 多核效率>80%"
-echo -e "${YELLOW}良好${NC}: 单核500-800, 多核效率60-80%"
-echo -e "${RED}一般${NC}: 单核<500, 多核效率<60%"
-
-# 保存结果用于后续对比
-RESULTS_FILE="/tmp/vps_bench_$(date +%Y%m%d_%H%M%S).txt"
-cat > $RESULTS_FILE << EOF
-$HOSTNAME | $CPU_CORES核 | 单核:$SINGLE | 多核:$MULTI | 浮点:$FLOAT_TIME
+int main() {
+    for (int i = 0; i < 10; i++) {
+        process_data();
+    }
+    return 0;
+}
 EOF
 
-echo ""
-echo -e "结果已保存: ${GREEN}$RESULTS_FILE${NC}"
-echo -e "对比其他VPS时查看这些文件即可"
+START_TIME=$(date +%s.%N)
+gcc -O2 /tmp/test_compile.c -o /tmp/test_compile -lm
+COMPILE_TIME=$(echo "$(date +%s.%N) - $START_TIME" | bc | awk '{printf "%.1f", $1}')
+
+# 测试2: 数据处理测试 (模拟Web应用)
+echo -e "${YELLOW}2. 数据处理测试...${NC}"
+START_TIME=$(date +%s.%N)
+for i in {1..500000}; do
+    echo "log entry $i at $(date +%T)" | md5sum > /dev/null 2>&1
+done
+DATA_TIME=$(echo "$(date +%s.%N) - $START_TIME" | bc | awk '{printf "%.1f", $1}')
+
+# 测试3: 压缩解压测试 (模拟文件操作)
+echo -e "${YELLOW}3. 压缩性能测试...${NC}"
+dd if=/dev/urandom of=/tmp/testfile bs=1M count=50 status=none 2>/dev/null
+START_TIME=$(date +%s.%N)
+gzip -c /tmp/testfile > /tmp/testfile.gz
+GZIP_TIME=$(echo "$(date +%s.%N) - $START_TIME" | bc | awk '{printf "%.1f", $1}')
+
+# 测试4: 多任务并发测试 (模拟真实负载)
+echo -e "${YELLOW}4. 并发性能测试...${NC}"
+START_TIME=$(date +%s.%N)
+for i in $(seq 1 $CPU_CORES); do
+    (dd if=/dev/zero bs=1M count=100 2>/dev/null | md5sum > /dev/null 2>&1) &
+done
+wait
+CONCURRENT_TIME=$(echo "$(date +%s.%N) - $START_TIME" | bc | awk '{printf "%.1f", $1}')
+
+# 测试5: 内存压力测试
+echo -e "${YELLOW}5. 内存性能测试...${NC}"
+START_TIME=$(date +%s.%N)
+dd if=/dev/zero of=/dev/null bs=1M count=500 2>/dev/null
+MEMORY_TIME=$(echo "$(date +%s.%N) - $START_TIME" | bc | awk '{printf "%.1f", $1}')
+
+# 清理
+rm -f /tmp/test_compile.c /tmp/test_compile /tmp/testfile /tmp/testfile.gz
+
+# 计算综合评分 (数值越小越好，然后转换为分数)
+COMPILE_SCORE=$(echo "scale=1; 10 / $COMPILE_TIME" | bc | awk '{if($1>10) print 10; else print $1}')
+DATA_SCORE=$(echo "scale=1; 50 / $DATA_TIME" | bc | awk '{if($1>10) print 10; else print $1}')
+GZIP_SCORE=$(echo "scale=1; 5 / $GZIP_TIME" | bc | awk '{if($1>10) print 10; else print $1}')
+CONCURRENT_SCORE=$(echo "scale=1; 20 / $CONCURRENT_TIME" | bc | awk '{if($1>10) print 10; else print $1}')
+MEMORY_SCORE=$(echo "scale=1; 30 / $MEMORY_TIME" | bc | awk '{if($1>10) print 10; else print $1}')
+
+# 综合得分
+TOTAL_SCORE=$(echo "scale=1; ($COMPILE_SCORE + $DATA_SCORE + $GZIP_SCORE + $CONCURRENT_SCORE + $MEMORY_SCORE) / 5" | bc)
+
+# 显示结果
+echo -e "\n${BLUE}=========================================${NC}"
+echo -e "${BLUE}             测试结果${NC}"
+echo -e "${BLUE}=========================================${NC}"
+echo -e "编译性能:   ${COMPILE_TIME}秒  [${GREEN}${COMPILE_SCORE}分${NC}]"
+echo -e "数据处理:   ${DATA_TIME}秒    [${GREEN}${DATA_SCORE}分${NC}]"
+echo -e "压缩性能:   ${GZIP_TIME}秒    [${GREEN}${GZIP_SCORE}分${NC}]"
+echo -e "并发性能:   ${CONCURRENT_TIME}秒  [${GREEN}${CONCURRENT_SCORE}分${NC}]"
+echo -e "内存性能:   ${MEMORY_TIME}秒  [${GREEN}${MEMORY_SCORE}分${NC}]"
+echo -e "-----------------------------------------"
+echo -e "${YELLOW}综合得分:   ${TOTAL_SCORE}分${NC}"
+
+# 性能评级
+if (( $(echo "$TOTAL_SCORE >= 8" | bc -l) )); then
+    RATING="${GREEN}优秀 - 性能强劲${NC}"
+elif (( $(echo "$TOTAL_SCORE >= 6" | bc -l) )); then
+    RATING="${YELLOW}良好 - 性能足够${NC}"
+elif (( $(echo "$TOTAL_SCORE >= 4" | bc -l) )); then
+    RATING="${YELLOW}一般 - 基本可用${NC}"
+else
+    RATING="${RED}较差 - 可能卡顿${NC}"
+fi
+
+echo -e "${BLUE}性能评级:   $RATING${NC}"
+
+# 保存结果
+RESULTS_FILE="/tmp/vps_real_bench_$(date +%Y%m%d_%H%M%S).txt"
+cat > $RESULTS_FILE << EOF
+主机: $(hostname)
+CPU: $CPU_CORES核心 - $CPU_MODEL
+内存: $MEM_TOTAL
+测试时间: $(date)
+
+详细结果:
+- 编译性能: ${COMPILE_TIME}秒 (${COMPILE_SCORE}分)
+- 数据处理: ${DATA_TIME}秒 (${DATA_SCORE}分)  
+- 压缩性能: ${GZIP_TIME}秒 (${GZIP_SCORE}分)
+- 并发性能: ${CONCURRENT_TIME}秒 (${CONCURRENT_SCORE}分)
+- 内存性能: ${MEMORY_TIME}秒 (${MEMORY_SCORE}分)
+
+综合得分: ${TOTAL_SCORE}分
+性能评级: $(echo $RATING | sed 's/\\033\[[0-9;]*m//g')
+EOF
+
+echo -e "\n结果保存到: ${GREEN}$RESULTS_FILE${NC}"
+echo -e "\n${YELLOW}提示:${NC} 在不同VPS上运行此脚本，比较综合得分即可了解真实性能差异"
