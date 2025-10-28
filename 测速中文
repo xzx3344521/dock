@@ -1,12 +1,15 @@
 #!/bin/bash
-echo "🌐 开始测速..."
-{
-    curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple
-} 2>/dev/null | while IFS= read -r line; do
-    case $line in
-        *Ping:*) echo "🔄 延迟: ${line#*:}" ;;
-        *Download:*) echo "⬇️ 下载: ${line#*:}" ;;
-        *Upload:*) echo "⬆️ 上传: ${line#*:}" ;;
-    esac
-done
-echo "✅ 完成"
+echo "🚀 一键网络测速"
+
+# 下载并运行官方 Speedtest
+result=$(wget -q -O- https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz | tar xz && ./speedtest --simple)
+
+# 显示中文结果
+echo "$result" | awk '
+/Ping:/ {printf "🔄 网络延迟: %s %s\n", $2, $3}
+/Download:/ {printf "⬇️ 下载速度: %s %s\n", $2, $3}  
+/Upload:/ {printf "⬆️ 上传速度: %s %s\n", $2, $3}
+'
+
+# 清理文件
+rm -f speedtest
