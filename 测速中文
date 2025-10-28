@@ -1,8 +1,21 @@
 #!/bin/bash
 echo "🚀 一键网络测速"
-curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - | grep -E "(Testing from|Ping:|Download:|Upload:)" | head -4 | sed '
-s/Testing from/🌐 IP地址:/
-s/Ping:/🔄 网络延迟:/
-s/Download:/⬇️ 下载速度:/
-s/Upload:/⬆️ 上传速度:/
-'
+
+# 方法1: 使用 ping 测试延迟
+echo "🔄 测试网络延迟..."
+ping -c 5 8.8.8.8 | grep "min/avg/max" | awk -F'/' '{print "网络延迟: " $4 " ms"}'
+
+# 方法2: 使用 wget 测试下载速度
+echo "⬇️ 测试下载速度..."
+start_time=$(date +%s)
+wget -O /dev/null --timeout=10 http://cachefly.cachefly.net/100mb.test 2>&1 | grep "MB/s" | awk '{print "下载速度: " $3 " " $4}'
+end_time=$(date +%s)
+
+# 如果上面的方法失败，使用备用方法
+if [ $? -ne 0 ]; then
+    echo "📊 使用备用测速方法..."
+    speed=$(curl -s -w "%{speed_download}" -o /dev/null http://cachefly.cachefly.net/100mb.test)
+    echo "下载速度: $(echo "scale=2; $speed / 1024 / 1024" | bc) MB/s"
+fi
+
+echo "✅ 测速完成"
