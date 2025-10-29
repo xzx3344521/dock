@@ -1,0 +1,60 @@
+cat > upgrade_kernel.sh << 'EOF'
+#!/bin/bash
+
+# Debian 12 升级到 6.1.0-40-cloud-amd64 内核一键脚本
+echo "=== Debian 12 内核升级脚本 ==="
+echo "目标内核: 6.1.0-40-cloud-amd64"
+
+# 检查是否为 Debian 系统
+if ! grep -q "Debian" /etc/os-release; then
+    echo "错误: 此脚本仅适用于 Debian 系统"
+    exit 1
+fi
+
+# 显示当前内核版本
+echo "当前内核版本: $(uname -r)"
+
+# 更新软件包列表
+echo "正在更新软件包列表..."
+sudo apt update -y
+
+# 检查目标内核是否可用
+echo "检查内核包可用性..."
+if apt list linux-image-6.1.0-40-cloud-amd64 2>/dev/null | grep -q "6.1.0-40"; then
+    echo "找到目标内核包，开始安装..."
+    
+    # 安装特定内核版本
+    sudo apt install -y \
+        linux-image-6.1.0-40-cloud-amd64 \
+        linux-headers-6.1.0-40-cloud-amd64
+    
+    # 检查安装是否成功
+    if [ $? -eq 0 ]; then
+        echo "内核安装成功!"
+    else
+        echo "内核安装失败，尝试替代方案..."
+        # 尝试安装 cloud 内核元包
+        sudo apt install -y linux-image-cloud-amd64 linux-headers-cloud-amd64
+    fi
+else
+    echo "特定版本不可用，安装最新的 cloud 内核..."
+    sudo apt install -y linux-image-cloud-amd64 linux-headers-cloud-amd64
+fi
+
+# 更新 GRUB 配置
+echo "更新 GRUB 引导配置..."
+sudo update-grub
+
+# 显示安装的内核
+echo "已安装的内核版本:"
+dpkg -l | grep linux-image | awk '{print $2 " " $3}'
+
+echo ""
+echo "=== 安装完成 ==="
+echo "请重启系统以使用新内核: sudo reboot"
+echo "重启后使用 'uname -r' 验证新内核版本"
+EOF
+
+# 给脚本执行权限并运行
+chmod +x upgrade_kernel.sh
+./upgrade_kernel.sh
