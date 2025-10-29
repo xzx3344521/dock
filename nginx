@@ -23,7 +23,7 @@ print_error() {
 check_port() {
     local port=$1
     if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null ; then
-        print_error "端口 $port 已被占用，请释放该端口或修改配置"
+        print_error "端口 $port 已被占用"
         return 1
     else
         print_info "端口 $port 可用"
@@ -35,12 +35,11 @@ check_port() {
 check_ports() {
     print_info "检查端口占用情况..."
     
-    local ports=(80 81 443 800 1443)
+    local ports=(2086 81 2096)
     local conflict_found=0
     
     for port in "${ports[@]}"; do
-        if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null ; then
-            print_error "端口 $port 已被占用"
+        if ! check_port $port; then
             conflict_found=1
         fi
     done
@@ -77,9 +76,9 @@ services:
     image: 'docker.io/jc21/nginx-proxy-manager:latest'
     restart: unless-stopped
     ports:
-      - '800:80'
+      - '2086:80'
       - '81:81'
-      - '1443:443'
+      - '2096:443'
     volumes:
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
@@ -128,8 +127,8 @@ show_completion_info() {
     echo
     print_info "服务端口映射:"
     print_info "  - 管理界面: 81"
-    print_info "  - HTTP 代理: 800 → 80"
-    print_info "  - HTTPS 代理: 1443 → 443"
+    print_info "  - HTTP 代理: 2086 → 80"
+    print_info "  - HTTPS 代理: 2096 → 443"
     echo
 }
 
