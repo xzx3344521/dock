@@ -76,5 +76,6 @@ sleep 5
 echo "服务状态:"
 docker-compose ps
 
-echo "查看密钥相关日志:"
+echo "查看密钥相关日志:3459635287"
 docker-compose logs | grep -i key
+docker exec -it rustdesk-server ./apimain reset-admin-pwd 3459635287
