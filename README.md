@@ -64,4 +64,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/Docker%20%E5%8A%A0%E9%80%9F)
 ```
-
+# github.vps7k7 加速
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/github%E5%AE%89%E8%A3%85)
+```
