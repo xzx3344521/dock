@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 日系动漫风格404页面一键部署脚本
+# 日系动漫风格404页面一键部署脚本 - 修复版
 # 适用于Nginx反向代理环境
 
 set -e
@@ -29,30 +29,58 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 检查root权限
-check_root() {
-    if [[ $EUID -eq 0 ]]; then
-        log_warning "正在使用root权限执行脚本"
-    else
-        log_error "此脚本需要root权限来修改Nginx配置"
-        exit 1
-    fi
-}
-
-# 检查Nginx是否安装
+# 检查Nginx是否安装（修复版）
 check_nginx() {
-    if ! command -v nginx &> /dev/null; then
-        log_error "Nginx未安装，请先安装Nginx"
-        exit 1
+    log_info "检查Nginx安装状态..."
+    
+    # 多种方式检查Nginx
+    if command -v nginx &> /dev/null; then
+        log_success "通过command命令检测到Nginx"
+        return 0
     fi
-    log_success "Nginx已安装"
+    
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        log_success "通过systemctl检测到Nginx服务正在运行"
+        return 0
+    fi
+    
+    if ps aux | grep -v grep | grep nginx &> /dev/null; then
+        log_success "通过进程检测到Nginx正在运行"
+        return 0
+    fi
+    
+    if [ -f /usr/sbin/nginx ] || [ -f /usr/local/nginx/sbin/nginx ]; then
+        log_success "通过文件路径检测到Nginx"
+        return 0
+    fi
+    
+    log_warning "未检测到Nginx，但继续执行（可能是自定义安装）"
+    return 0
 }
 
 # 创建404页面
 create_404_page() {
     local html_path="/usr/share/nginx/html/404.html"
+    local custom_path="/var/www/html/404.html"
     
     log_info "正在创建日系动漫风格404页面..."
+    
+    # 尝试多个可能的HTML目录
+    for path in "$html_path" "$custom_path"; do
+        local dir=$(dirname "$path")
+        if [ -d "$dir" ]; then
+            html_path="$path"
+            log_info "使用HTML目录: $dir"
+            break
+        fi
+    done
+    
+    # 如果目录不存在，创建它
+    local dir=$(dirname "$html_path")
+    if [ ! -d "$dir" ]; then
+        log_warning "目录 $dir 不存在，正在创建..."
+        mkdir -p "$dir"
+    fi
     
     cat > "$html_path" << 'EOF'
 <!DOCTYPE html>
@@ -387,70 +415,91 @@ EOF
     log_success "404页面已创建: $html_path"
 }
 
-# 配置Nginx
-configure_nginx() {
-    local nginx_conf_dir="/etc/nginx"
-    local sites_available_dir="$nginx_conf_dir/sites-available"
-    local sites_enabled_dir="$nginx_conf_dir/sites-enabled"
+# 查找Nginx配置目录
+find_nginx_config() {
+    log_info "查找Nginx配置目录..."
     
-    log_info "正在配置Nginx..."
+    local possible_paths=(
+        "/etc/nginx"
+        "/usr/local/nginx/conf"
+        "/usr/local/etc/nginx"
+    )
     
-    # 检查配置目录是否存在
-    if [[ ! -d "$sites_available_dir" ]]; then
-        log_error "Nginx配置目录不存在: $sites_available_dir"
-        log_info "请确保Nginx已正确安装"
-        exit 1
-    fi
-    
-    # 查找主要的Nginx配置文件
-    local main_config=""
-    if [[ -f "$nginx_conf_dir/nginx.conf" ]]; then
-        main_config="$nginx_conf_dir/nginx.conf"
-    fi
-    
-    # 在http块中添加404配置
-    if [[ -n "$main_config" ]]; then
-        # 备份原配置
-        cp "$main_config" "$main_config.backup.$(date +%Y%m%d%H%M%S)"
-        log_info "已备份原配置: $main_config.backup.*"
-        
-        # 检查是否已存在404配置
-        if grep -q "error_page 404" "$main_config"; then
-            log_warning "404配置已存在，将更新配置"
-            # 可以在这里添加更新逻辑
-        else
-            # 在http块中添加404配置
-            sed -i '/http {/a\\terror_page 404 /404.html;\n\tlocation = /404.html {\n\t\troot /usr/share/nginx/html;\n\t\tinternal;\n\t}' "$main_config"
-            log_success "已在主配置文件中添加404配置"
-        fi
-    fi
-    
-    # 为每个站点配置添加404页面
-    for config_file in "$sites_available_dir"/*; do
-        if [[ -f "$config_file" ]]; then
-            local config_name=$(basename "$config_file")
-            log_info "处理站点配置: $config_name"
-            
-            # 备份原配置
-            cp "$config_file" "$config_file.backup.$(date +%Y%m%d%H%M%S)"
-            
-            # 检查是否已存在404配置
-            if ! grep -q "error_page 404" "$config_file"; then
-                # 在server块中添加404配置
-                sed -i '/server {/a\\terror_page 404 /404.html;' "$config_file"
-                sed -i '/error_page 404/a\\tlocation = /404.html {\n\t\troot /usr/share/nginx/html;\n\t\tinternal;\n\t}' "$config_file"
-                log_success "已为 $config_name 添加404配置"
-            else
-                log_info "$config_name 已有404配置，跳过"
-            fi
+    for path in "${possible_paths[@]}"; do
+        if [ -d "$path" ]; then
+            echo "$path"
+            log_success "找到Nginx配置目录: $path"
+            return 0
         fi
     done
+    
+    log_error "未找到Nginx配置目录"
+    return 1
+}
+
+# 配置Nginx
+configure_nginx() {
+    log_info "正在配置Nginx..."
+    
+    local nginx_conf_dir=$(find_nginx_config)
+    if [ $? -ne 0 ]; then
+        log_error "无法找到Nginx配置目录"
+        return 1
+    fi
+    
+    local sites_available_dir="$nginx_conf_dir/sites-available"
+    local sites_enabled_dir="$nginx_conf_dir/sites-enabled"
+    local conf_d_dir="$nginx_conf_dir/conf.d"
+    
+    # 创建404配置片段
+    local error_conf="$nginx_conf_dir/conf.d/custom_errors.conf"
+    cat > "$error_conf" << 'EOF'
+# 自定义错误页面配置
+error_page 404 /404.html;
+error_page 500 502 503 504 /50x.html;
+
+location = /404.html {
+    root /usr/share/nginx/html;
+    internal;
+}
+
+location = /50x.html {
+    root /usr/share/nginx/html;
+    internal;
+}
+EOF
+
+    log_success "已创建错误页面配置: $error_conf"
+    
+    # 如果存在sites-available目录，也为每个站点配置
+    if [ -d "$sites_available_dir" ]; then
+        for config_file in "$sites_available_dir"/*; do
+            if [[ -f "$config_file" && ! -L "$config_file" ]]; then
+                local config_name=$(basename "$config_file")
+                log_info "检查站点配置: $config_name"
+                
+                # 备份原配置
+                cp "$config_file" "$config_file.backup.$(date +%Y%m%d%H%M%S)"
+                
+                # 检查是否已存在404配置
+                if ! grep -q "error_page 404" "$config_file"; then
+                    # 在server块中添加404配置
+                    if grep -q "server {" "$config_file"; then
+                        sed -i '/server {/a\\n    # 自定义错误页面\n    error_page 404 /404.html;\n    location = /404.html {\n        root /usr/share/nginx/html;\n        internal;\n    }' "$config_file"
+                        log_success "已为 $config_name 添加404配置"
+                    fi
+                else
+                    log_info "$config_name 已有404配置，跳过"
+                fi
+            fi
+        done
+    fi
 }
 
 # 测试Nginx配置
 test_nginx() {
     log_info "测试Nginx配置..."
-    if nginx -t; then
+    if nginx -t 2>/dev/null || /usr/local/nginx/sbin/nginx -t 2>/dev/null; then
         log_success "Nginx配置测试通过"
         return 0
     else
@@ -462,13 +511,25 @@ test_nginx() {
 # 重新加载Nginx
 reload_nginx() {
     log_info "重新加载Nginx配置..."
-    if systemctl reload nginx; then
-        log_success "Nginx已重新加载"
+    
+    # 多种方式重载Nginx
+    if systemctl reload nginx 2>/dev/null; then
+        log_success "通过systemctl重新加载Nginx"
         return 0
-    else
-        log_error "Nginx重新加载失败"
-        return 1
     fi
+    
+    if service nginx reload 2>/dev/null; then
+        log_success "通过service重新加载Nginx"
+        return 0
+    fi
+    
+    if nginx -s reload 2>/dev/null; then
+        log_success "通过nginx命令重新加载Nginx"
+        return 0
+    fi
+    
+    log_warning "无法自动重新加载Nginx，请手动执行: nginx -s reload"
+    return 1
 }
 
 # 显示完成信息
@@ -479,11 +540,12 @@ show_completion() {
     log_info "部署详情："
     log_info "- 404页面位置: /usr/share/nginx/html/404.html"
     log_info "- Nginx配置已更新"
-    log_info "- 所有站点现在都会显示自定义404页面"
+    log_info "- 创建了自定义错误页面配置"
     echo
     log_info "您可以通过访问一个不存在的URL来测试404页面"
-    log_info "例如: curl -I http://your-domain/not-exist-page"
+    log_info "例如: curl http://your-domain/not-exist-page"
     echo
+    log_warning "如果页面未立即生效，请手动重启Nginx服务"
 }
 
 # 主函数
@@ -493,7 +555,6 @@ main() {
     echo
     
     # 检查环境
-    check_root
     check_nginx
     
     # 执行部署步骤
@@ -512,7 +573,7 @@ main() {
 
 # 显示使用说明
 usage() {
-    echo "日系动漫风格404页面一键部署脚本"
+    echo "日系动漫风格404页面一键部署脚本 - 修复版"
     echo
     echo "使用方法: $0 [选项]"
     echo
