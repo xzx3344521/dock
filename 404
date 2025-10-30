@@ -1,0 +1,541 @@
+#!/bin/bash
+
+# 日系动漫风格404页面一键部署脚本
+# 适用于Nginx反向代理环境
+
+set -e
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 日志函数
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# 检查root权限
+check_root() {
+    if [[ $EUID -eq 0 ]]; then
+        log_warning "正在使用root权限执行脚本"
+    else
+        log_error "此脚本需要root权限来修改Nginx配置"
+        exit 1
+    fi
+}
+
+# 检查Nginx是否安装
+check_nginx() {
+    if ! command -v nginx &> /dev/null; then
+        log_error "Nginx未安装，请先安装Nginx"
+        exit 1
+    fi
+    log_success "Nginx已安装"
+}
+
+# 创建404页面
+create_404_page() {
+    local html_path="/usr/share/nginx/html/404.html"
+    
+    log_info "正在创建日系动漫风格404页面..."
+    
+    cat > "$html_path" << 'EOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>页面未找到 - 404错误</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Arial Rounded MT Bold', 'Hiragino Maru Gothic ProN', 'Yu Gothic', sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #ffdde1 0%, #ee9ca7 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            color: #5a3d5c;
+        }
+        
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.85);
+            border-radius: 25px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            border: 3px solid #ffb6c1;
+        }
+        
+        .anime-character {
+            width: 180px;
+            height: 200px;
+            margin: 0 auto 20px;
+            position: relative;
+        }
+        
+        .character-head {
+            width: 120px;
+            height: 120px;
+            background-color: #fff;
+            border-radius: 50%;
+            margin: 0 auto;
+            position: relative;
+            border: 3px solid #ffb6c1;
+            z-index: 2;
+        }
+        
+        .character-hair {
+            width: 140px;
+            height: 80px;
+            background-color: #ff69b4;
+            border-radius: 70px 70px 0 0;
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+        }
+        
+        .character-eyes {
+            display: flex;
+            justify-content: space-around;
+            width: 80px;
+            margin: 40px auto 0;
+        }
+        
+        .eye {
+            width: 20px;
+            height: 30px;
+            background-color: #5a3d5c;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .eye::after {
+            content: '';
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: white;
+            border-radius: 50%;
+            top: 5px;
+            left: 5px;
+        }
+        
+        .character-mouth {
+            width: 30px;
+            height: 10px;
+            background-color: #ff69b4;
+            border-radius: 0 0 15px 15px;
+            margin: 15px auto 0;
+        }
+        
+        .character-body {
+            width: 100px;
+            height: 80px;
+            background-color: #ffb6c1;
+            border-radius: 20px 20px 0 0;
+            margin: -10px auto 0;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .error-code {
+            font-size: 120px;
+            font-weight: bold;
+            color: #ff69b4;
+            text-shadow: 3px 3px 0 #ffb6c1;
+            margin: 10px 0;
+            line-height: 1;
+        }
+        
+        h1 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            color: #5a3d5c;
+        }
+        
+        p {
+            font-size: 18px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+            color: #7a5c7d;
+        }
+        
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 12px 25px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .btn-primary {
+            background-color: #ff69b4;
+            color: white;
+            box-shadow: 0 4px 0 #d4508f;
+        }
+        
+        .btn-secondary {
+            background-color: #b19cd9;
+            color: white;
+            box-shadow: 0 4px 0 #8a7bb5;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 0 rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 0 rgba(0, 0, 0, 0.2);
+        }
+        
+        .floating-elements {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .floating-element {
+            position: absolute;
+            opacity: 0.7;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .element-1 {
+            top: 10%;
+            left: 5%;
+            animation-delay: 0s;
+        }
+        
+        .element-2 {
+            top: 20%;
+            right: 10%;
+            animation-delay: 2s;
+        }
+        
+        .element-3 {
+            bottom: 30%;
+            left: 15%;
+            animation-delay: 4s;
+        }
+        
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+        
+        .sparkle {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #fff;
+            border-radius: 50%;
+            opacity: 0;
+            animation: sparkle 3s linear infinite;
+        }
+        
+        @keyframes sparkle {
+            0%, 100% {
+                opacity: 0;
+                transform: scale(0);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 25px;
+            }
+            
+            .error-code {
+                font-size: 80px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            p {
+                font-size: 16px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="floating-elements">
+            <div class="floating-element element-1">🌸</div>
+            <div class="floating-element element-2">⭐</div>
+            <div class="floating-element element-3">🐱</div>
+        </div>
+        
+        <div class="anime-character">
+            <div class="character-hair"></div>
+            <div class="character-head">
+                <div class="character-eyes">
+                    <div class="eye"></div>
+                    <div class="eye"></div>
+                </div>
+                <div class="character-mouth"></div>
+            </div>
+            <div class="character-body"></div>
+        </div>
+        
+        <div class="error-code">404</div>
+        <h1>おっと！ページが見つかりません</h1>
+        <p>申し訳ありませんが、お探しのページは存在しないか、移動した可能性があります。<br>
+        迷子になったキャラクターのように、ページもどこかへ行ってしまったようです。</p>
+        
+        <div class="action-buttons">
+            <a href="/" class="btn btn-primary">ホームに戻る</a>
+            <a href="javascript:history.back()" class="btn btn-secondary">前のページに戻る</a>
+        </div>
+    </div>
+
+    <script>
+        // 添加闪烁效果
+        document.addEventListener('DOMContentLoaded', function() {
+            const container = document.querySelector('.container');
+            
+            for (let i = 0; i < 15; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.classList.add('sparkle');
+                
+                // 随机位置
+                sparkle.style.left = Math.random() * 100 + '%';
+                sparkle.style.top = Math.random() * 100 + '%';
+                
+                // 随机大小
+                const size = Math.random() * 10 + 5;
+                sparkle.style.width = size + 'px';
+                sparkle.style.height = size + 'px';
+                
+                // 随机延迟
+                sparkle.style.animationDelay = Math.random() * 5 + 's';
+                
+                container.appendChild(sparkle);
+            }
+        });
+    </script>
+</body>
+</html>
+EOF
+
+    log_success "404页面已创建: $html_path"
+}
+
+# 配置Nginx
+configure_nginx() {
+    local nginx_conf_dir="/etc/nginx"
+    local sites_available_dir="$nginx_conf_dir/sites-available"
+    local sites_enabled_dir="$nginx_conf_dir/sites-enabled"
+    
+    log_info "正在配置Nginx..."
+    
+    # 检查配置目录是否存在
+    if [[ ! -d "$sites_available_dir" ]]; then
+        log_error "Nginx配置目录不存在: $sites_available_dir"
+        log_info "请确保Nginx已正确安装"
+        exit 1
+    fi
+    
+    # 查找主要的Nginx配置文件
+    local main_config=""
+    if [[ -f "$nginx_conf_dir/nginx.conf" ]]; then
+        main_config="$nginx_conf_dir/nginx.conf"
+    fi
+    
+    # 在http块中添加404配置
+    if [[ -n "$main_config" ]]; then
+        # 备份原配置
+        cp "$main_config" "$main_config.backup.$(date +%Y%m%d%H%M%S)"
+        log_info "已备份原配置: $main_config.backup.*"
+        
+        # 检查是否已存在404配置
+        if grep -q "error_page 404" "$main_config"; then
+            log_warning "404配置已存在，将更新配置"
+            # 可以在这里添加更新逻辑
+        else
+            # 在http块中添加404配置
+            sed -i '/http {/a\\terror_page 404 /404.html;\n\tlocation = /404.html {\n\t\troot /usr/share/nginx/html;\n\t\tinternal;\n\t}' "$main_config"
+            log_success "已在主配置文件中添加404配置"
+        fi
+    fi
+    
+    # 为每个站点配置添加404页面
+    for config_file in "$sites_available_dir"/*; do
+        if [[ -f "$config_file" ]]; then
+            local config_name=$(basename "$config_file")
+            log_info "处理站点配置: $config_name"
+            
+            # 备份原配置
+            cp "$config_file" "$config_file.backup.$(date +%Y%m%d%H%M%S)"
+            
+            # 检查是否已存在404配置
+            if ! grep -q "error_page 404" "$config_file"; then
+                # 在server块中添加404配置
+                sed -i '/server {/a\\terror_page 404 /404.html;' "$config_file"
+                sed -i '/error_page 404/a\\tlocation = /404.html {\n\t\troot /usr/share/nginx/html;\n\t\tinternal;\n\t}' "$config_file"
+                log_success "已为 $config_name 添加404配置"
+            else
+                log_info "$config_name 已有404配置，跳过"
+            fi
+        fi
+    done
+}
+
+# 测试Nginx配置
+test_nginx() {
+    log_info "测试Nginx配置..."
+    if nginx -t; then
+        log_success "Nginx配置测试通过"
+        return 0
+    else
+        log_error "Nginx配置测试失败"
+        return 1
+    fi
+}
+
+# 重新加载Nginx
+reload_nginx() {
+    log_info "重新加载Nginx配置..."
+    if systemctl reload nginx; then
+        log_success "Nginx已重新加载"
+        return 0
+    else
+        log_error "Nginx重新加载失败"
+        return 1
+    fi
+}
+
+# 显示完成信息
+show_completion() {
+    echo
+    log_success "日系动漫风格404页面部署完成！"
+    echo
+    log_info "部署详情："
+    log_info "- 404页面位置: /usr/share/nginx/html/404.html"
+    log_info "- Nginx配置已更新"
+    log_info "- 所有站点现在都会显示自定义404页面"
+    echo
+    log_info "您可以通过访问一个不存在的URL来测试404页面"
+    log_info "例如: curl -I http://your-domain/not-exist-page"
+    echo
+}
+
+# 主函数
+main() {
+    echo
+    log_info "开始部署日系动漫风格404页面..."
+    echo
+    
+    # 检查环境
+    check_root
+    check_nginx
+    
+    # 执行部署步骤
+    create_404_page
+    configure_nginx
+    
+    # 测试并重新加载Nginx
+    if test_nginx; then
+        reload_nginx
+        show_completion
+    else
+        log_error "部署失败，请检查Nginx配置"
+        exit 1
+    fi
+}
+
+# 显示使用说明
+usage() {
+    echo "日系动漫风格404页面一键部署脚本"
+    echo
+    echo "使用方法: $0 [选项]"
+    echo
+    echo "选项:"
+    echo "  -h, --help    显示此帮助信息"
+    echo "  -i, --install 执行安装部署"
+    echo
+    echo "示例:"
+    echo "  $0 --install  部署404页面"
+}
+
+# 参数处理
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    -i|--install|"")
+        main
+        ;;
+    *)
+        log_error "未知选项: $1"
+        usage
+        exit 1
+        ;;
+esac
