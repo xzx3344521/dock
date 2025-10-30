@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Docker环境日系动漫风格404页面一键部署脚本
+# OpenResty/Nginx 403 & 404 错误页面一键部署脚本
+# 支持Docker环境和传统安装方式
 
 set -e
 
@@ -9,55 +10,420 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_debug() { echo -e "${PURPLE}[DEBUG]${NC} $1"; }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 检查Docker环境
-check_docker_nginx() {
-    log_info "检查Docker Nginx容器..."
+# 检查运行环境
+check_environment() {
+    log_info "检查运行环境..."
     
-    # 查找运行的Nginx容器
-    local nginx_container=$(docker ps --filter "name=nginx" --format "{{.Names}}" | head -1)
-    
-    if [ -z "$nginx_container" ]; then
-        nginx_container=$(docker ps --filter "publish=80" --format "{{.Names}}" | head -1)
+    # 检查是否是Docker环境
+    if docker ps &>/dev/null; then
+        # 查找Nginx或OpenResty容器
+        local nginx_container=$(docker ps --filter "name=nginx" --format "{{.Names}}" | head -1)
+        local openresty_container=$(docker ps --filter "name=openresty" --format "{{.Names}}" | head -1)
+        
+        if [ -n "$openresty_container" ]; then
+            log_success "找到OpenResty容器: $openresty_container"
+            echo "docker:$openresty_container"
+            return 0
+        elif [ -n "$nginx_container" ]; then
+            log_success "找到Nginx容器: $nginx_container"
+            echo "docker:$nginx_container"
+            return 0
+        else
+            log_warning "未找到Nginx/OpenResty容器，尝试其他方式"
+        fi
     fi
     
-    if [ -z "$nginx_container" ]; then
-        nginx_container=$(docker ps --filter "publish=443" --format "{{.Names}}" | head -1)
-    fi
-    
-    if [ -n "$nginx_container" ]; then
-        log_success "找到Nginx容器: $nginx_container"
-        echo "$nginx_container"
+    # 检查系统安装的OpenResty
+    if command -v openresty &>/dev/null; then
+        log_success "找到系统安装的OpenResty"
+        echo "system:openresty"
         return 0
-    else
-        log_error "未找到运行的Nginx容器"
-        return 1
     fi
+    
+    # 检查系统安装的Nginx
+    if command -v nginx &>/dev/null; then
+        log_success "找到系统安装的Nginx"
+        echo "system:nginx"
+        return 0
+    fi
+    
+    log_error "未找到Nginx或OpenResty"
+    return 1
 }
 
-# 创建404页面到宿主机目录
+# 创建403错误页面
+create_403_page() {
+    local host_data_dir="/boot/data/dataxn"
+    
+    log_info "正在创建日系动漫风格403错误页面..."
+    
+    # 检查宿主机目录是否存在
+    if [ ! -d "$host_data_dir" ]; then
+        log_warning "目录 $host_data_dir 不存在，正在创建..."
+        mkdir -p "$host_data_dir"
+    fi
+    
+    local html_path="$host_data_dir/403.html"
+    
+    cat > "$html_path" << 'EOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>访问被拒绝 - 403错误</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Arial Rounded MT Bold', 'Hiragino Maru Gothic ProN', 'Yu Gothic', sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            color: #2c3e50;
+        }
+        
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 25px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            border: 3px solid #3498db;
+        }
+        
+        .anime-character {
+            width: 180px;
+            height: 200px;
+            margin: 0 auto 20px;
+            position: relative;
+        }
+        
+        .character-head {
+            width: 120px;
+            height: 120px;
+            background-color: #fff;
+            border-radius: 50%;
+            margin: 0 auto;
+            position: relative;
+            border: 3px solid #3498db;
+            z-index: 2;
+        }
+        
+        .character-hair {
+            width: 140px;
+            height: 80px;
+            background-color: #2980b9;
+            border-radius: 70px 70px 0 0;
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+        }
+        
+        .character-eyes {
+            display: flex;
+            justify-content: space-around;
+            width: 80px;
+            margin: 40px auto 0;
+        }
+        
+        .eye {
+            width: 20px;
+            height: 30px;
+            background-color: #2c3e50;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .eye::after {
+            content: '';
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: white;
+            border-radius: 50%;
+            top: 5px;
+            left: 5px;
+        }
+        
+        .character-mouth {
+            width: 30px;
+            height: 10px;
+            background-color: #e74c3c;
+            border-radius: 0 0 15px 15px;
+            margin: 15px auto 0;
+        }
+        
+        .character-body {
+            width: 100px;
+            height: 80px;
+            background-color: #3498db;
+            border-radius: 20px 20px 0 0;
+            margin: -10px auto 0;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .error-code {
+            font-size: 120px;
+            font-weight: bold;
+            color: #e74c3c;
+            text-shadow: 3px 3px 0 #f39c12;
+            margin: 10px 0;
+            line-height: 1;
+        }
+        
+        h1 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+        
+        p {
+            font-size: 18px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+            color: #34495e;
+        }
+        
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 12px 25px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .btn-primary {
+            background-color: #3498db;
+            color: white;
+            box-shadow: 0 4px 0 #2980b9;
+        }
+        
+        .btn-secondary {
+            background-color: #9b59b6;
+            color: white;
+            box-shadow: 0 4px 0 #8e44ad;
+        }
+        
+        .btn-warning {
+            background-color: #e67e22;
+            color: white;
+            box-shadow: 0 4px 0 #d35400;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 0 rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 0 rgba(0, 0, 0, 0.2);
+        }
+        
+        .floating-elements {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .floating-element {
+            position: absolute;
+            opacity: 0.7;
+            animation: float 6s ease-in-out infinite;
+            font-size: 24px;
+        }
+        
+        .element-1 {
+            top: 10%;
+            left: 5%;
+            animation-delay: 0s;
+        }
+        
+        .element-2 {
+            top: 20%;
+            right: 10%;
+            animation-delay: 2s;
+        }
+        
+        .element-3 {
+            bottom: 30%;
+            left: 15%;
+            animation-delay: 4s;
+        }
+        
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+        
+        .security-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            animation: bounce 2s infinite;
+        }
+        
+        @keyframes bounce {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 25px;
+            }
+            
+            .error-code {
+                font-size: 80px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+            
+            p {
+                font-size: 16px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="floating-elements">
+            <div class="floating-element element-1">🚫</div>
+            <div class="floating-element element-2">🔒</div>
+            <div class="floating-element element-3">⚡</div>
+        </div>
+        
+        <div class="security-icon">🔐</div>
+        
+        <div class="anime-character">
+            <div class="character-hair"></div>
+            <div class="character-head">
+                <div class="character-eyes">
+                    <div class="eye"></div>
+                    <div class="eye"></div>
+                </div>
+                <div class="character-mouth"></div>
+            </div>
+            <div class="character-body"></div>
+        </div>
+        
+        <div class="error-code">403</div>
+        <h1>アクセスが拒否されました！</h1>
+        <p>申し訳ありませんが、このページへのアクセス権限がありません。<br>
+        守られし領域へは、選ばれし者だけが入ることが許されています。</p>
+        
+        <div class="action-buttons">
+            <a href="/" class="btn btn-primary">ホームに戻る</a>
+            <a href="javascript:history.back()" class="btn btn-secondary">前のページに戻る</a>
+            <a href="mailto:admin@example.com" class="btn btn-warning">管理者に連絡</a>
+        </div>
+    </div>
+
+    <script>
+        // 添加闪烁效果
+        document.addEventListener('DOMContentLoaded', function() {
+            const container = document.querySelector('.container');
+            
+            for (let i = 0; i < 10; i++) {
+                const sparkle = document.createElement('div');
+                sparkle.classList.add('sparkle');
+                
+                // 随机位置
+                sparkle.style.left = Math.random() * 100 + '%';
+                sparkle.style.top = Math.random() * 100 + '%';
+                
+                // 随机大小
+                const size = Math.random() * 8 + 3;
+                sparkle.style.width = size + 'px';
+                sparkle.style.height = size + 'px';
+                sparkle.style.backgroundColor = getRandomColor();
+                
+                // 随机延迟
+                sparkle.style.animationDelay = Math.random() * 5 + 's';
+                
+                container.appendChild(sparkle);
+            }
+            
+            function getRandomColor() {
+                const colors = ['#3498db', '#e74c3c', '#f39c12', '#9b59b6'];
+                return colors[Math.floor(Math.random() * colors.length)];
+            }
+        });
+    </script>
+</body>
+</html>
+EOF
+
+    log_success "403页面已创建: $html_path"
+}
+
+# 创建404错误页面（更新版）
 create_404_page() {
     local host_data_dir="/boot/data/dataxn"
     
-    log_info "正在创建日系动漫风格404页面..."
+    log_info "正在创建日系动漫风格404错误页面..."
     
     # 检查宿主机目录是否存在
     if [ ! -d "$host_data_dir" ]; then
@@ -401,20 +767,31 @@ EOF
 }
 
 # 为Docker容器创建Nginx配置
-create_nginx_config() {
+create_docker_nginx_config() {
     local container_name="$1"
     
-    log_info "为容器 $container_name 创建Nginx配置..."
-    
-    # 检查容器内的Nginx配置路径
-    local nginx_conf_path="/etc/nginx/conf.d/custom_404.conf"
+    log_info "为容器 $container_name 创建Nginx错误页面配置..."
     
     # 创建配置内容
     local config_content=$(cat << 'EOF'
-# 自定义404错误页面配置
+# 自定义错误页面配置
+error_page 403 /403.html;
 error_page 404 /404.html;
+error_page 500 502 503 504 /50x.html;
+
+location = /403.html {
+    root /usr/share/nginx/html;
+    internal;
+    allow all;
+}
 
 location = /404.html {
+    root /usr/share/nginx/html;
+    internal;
+    allow all;
+}
+
+location = /50x.html {
     root /usr/share/nginx/html;
     internal;
     allow all;
@@ -423,97 +800,209 @@ EOF
 )
 
     # 将配置写入容器
-    echo "$config_content" | docker exec -i "$container_name" tee "$nginx_conf_path" > /dev/null
+    local config_path="/etc/nginx/conf.d/custom_errors.conf"
+    echo "$config_content" | docker exec -i "$container_name" tee "$config_path" > /dev/null
     
     if [ $? -eq 0 ]; then
-        log_success "Nginx配置已写入容器: $nginx_conf_path"
+        log_success "Nginx错误页面配置已写入容器: $config_path"
     else
-        log_error "无法写入容器配置，请检查容器权限"
+        log_error "无法写入容器配置"
         return 1
     fi
 }
 
-# 测试Nginx配置
-test_nginx_config() {
-    local container_name="$1"
+# 为系统安装创建Nginx配置
+create_system_nginx_config() {
+    local service_type="$1"
     
-    log_info "测试容器Nginx配置..."
+    log_info "为系统安装的 $service_type 创建错误页面配置..."
     
-    if docker exec "$container_name" nginx -t; then
-        log_success "Nginx配置测试通过"
-        return 0
-    else
-        log_error "Nginx配置测试失败"
+    local nginx_conf_dir=""
+    case "$service_type" in
+        "openresty")
+            nginx_conf_dir="/usr/local/openresty/nginx/conf"
+            if [ ! -d "$nginx_conf_dir" ]; then
+                nginx_conf_dir="/etc/openresty"
+            fi
+            ;;
+        "nginx")
+            nginx_conf_dir="/etc/nginx"
+            ;;
+    esac
+    
+    if [ ! -d "$nginx_conf_dir" ]; then
+        log_error "找不到配置目录: $nginx_conf_dir"
         return 1
     fi
+    
+    local config_path="$nginx_conf_dir/conf.d/custom_errors.conf"
+    
+    # 创建配置内容
+    local config_content=$(cat << EOF
+# 自定义错误页面配置
+error_page 403 /403.html;
+error_page 404 /404.html;
+error_page 500 502 503 504 /50x.html;
+
+location = /403.html {
+    root /usr/share/nginx/html;
+    internal;
+    allow all;
 }
 
-# 重新加载Nginx
-reload_nginx() {
-    local container_name="$1"
-    
-    log_info "重新加载容器Nginx配置..."
-    
-    if docker exec "$container_name" nginx -s reload; then
-        log_success "Nginx配置已重新加载"
-        return 0
-    else
-        log_error "Nginx重新加载失败"
-        return 1
-    fi
+location = /404.html {
+    root /usr/share/nginx/html;
+    internal;
+    allow all;
 }
 
-# 显示Docker特定信息
-show_docker_info() {
-    local container_name="$1"
+location = /50x.html {
+    root /usr/share/nginx/html;
+    internal;
+    allow all;
+}
+EOF
+)
+
+    # 写入配置
+    mkdir -p "$(dirname "$config_path")"
+    echo "$config_content" > "$config_path"
+    log_success "Nginx错误页面配置已创建: $config_path"
+}
+
+# 测试配置
+test_config() {
+    local env_type="$1"
+    local target="$2"
+    
+    log_info "测试配置..."
+    
+    case "$env_type" in
+        "docker")
+            if docker exec "$target" nginx -t; then
+                log_success "Docker容器配置测试通过"
+                return 0
+            else
+                log_error "Docker容器配置测试失败"
+                return 1
+            fi
+            ;;
+        "system")
+            if sudo nginx -t 2>/dev/null || sudo openresty -t 2>/dev/null; then
+                log_success "系统服务配置测试通过"
+                return 0
+            else
+                log_error "系统服务配置测试失败"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 重新加载服务
+reload_service() {
+    local env_type="$1"
+    local target="$2"
+    
+    log_info "重新加载服务..."
+    
+    case "$env_type" in
+        "docker")
+            if docker exec "$target" nginx -s reload; then
+                log_success "Docker容器配置已重新加载"
+                return 0
+            else
+                log_error "Docker容器重新加载失败"
+                return 1
+            fi
+            ;;
+        "system")
+            if systemctl reload nginx 2>/dev/null || systemctl reload openresty 2>/dev/null || nginx -s reload 2>/dev/null; then
+                log_success "系统服务配置已重新加载"
+                return 0
+            else
+                log_error "系统服务重新加载失败"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 显示完成信息
+show_completion() {
+    local env_type="$1"
+    local target="$2"
     
     echo
-    log_success "日系动漫风格404页面部署完成！"
+    log_success "日系动漫风格403 & 404错误页面部署完成！"
     echo
     log_info "部署详情："
-    log_info "- 宿主机404页面: /boot/data/dataxn/404.html"
-    log_info "- Nginx容器: $container_name"
-    log_info "- 容器内配置: /etc/nginx/conf.d/custom_404.conf"
-    echo
-    log_info "目录映射关系："
-    log_info "- 宿主机: /boot/data/dataxn → 容器: (请检查您的具体映射路径)"
+    log_info "- 403页面: /boot/data/dataxn/403.html"
+    log_info "- 404页面: /boot/data/dataxn/404.html"
+    
+    case "$env_type" in
+        "docker")
+            log_info "- 容器名称: $target"
+            log_info "- 配置路径: /etc/nginx/conf.d/custom_errors.conf"
+            ;;
+        "system")
+            log_info "- 服务类型: $target"
+            log_info "- 配置路径: /etc/nginx/conf.d/custom_errors.conf"
+            ;;
+    esac
+    
     echo
     log_info "测试方法："
-    log_info "1. 访问一个不存在的页面: curl http://your-domain/not-exist-page"
-    log_info "2. 或直接在浏览器中访问不存在的URL"
+    log_info "403测试: curl http://你的域名/禁止访问的路径"
+    log_info "404测试: curl http://你的域名/不存在的页面"
     echo
-    log_warning "如果您的目录映射不是默认的/usr/share/nginx/html，请手动调整配置"
+    log_success "现在您的OpenResty/Nginx将显示美观的日系动漫风格错误页面！"
 }
 
 # 主函数
 main() {
     echo
-    log_info "开始为Docker Nginx部署日系动漫风格404页面..."
+    log_info "开始部署日系动漫风格403 & 404错误页面..."
     echo
     
-    # 检查Docker环境
-    local container_name=$(check_docker_nginx)
+    # 检查环境
+    local env_info=$(check_environment)
     if [ $? -ne 0 ]; then
         exit 1
     fi
     
-    # 执行部署步骤
-    create_404_page
-    create_nginx_config "$container_name"
+    local env_type=$(echo "$env_info" | cut -d: -f1)
+    local target=$(echo "$env_info" | cut -d: -f2)
     
-    # 测试并重新加载Nginx
-    if test_nginx_config "$container_name"; then
-        reload_nginx "$container_name"
-        show_docker_info "$container_name"
+    log_debug "环境类型: $env_type, 目标: $target"
+    
+    # 创建错误页面
+    create_403_page
+    create_404_page
+    
+    # 创建配置
+    case "$env_type" in
+        "docker")
+            create_docker_nginx_config "$target"
+            ;;
+        "system")
+            create_system_nginx_config "$target"
+            ;;
+    esac
+    
+    # 测试并重新加载
+    if test_config "$env_type" "$target"; then
+        reload_service "$env_type" "$target"
+        show_completion "$env_type" "$target"
     else
-        log_error "部署失败，请检查Nginx配置"
+        log_error "部署失败，请检查配置"
         exit 1
     fi
 }
 
 # 显示使用说明
 usage() {
-    echo "Docker环境日系动漫风格404页面一键部署脚本"
+    echo "OpenResty/Nginx 403 & 404 错误页面一键部署脚本"
     echo
     echo "使用方法: $0 [选项]"
     echo
@@ -521,8 +1010,12 @@ usage() {
     echo "  -h, --help    显示此帮助信息"
     echo "  -i, --install 执行安装部署"
     echo
+    echo "支持环境:"
+    echo "  - Docker容器 (Nginx/OpenResty)"
+    echo "  - 系统安装 (Nginx/OpenResty)"
+    echo
     echo "示例:"
-    echo "  $0 --install  部署404页面"
+    echo "  $0 --install  部署403和404页面"
 }
 
 # 参数处理
