@@ -1,71 +1,18 @@
 #!/bin/bash
-
-# SublinkX 部署脚本
-set -e
-
-PROJECT_DIR="/opt/sublinkx"
-COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
-
-echo "开始部署 SublinkX..."
-
 # 创建目录
-echo "创建必要的目录..."
-mkdir -p "$PROJECT_DIR"/{db,template,logs}
+sudo mkdir -p /data/sublinkx/{db,template,logs}
+sudo chown -R $USER:$USER /data/sublinkx
 
-# 创建 Docker Compose 文件
-cat > "$COMPOSE_FILE" << 'EOF'
-version: '3.8'
+# 停止并删除现有容器
+docker stop sublinkx 2>/dev/null
+docker rm sublinkx 2>/dev/null
 
-services:
-  sublinkx:
-    image: jaaksi/sublinkx:latest
-    container_name: sublinkx
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./db:/app/db
-      - ./template:/app/template
-      - ./logs:/app/logs
-    environment:
-      - TZ=Asia/Shanghai
-    restart: unless-stopped
-    networks:
-      - sublinkx-network
+# 启动新容器
+docker run --name sublinkx -p 8000:8000 \
+  -v /data/sublinkx/db:/app/db \
+  -v /data/sublinkx/template:/app/template \
+  -v /data/sublinkx/logs:/app/logs \
+  -d jaaksi/sublinkx
 
-networks:
-  sublinkx-network:
-    driver: bridge
-EOF
-
-echo "Docker Compose 文件已创建: $COMPOSE_FILE"
-
-# 部署服务
-cd "$PROJECT_DIR"
-echo "启动 SublinkX 服务..."
-docker compose up -d
-
-# 检查服务状态
-echo "等待服务启动..."
-sleep 10
-
-if docker ps | grep -q sublinkx; then
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    echo "=================================================="
-    echo "✅ SublinkX 部署成功！"
-    echo "访问地址: http://${SERVER_IP}:8000"
-    echo "项目目录: $PROJECT_DIR"
-    echo "数据目录: $PROJECT_DIR/db"
-    echo "模板目录: $PROJECT_DIR/template"
-    echo "日志目录: $PROJECT_DIR/logs"
-    echo "=================================================="
-    echo ""
-    echo "常用命令:"
-    echo "查看日志: docker logs -f sublinkx"
-    echo "停止服务: docker compose down"
-    echo "重启服务: docker compose restart"
-    echo "初始账号: admin"
-    echo "初始密码:: 123456"
-else
-    echo "❌ SublinkX 启动失败，请检查日志: docker logs sublinkx"
-    exit 1
-fi
+echo "Sublinkx 已安装到 /data/sublinkx/"
+echo "访问地址: http://localhost:8000"
