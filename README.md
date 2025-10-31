@@ -78,5 +78,5 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 # ssh端口密码修改
 ```
-bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/ssh)
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/ssh)
 ```
