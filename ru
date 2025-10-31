@@ -53,6 +53,8 @@ services:
     environment:
       - RELAY=${RELAY_SERVER}
       - ENCRYPTED_ONLY=1
+      -RUSTDESK_API_APP_CAPTCHA_THRESHOLD=-1
+      -RUSTDESK_API_JWT_KEY=r0cDMF1eJa9zNqnUPB8ylbEJJWZqj6OdJnOrNhmWSLU=
     volumes:
       - ./server:/root
     restart: unless-stopped
