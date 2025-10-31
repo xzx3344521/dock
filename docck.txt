@@ -1,0 +1,56 @@
+Docker私有镜像仓库使用教程
+
+概述：
+- 私有Docker镜像仓库地址：github.vps7k7k.xyz
+- 认证账号：账号
+- 认证密码：密码
+
+方法一：使用安全管道登录（推荐）
+优点：密码不会保存在命令行历史中，最安全
+
+步骤：
+1. 打开终端（Linux/Mac）或命令提示符（Windows）
+2. 执行登录命令：
+   echo "密码" | docker login github.vps7k7k.xyz -u "账号" --password-stdin
+3. 等待显示"Login Succeeded"表示登录成功
+4. 拉取镜像：docker pull github.vps7k7k.xyz/nginx
+5. 验证镜像：docker images | grep github.vps7k7k.xyz/nginx
+
+完整示例：
+echo "密码" | docker login github.vps7k7k.xyz -u "账号" --password-stdin
+docker pull github.vps7k7k.xyz/nginx
+docker images
+
+方法二：直接命令行登录
+优点：简单直接
+缺点：密码会暂时出现在命令行中
+
+步骤：
+1. 执行登录命令：
+   docker login github.vps7k7k.xyz -u "账号" -p "密码"
+2. 确认显示"Login Succeeded"
+3. 拉取镜像：docker pull github.vps7k7k.xyz/nginx
+
+完整示例：
+docker login github.vps7k7k.xyz -u "账号" -p "密码"
+docker pull github.vps7k7k.xyz/nginx
+
+方法三：交互式登录
+优点：密码输入时不会显示，相对安全
+
+步骤：
+1. 执行登录命令：docker login github.vps7k7k.xyz
+2. 按提示输入：
+   Username: 账号
+   Password: 密码（输入时不会显示）
+3. 确认显示"Login Succeeded"
+4. 拉取镜像：docker pull github.vps7k7k.xyz/nginx
+
+完整示例：
+docker login github.vps7k7k.xyz
+# 然后交互式输入账号密码
+docker pull github.vps7k7k.xyz/nginx
+
+验证和使用：
+- 检查登录状态：cat ~/.docker/config.json
+- 查看当前登录的仓库信息
