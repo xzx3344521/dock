@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# 精准网络测速一键脚本
+# 支持多系统：Ubuntu/Debian/CentOS/RHEL/Alpine
+# 功能：网络连通性测试、多节点延迟测试、Speedtest测速
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,86 +13,377 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${PURPLE}"
-echo "=================================================="
-echo "              🌈 精准网络测速脚本"
-echo "=================================================="
-echo -e "${NC}"
+# 错误处理函数
+handle_error() {
+    echo -e "${RED}❌ 错误: $1${NC}"
+    exit 1
+}
+
+# 检查命令是否存在
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        return 1
+    fi
+    return 0
+}
 
 # 安装必要工具
-echo -e "${BLUE}📦 安装必要工具...${NC}"
-apt-get update >/dev/null 2>&1
-apt-get install -y curl wget iputils-ping bc dnsutils >/dev/null 2>&1
+install_tools() {
+    echo -e "${BLUE}📦 检查并安装必要工具...${NC}"
+    
+    # 检测包管理器
+    if check_command apt-get; then
+        PM="apt-get"
+        UPDATE_CMD="apt-get update"
+        INSTALL_CMD="apt-get install -y"
+    elif check_command yum; then
+        PM="yum"
+        UPDATE_CMD="yum update -y"
+        INSTALL_CMD="yum install -y"
+    elif check_command dnf; then
+        PM="dnf"
+        UPDATE_CMD="dnf update -y"
+        INSTALL_CMD="dnf install -y"
+    elif check_command apk; then
+        PM="apk"
+        UPDATE_CMD="apk update"
+        INSTALL_CMD="apk add"
+    else
+        handle_error "未找到支持的包管理器"
+    fi
+
+    # 更新包列表
+    echo -e "${BLUE}更新包列表...${NC}"
+    if ! $UPDATE_CMD >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  包列表更新失败，继续安装...${NC}"
+    fi
+
+    # 安装必要工具
+    TOOLS=("curl" "wget" "ping" "bc")
+    for tool in "${TOOLS[@]}"; do
+        if ! check_command "$tool"; then
+            echo -e "${BLUE}安装 $tool...${NC}"
+            case $tool in
+                "ping")
+                    if [ "$PM" = "apt-get" ]; then
+                        $INSTALL_CMD iputils-ping >/dev/null 2>&1 || echo -e "${YELLOW}⚠️  iputils-ping 安装失败${NC}"
+                    elif [ "$PM" = "yum" ] || [ "$PM" = "dnf" ]; then
+                        $INSTALL_CMD iputils >/dev/null 2>&1 || echo -e "${YELLOW}⚠️  iputils 安装失败${NC}"
+                    elif [ "$PM" = "apk" ]; then
+                        $INSTALL_CMD iputils >/dev/null 2>&1 || echo -e "${YELLOW}⚠️  iputils 安装失败${NC}"
+                    fi
+                    ;;
+                "bc")
+                    $INSTALL_CMD bc >/dev/null 2>&1 || echo -e "${YELLOW}⚠️  bc 安装失败${NC}"
+                    ;;
+                *)
+                    $INSTALL_CMD "$tool" >/dev/null 2>&1 || echo -e "${YELLOW}⚠️  $tool 安装失败${NC}"
+                    ;;
+            esac
+        fi
+    done
+}
+
+# 安装speedtest
+install_speedtest() {
+    echo -e "${BLUE}📦 检查并安装speedtest...${NC}"
+    
+    # 检查是否已安装
+    if check_command speedtest || check_command speedtest-cli; then
+        echo -e "${GREEN}✅ speedtest 已安装${NC}"
+        return 0
+    fi
+
+    # 尝试不同的安装方法
+    echo -e "${BLUE}尝试安装speedtest...${NC}"
+    
+    # 方法1: 使用包管理器安装
+    if [ "$PM" = "apt-get" ]; then
+        if $INSTALL_CMD speedtest-cli >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ speedtest-cli 安装成功${NC}"
+            return 0
+        fi
+    elif [ "$PM" = "yum" ] || [ "$PM" = "dnf" ]; then
+        if $INSTALL_CMD speedtest-cli >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ speedtest-cli 安装成功${NC}"
+            return 0
+        fi
+    fi
+
+    # 方法2: 使用pip安装
+    if check_command pip3; then
+        if pip3 install speedtest-cli >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ speedtest-cli pip安装成功${NC}"
+            return 0
+        fi
+    elif check_command pip; then
+        if pip install speedtest-cli >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ speedtest-cli pip安装成功${NC}"
+            return 0
+        fi
+    fi
+
+    # 方法3: 使用curl下载官方speedtest
+    if check_command curl; then
+        echo -e "${BLUE}尝试下载官方speedtest...${NC}"
+        if curl -s https://install.speedtest.net/app/cli/install.deb.sh | bash >/dev/null 2>&1; then
+            if $INSTALL_CMD speedtest >/dev/null 2>&1; then
+                echo -e "${GREEN}✅ 官方speedtest安装成功${NC}"
+                return 0
+            fi
+        fi
+    fi
+
+    # 方法4: 使用wget下载speedtest-cli
+    if check_command wget; then
+        echo -e "${BLUE}尝试wget下载speedtest...${NC}"
+        if wget -q -O speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py && \
+           chmod +x speedtest-cli && mv speedtest-cli /usr/local/bin/; then
+            echo -e "${GREEN}✅ speedtest-cli 下载安装成功${NC}"
+            return 0
+        fi
+    fi
+
+    echo -e "${YELLOW}⚠️  speedtest安装失败，跳过测速功能${NC}"
+    return 1
+}
+
+# 检查系统兼容性
+check_system() {
+    echo -e "${BLUE}🔍 检查系统环境...${NC}"
+    
+    # 检查操作系统
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        echo -e "${GREEN}✅ 操作系统: $PRETTY_NAME${NC}"
+    else
+        echo -e "${YELLOW}⚠️  无法检测操作系统类型${NC}"
+    fi
+
+    # 检查架构
+    ARCH=$(uname -m)
+    echo -e "${GREEN}✅ 系统架构: $ARCH${NC}"
+
+    # 检查内核版本
+    KERNEL=$(uname -r)
+    echo -e "${GREEN}✅ 内核版本: $KERNEL${NC}"
+}
 
 # 网络连通性测试
-echo -e "${BLUE}🌐 测试网络连接...${NC}"
-if ping -c 2 -W 3 223.5.5.5 >/dev/null 2>&1; then
-    echo -e "${GREEN}✅ 网络连接正常${NC}"
-else
-    echo -e "${RED}❌ 网络连接失败${NC}"
-    exit 1
-fi
-
-echo ""
+test_connectivity() {
+    echo -e "${BLUE}🌐 测试网络连接...${NC}"
+    
+    # 测试多个DNS服务器
+    dns_servers=("223.5.5.5" "114.114.114.114" "8.8.8.8" "1.1.1.1")
+    connected=false
+    
+    for dns in "${dns_servers[@]}"; do
+        if ping -c 2 -W 3 "$dns" >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ 网络连接正常 (通过 $dns)${NC}"
+            connected=true
+            break
+        fi
+    done
+    
+    if [ "$connected" = false ]; then
+        handle_error "网络连接失败，请检查网络设置"
+    fi
+}
 
 # 多节点延迟测试
-echo -e "${CYAN}🎯 多节点延迟测试${NC}"
-nodes=("阿里DNS:223.5.5.5" "114DNS:114.114.114.114" "腾讯DNS:119.29.29.29" "Cloudflare:1.1.1.1")
-for node in "${nodes[@]}"; do
-    name="${node%:*}"
-    ip="${node#*:}"
-    echo -e "${BLUE}测试 $name...${NC}"
-    result=$(ping -c 4 -W 2 "$ip" 2>/dev/null | grep "min/avg/max" | awk -F'/' '{print "  平均延迟: "$5"ms"}')
-    if [ -n "$result" ]; then
-        latency=$(echo "$result" | grep -o '[0-9.]*')
-        if (( $(echo "$latency < 50" | bc -l) )); then
-            echo -e "${GREEN}$result ✅${NC}"
-        elif (( $(echo "$latency < 100" | bc -l) )); then
-            echo -e "${GREEN}$result 👍${NC}"
-        elif (( $(echo "$latency < 200" | bc -l) )); then
-            echo -e "${YELLOW}$result ⚠️${NC}"
+test_latency() {
+    echo -e "${CYAN}🎯 多节点延迟测试${NC}"
+    nodes=("阿里DNS:223.5.5.5" "114DNS:114.114.114.114" "腾讯DNS:119.29.29.29" "Cloudflare:1.1.1.1" "Google DNS:8.8.8.8")
+    
+    for node in "${nodes[@]}"; do
+        name="${node%:*}"
+        ip="${node#*:}"
+        echo -e "${BLUE}测试 $name...${NC}"
+        
+        if ping -c 4 -W 2 "$ip" >/dev/null 2>&1; then
+            result=$(ping -c 4 -W 2 "$ip" 2>/dev/null | grep "min/avg/max" | awk -F'/' '{print "  平均延迟: "$5"ms"}')
+            if [ -n "$result" ]; then
+                latency=$(echo "$result" | grep -o '[0-9.]*')
+                if command -v bc >/dev/null 2>&1 && [ -n "$latency" ]; then
+                    if (( $(echo "$latency < 50" | bc -l 2>/dev/null) )); then
+                        echo -e "${GREEN}$result ✅${NC}"
+                    elif (( $(echo "$latency < 100" | bc -l 2>/dev/null) )); then
+                        echo -e "${GREEN}$result 👍${NC}"
+                    elif (( $(echo "$latency < 200" | bc -l 2>/dev/null) )); then
+                        echo -e "${YELLOW}$result ⚠️${NC}"
+                    else
+                        echo -e "${RED}$result ❌${NC}"
+                    fi
+                else
+                    # 如果没有bc，简单显示结果
+                    echo -e "${GREEN}$result${NC}"
+                fi
+            else
+                echo -e "${YELLOW}  延迟测试结果解析失败${NC}"
+            fi
         else
-            echo -e "${RED}$result ❌${NC}"
+            echo -e "${RED}  测试失败${NC}"
         fi
-    else
-        echo -e "${RED}  测试失败${NC}"
-    fi
-done
-
-echo ""
+    done
+}
 
 # Speedtest测速
-echo -e "${CYAN}🚀 进行Speedtest测速...${NC}"
-if command -v speedtest-cli &>/dev/null || command -v speedtest &>/dev/null; then
-    result=$(speedtest-cli --simple 2>/dev/null || speedtest --simple 2>/dev/null)
-    if [ $? -eq 0 ]; then
-        echo "$result" | sed -E "
-            s/Ping:/🔄 网络延迟:/
-            s/Download:/⬇️  下载速度:/
-            s/Upload:/⬆️  上传速度:/
-            s/ ms/ 毫秒/
-            s/ Mbit\/s/ Mbit\/秒/
-        " | while read line; do
-            if [[ $line == *"网络延迟"* ]]; then
-                latency=$(echo "$line" | grep -o '[0-9.]*')
-                if (( $(echo "$latency < 50" | bc -l) )); then
-                    echo -e "${GREEN}$line ✅${NC}"
-                elif (( $(echo "$latency < 100" | bc -l) )); then
-                    echo -e "${GREEN}$line 👍${NC}"
-                elif (( $(echo "$latency < 200" | bc -l) )); then
-                    echo -e "${YELLOW}$line ⚠️${NC}"
-                else
-                    echo -e "${RED}$line ❌${NC}"
-                fi
-            elif [[ $line == *"下载速度"* ]]; then
-                echo -e "${GREEN}$line${NC}"
-            elif [[ $line == *"上传速度"* ]]; then
-                echo -e "${BLUE}$line${NC}"
-            fi
-        done
+test_speed() {
+    echo -e "${CYAN}🚀 进行Speedtest测速...${NC}"
+    
+    # 检查是否有可用的speedtest命令
+    SPEEDTEST_CMD=""
+    if check_command speedtest; then
+        SPEEDTEST_CMD="speedtest --simple"
+    elif check_command speedtest-cli; then
+        SPEEDTEST_CMD="speedtest-cli --simple"
+    elif [ -f /usr/local/bin/speedtest-cli ]; then
+        SPEEDTEST_CMD="/usr/local/bin/speedtest-cli --simple"
     fi
-fi
 
-echo ""
-echo -e "${PURPLE}==================================================${NC}"
-echo -e "${PURPLE}==================================================${NC}"
+    if [ -n "$SPEEDTEST_CMD" ]; then
+        echo -e "${BLUE}使用命令: $SPEEDTEST_CMD${NC}"
+        result=$($SPEEDTEST_CMD 2>/dev/null)
+        
+        if [ $? -eq 0 ] && [ -n "$result" ]; then
+            echo "$result" | sed -E "
+                s/Ping:/🔄 网络延迟:/
+                s/Download:/⬇️  下载速度:/
+                s/Upload:/⬆️  上传速度:/
+                s/ ms/ 毫秒/
+                s/ Mbit\/s/ Mbit\/秒/
+            " | while read line; do
+                if [[ $line == *"网络延迟"* ]]; then
+                    latency=$(echo "$line" | grep -o '[0-9.]*')
+                    if command -v bc >/dev/null 2>&1 && [ -n "$latency" ]; then
+                        if (( $(echo "$latency < 50" | bc -l 2>/dev/null) )); then
+                            echo -e "${GREEN}$line ✅${NC}"
+                        elif (( $(echo "$latency < 100" | bc -l 2>/dev/null) )); then
+                            echo -e "${GREEN}$line 👍${NC}"
+                        elif (( $(echo "$latency < 200" | bc -l 2>/dev/null) )); then
+                            echo -e "${YELLOW}$line ⚠️${NC}"
+                        else
+                            echo -e "${RED}$line ❌${NC}"
+                        fi
+                    else
+                        echo -e "${GREEN}$line${NC}"
+                    fi
+                elif [[ $line == *"下载速度"* ]]; then
+                    speed=$(echo "$line" | grep -o '[0-9.]*')
+                    if command -v bc >/dev/null 2>&1 && [ -n "$speed" ]; then
+                        if (( $(echo "$speed > 50" | bc -l 2>/dev/null) )); then
+                            echo -e "${GREEN}$line 🚀${NC}"
+                        elif (( $(echo "$speed > 10" | bc -l 2>/dev/null) )); then
+                            echo -e "${GREEN}$line 👍${NC}"
+                        else
+                            echo -e "${YELLOW}$line ⚠️${NC}"
+                        fi
+                    else
+                        echo -e "${GREEN}$line${NC}"
+                    fi
+                elif [[ $line == *"上传速度"* ]]; then
+                    speed=$(echo "$line" | grep -o '[0-9.]*')
+                    if command -v bc >/dev/null 2>&1 && [ -n "$speed" ]; then
+                        if (( $(echo "$speed > 20" | bc -l 2>/dev/null) )); then
+                            echo -e "${BLUE}$line 🚀${NC}"
+                        elif (( $(echo "$speed > 5" | bc -l 2>/dev/null) )); then
+                            echo -e "${BLUE}$line 👍${NC}"
+                        else
+                            echo -e "${YELLOW}$line ⚠️${NC}"
+                        fi
+                    else
+                        echo -e "${BLUE}$line${NC}"
+                    fi
+                fi
+            done
+        else
+            echo -e "${YELLOW}⚠️  speedtest测速失败，跳过此测试${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  未找到speedtest，跳过测速功能${NC}"
+        echo -e "${BLUE}💡 提示: 可以手动安装speedtest:${NC}"
+        echo -e "${BLUE}  Ubuntu/Debian: apt-get install speedtest-cli${NC}"
+        echo -e "${BLUE}  CentOS/RHEL: yum install speedtest-cli${NC}"
+        echo -e "${BLUE}  或使用: curl -s https://install.speedtest.net/app/cli/install.deb.sh | sudo bash${NC}"
+    fi
+}
+
+# 显示系统信息
+show_system_info() {
+    echo -e "${PURPLE}"
+    echo "=================================================="
+    echo "              🌈 精准网络测速脚本"
+    echo "          支持: Ubuntu/Debian/CentOS/RHEL"
+    echo "=================================================="
+    echo -e "${NC}"
+    
+    check_system
+    echo ""
+}
+
+# 显示使用说明
+show_usage() {
+    echo -e "${GREEN}使用方法:${NC}"
+    echo -e "  $0 [选项]"
+    echo -e ""
+    echo -e "${GREEN}选项:${NC}"
+    echo -e "  -h, --help    显示此帮助信息"
+    echo -e "  -v, --version 显示版本信息"
+    echo -e ""
+    echo -e "${GREEN}功能:${NC}"
+    echo -e "  ✅ 系统环境检测"
+    echo -e "  ✅ 自动安装依赖工具"
+    echo -e "  ✅ 网络连通性测试"
+    echo -e "  ✅ 多节点延迟测试"
+    echo -e "  ✅ Speedtest网速测试"
+    echo -e ""
+    echo -e "${GREEN}示例:${NC}"
+    echo -e "  $0              # 运行完整测试"
+    echo -e "  $0 --help       # 显示帮助"
+}
+
+# 显示版本信息
+show_version() {
+    echo -e "${GREEN}精准网络测速脚本 v2.0${NC}"
+    echo -e "支持多系统网络性能测试"
+}
+
+# 主函数
+main() {
+    # 处理命令行参数
+    case "${1:-}" in
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        -v|--version)
+            show_version
+            exit 0
+            ;;
+        *)
+            # 正常执行
+            ;;
+    esac
+
+    show_system_info
+    install_tools
+    echo ""
+    test_connectivity
+    echo ""
+    test_latency
+    echo ""
+    install_speedtest
+    echo ""
+    test_speed
+    echo ""
+    
+    echo -e "${PURPLE}==================================================${NC}"
+    echo -e "${PURPLE}                 测试完成 🌟${NC}"
+    echo -e "${PURPLE}==================================================${NC}"
+}
+
+# 设置陷阱，确保脚本退出时重置颜色
+trap 'echo -e "${NC}"' EXIT
+
+# 运行主函数
+main "$@"
