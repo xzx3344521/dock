@@ -1,0 +1,43 @@
+# 简化版验证函数
+check_new_port_connection_simple() {
+    local start_time=$(date +%s)
+    local current_time=0
+    local elapsed_time=0
+    
+    log_info "⏰ 您有 $((ROLLBACK_TIME / 60)) 分钟时间测试新配置"
+    log_info "🔑 测试连接信息："
+    echo "=========================================="
+    echo "IP: $(hostname -I | awk '{print $1}')"
+    echo "端口: $NEW_PORT" 
+    echo "密码: $NEW_PASSWORD"
+    echo "测试命令: ssh root@$(hostname -I | awk '{print $1}') -p $NEW_PORT"
+    echo "=========================================="
+    log_info "💡 提示：成功登录后请返回此窗口确认"
+    
+    while true; do
+        current_time=$(date +%s)
+        elapsed_time=$((current_time - start_time))
+        local remaining_time=$((ROLLBACK_TIME - elapsed_time))
+        
+        # 检查是否超时
+        if [[ $elapsed_time -ge $ROLLBACK_TIME ]]; then
+            log_warn "⏰ 超时：在 $((ROLLBACK_TIME / 60)) 分钟内未收到确认"
+            return 1
+        fi
+        
+        # 显示剩余时间并等待用户确认
+        echo "=========================================="
+        log_info "剩余时间: $((remaining_time / 60))分$((remaining_time % 60))秒"
+        read -t 30 -p "✅ 如果您已成功登录新端口，请输入 'confirm' 确认（或按回车继续等待）: " user_confirm
+        
+        if [[ $user_confirm == "confirm" ]]; then
+            log_info "✅ 用户确认成功，新配置将永久生效"
+            return 0
+        fi
+        
+        # 每30秒显示一次提示
+        if [[ $((remaining_time % 30)) -eq 0 ]]; then
+            log_info "💡 提示：请在新终端中测试连接，成功后再返回确认"
+        fi
+    done
+}
