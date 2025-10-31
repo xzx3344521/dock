@@ -53,8 +53,8 @@ services:
     environment:
       - RELAY=${RELAY_SERVER}
       - ENCRYPTED_ONLY=1
-      -RUSTDESK_API_APP_CAPTCHA_THRESHOLD=-1
-      -RUSTDESK_API_JWT_KEY=r0cDMF1eJa9zNqnUPB8ylbEJJWZqj6OdJnOrNhmWSLU=
+      - RUSTDESK_API_APP_CAPTCHA_THRESHOLD=-1
+      - RUSTDESK_API_JWT_KEY=2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE=
     volumes:
       - ./server:/root
     restart: unless-stopped
@@ -74,10 +74,24 @@ ls -la server/
 echo "启动服务..."
 docker-compose up -d
 
-sleep 5
+sleep 10
 echo "服务状态:"
 docker-compose ps
 
-echo "查看密钥相关日志:3459635287"
+echo "查看密钥相关日志:"
 docker-compose logs | grep -i key
+
+echo "重置管理员密码: 3459635287"
 docker exec -it rustdesk-server ./apimain reset-admin-pwd 3459635287
+
+echo "验证密钥一致性:"
+SERVER_KEY=$(docker-compose logs | grep "Key:" | tail -1 | awk '{print $NF}')
+JWT_KEY="2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE="
+
+if [ "$SERVER_KEY" = "$JWT_KEY" ]; then
+    echo "✅ 密钥一致！服务器密钥: $SERVER_KEY"
+else
+    echo "❌ 密钥不一致！"
+    echo "服务器密钥: $SERVER_KEY"
+    echo "JWT密钥: $JWT_KEY"
+fi
