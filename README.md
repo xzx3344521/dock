@@ -83,7 +83,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 # 系统优化
 ```
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/%E7%B3%BB%E7%BB%9F%E4%BC%98%E5%8C%96)
-
+```
 
 
 
