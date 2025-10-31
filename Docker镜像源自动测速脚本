@@ -1,33 +1,15 @@
-#!/bin/bash
+echo "🎯 切换到清华镜像源..."
 
-echo "🔄 使用真实存在的文件测试下载速度..."
-echo "======================================"
+# 备份原配置
+sudo cp /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.list.bak
 
-# 使用确实存在的测试文件
-TEST_FILES=(
-    "http://speedtest.ftp.otenet.gr/files/test1Mb.db"  # 国际测速文件
-    "http://ipv4.download.thinkbroadband.com/1MB.zip"  # 英国测速
-    "http://cachefly.cachefly.net/100mb.test"          # 美国CDN
-)
+# 使用清华镜像源
+sudo tee /etc/apt/sources.list.d/docker.list > /dev/null <<EOF
+deb [arch=amd64] https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/debian bookworm stable
+EOF
 
-# 或者使用国内真实存在的文件
-DOMESTIC_FILES=(
-    "http://mirrors.aliyun.com/ubuntu/ls-lR.gz"
-    "http://mirrors.ustc.edu.cn/ubuntu/ls-lR.gz"
-    "http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz"
-)
+# 更新并安装
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io
 
-for url in "${DOMESTIC_FILES[@]}"; do
-    domain=$(echo "$url" | awk -F/ '{print $3}')
-    echo "测试 $domain ..."
-    
-    # 下载5秒并计算平均速度
-    speed=$(timeout 5 curl -L "$url" -o /dev/null --progress-bar -w "%{speed_download}" 2>/dev/null | awk '{printf "%.0f", $1/1024}')
-    
-    if [[ $speed && $speed -gt 0 ]]; then
-        echo "✅ 下载速度: $speed KB/s"
-    else
-        echo "❌ 测试失败"
-    fi
-    echo "---"
-done
+echo "✅ 已切换到清华镜像源，速度应该会大幅提升！"
