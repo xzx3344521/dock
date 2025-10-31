@@ -1,18 +1,313 @@
-# 简化版验证函数
-check_new_port_connection_simple() {
+#!/bin/bash
+
+# 自动更改SSH端口和root密码脚本（带自动回滚功能）
+# 支持 Ubuntu/Debian/CentOS/RHEL 系统
+
+set -e  # 遇到错误立即退出
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 配置变量
+NEW_PORT="2222"
+NEW_PASSWORD="Xx3459635287"
+ROLLBACK_TIME=300  # 5分钟回滚时间（秒）
+CHECK_INTERVAL=10  # 检查间隔（秒）
+
+# 全局变量
+BACKUP_FILE=""
+ORIGINAL_PORT=""
+OS=""
+
+# 日志函数
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+log_debug() {
+    echo -e "${BLUE}[DEBUG]${NC} $1"
+}
+
+# 检查root权限
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "此脚本需要root权限运行"
+        exit 1
+    fi
+}
+
+# 检测系统类型
+detect_os() {
+    if [[ -f /etc/redhat-release ]]; then
+        OS="centos"
+    elif [[ -f /etc/debian_version ]]; then
+        OS="debian"
+    elif grep -q "ubuntu" /etc/os-release; then
+        OS="ubuntu"
+    else
+        log_error "不支持的操作系统"
+        exit 1
+    fi
+    log_info "检测到操作系统: $OS"
+}
+
+# 获取当前SSH端口
+get_current_ssh_port() {
+    local ssh_config="/etc/ssh/sshd_config"
+    if grep -q "^Port" "$ssh_config"; then
+        ORIGINAL_PORT=$(grep "^Port" "$ssh_config" | awk '{print $2}')
+    else
+        ORIGINAL_PORT="22"
+    fi
+    log_info "检测到当前SSH端口: $ORIGINAL_PORT"
+}
+
+# 备份SSH配置文件
+backup_ssh_config() {
+    local ssh_config="/etc/ssh/sshd_config"
+    BACKUP_FILE="/etc/ssh/sshd_config.backup.$(date +%Y%m%d%H%M%S)"
+    
+    if [[ -f "$ssh_config" ]]; then
+        cp "$ssh_config" "$BACKUP_FILE"
+        log_info "SSH配置文件已备份到: $BACKUP_FILE"
+    else
+        log_error "SSH配置文件不存在: $ssh_config"
+        exit 1
+    fi
+}
+
+# 更改SSH端口
+change_ssh_port() {
+    local ssh_config="/etc/ssh/sshd_config"
+    
+    log_info "正在更改SSH端口为: $NEW_PORT"
+    
+    # 检查端口是否已被使用
+    if netstat -tuln 2>/dev/null | grep ":$NEW_PORT " > /dev/null; then
+        log_error "端口 $NEW_PORT 已被占用"
+        exit 1
+    fi
+    
+    if ss -tuln 2>/dev/null | grep ":$NEW_PORT " > /dev/null; then
+        log_error "端口 $NEW_PORT 已被占用"
+        exit 1
+    fi
+    
+    # 备份原配置
+    backup_ssh_config
+    
+    # 注释掉原有的Port行
+    sed -i 's/^Port/#Port/g' "$ssh_config"
+    
+    # 添加新的Port配置
+    echo "Port $NEW_PORT" >> "$ssh_config"
+    
+    # 确保允许root登录
+    sed -i 's/^#PermitRootLogin yes/PermitRootLogin yes/g' "$ssh_config"
+    sed -i 's/^PermitRootLogin no/PermitRootLogin yes/g' "$ssh_config"
+    sed -i 's/^#PermitRootLogin no/PermitRootLogin yes/g' "$ssh_config"
+    if ! grep -q "^PermitRootLogin" "$ssh_config"; then
+        echo "PermitRootLogin yes" >> "$ssh_config"
+    fi
+    
+    log_info "SSH端口已更改为: $NEW_PORT"
+}
+
+# 更改root密码
+change_root_password() {
+    local old_password_backup=""
+    
+    log_info "正在更改root密码..."
+    
+    # 备份旧密码哈希（用于回滚）
+    old_password_backup=$(grep '^root:' /etc/shadow | cut -d: -f2)
+    echo "$old_password_backup" > /tmp/old_root_password.hash
+    
+    # 更改root密码
+    echo "root:$NEW_PASSWORD" | chpasswd
+    
+    if [[ $? -eq 0 ]]; then
+        log_info "root密码已成功更改"
+        log_warn "新密码: $NEW_PASSWORD"
+        log_warn "请妥善保管密码并及时修改"
+    else
+        log_error "更改root密码失败"
+        exit 1
+    fi
+}
+
+# 配置防火墙
+configure_firewall() {
+    log_info "配置防火墙规则..."
+    
+    case $OS in
+        "centos"|"rhel")
+            if command -v firewall-cmd &> /dev/null; then
+                firewall-cmd --permanent --add-port=$NEW_PORT/tcp
+                firewall-cmd --reload
+                log_info "Firewalld已配置端口 $NEW_PORT"
+            elif command -v iptables &> /dev/null; then
+                iptables -I INPUT -p tcp --dport $NEW_PORT -j ACCEPT
+                service iptables save 2>/dev/null || iptables-save > /etc/sysconfig/iptables
+                log_info "iptables已配置端口 $NEW_PORT"
+            fi
+            ;;
+        "ubuntu"|"debian")
+            if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+                ufw allow $NEW_PORT/tcp
+                log_info "UFW已配置端口 $NEW_PORT"
+            elif command -v iptables &> /dev/null; then
+                iptables -I INPUT -p tcp --dport $NEW_PORT -j ACCEPT
+                iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+                log_info "iptables已配置端口 $NEW_PORT"
+            fi
+            ;;
+    esac
+}
+
+# 检查SELinux
+check_selinux() {
+    if command -v getenforce &> /dev/null; then
+        if [[ $(getenforce) != "Disabled" ]]; then
+            log_warn "检测到SELinux已启用，需要配置SELinux规则"
+            if command -v semanage &> /dev/null; then
+                semanage port -a -t ssh_port_t -p tcp $NEW_PORT 2>/dev/null || \
+                semanage port -m -t ssh_port_t -p tcp $NEW_PORT
+                log_info "SELinux已配置允许SSH端口 $NEW_PORT"
+            else
+                log_warn "SELinux已启用但semanage命令不可用，建议安装policycoreutils-python-utils"
+            fi
+        fi
+    fi
+}
+
+# 重启SSH服务
+restart_ssh_service() {
+    log_info "重启SSH服务..."
+    
+    case $OS in
+        "centos"|"rhel")
+            if systemctl is-active sshd &> /dev/null; then
+                systemctl restart sshd
+            else
+                systemctl restart ssh
+            fi
+            ;;
+        "ubuntu"|"debian")
+            systemctl restart ssh
+            ;;
+    esac
+    
+    sleep 2  # 等待服务完全启动
+    
+    if systemctl is-active ssh >/dev/null 2>&1 || systemctl is-active sshd >/dev/null 2>&1; then
+        log_info "SSH服务重启成功"
+    else
+        log_error "SSH服务重启失败"
+        return 1
+    fi
+}
+
+# 回滚函数
+rollback_changes() {
+    log_warn "开始回滚配置..."
+    
+    # 恢复SSH配置文件
+    if [[ -f "$BACKUP_FILE" ]]; then
+        cp "$BACKUP_FILE" "/etc/ssh/sshd_config"
+        log_info "已恢复SSH配置文件"
+    fi
+    
+    # 恢复root密码
+    if [[ -f "/tmp/old_root_password.hash" ]]; then
+        local old_hash=$(cat /tmp/old_root_password.hash)
+        usermod -p "$old_hash" root 2>/dev/null
+        rm -f /tmp/old_root_password.hash
+        log_info "已恢复root密码"
+    fi
+    
+    # 重启SSH服务
+    restart_ssh_service
+    
+    # 恢复防火墙规则
+    case $OS in
+        "centos"|"rhel")
+            if command -v firewall-cmd &> /dev/null; then
+                firewall-cmd --permanent --remove-port=$NEW_PORT/tcp
+                firewall-cmd --reload
+            fi
+            ;;
+        "ubuntu"|"debian")
+            if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+                ufw delete allow $NEW_PORT/tcp
+            fi
+            ;;
+    esac
+    log_info "已恢复防火墙规则"
+    
+    log_info "回滚完成！已恢复所有原始配置"
+}
+
+# 验证更改
+verify_changes() {
+    log_info "验证更改..."
+    
+    # 检查SSH服务状态
+    case $OS in
+        "centos"|"rhel")
+            if systemctl is-active sshd &> /dev/null; then
+                systemctl status sshd --no-pager -l | head -5
+            else
+                systemctl status ssh --no-pager -l | head -5
+            fi
+            ;;
+        "ubuntu"|"debian")
+            systemctl status ssh --no-pager -l | head -5
+            ;;
+    esac
+    
+    # 检查端口监听
+    if ss -tuln | grep ":$NEW_PORT " > /dev/null || netstat -tuln 2>/dev/null | grep ":$NEW_PORT " > /dev/null; then
+        log_info "SSH服务正在监听端口 $NEW_PORT"
+        return 0
+    else
+        log_error "SSH服务未在端口 $NEW_PORT 监听"
+        return 1
+    fi
+}
+
+# 手动确认验证函数
+manual_verification() {
     local start_time=$(date +%s)
     local current_time=0
     local elapsed_time=0
     
-    log_info "⏰ 您有 $((ROLLBACK_TIME / 60)) 分钟时间测试新配置"
+    echo "=========================================="
+    log_info "⏰ 您有 5 分钟时间测试新配置"
     log_info "🔑 测试连接信息："
+    echo ""
+    echo "   IP: $(hostname -I | awk '{print $1}')"
+    echo "   端口: $NEW_PORT" 
+    echo "   密码: $NEW_PASSWORD"
+    echo ""
+    echo "   测试命令:"
+    echo "   ssh root@$(hostname -I | awk '{print $1}') -p $NEW_PORT"
+    echo ""
+    log_info "💡 提示：请在新终端窗口中测试连接"
+    log_info "     成功登录后请返回此窗口输入 'confirm' 确认"
     echo "=========================================="
-    echo "IP: $(hostname -I | awk '{print $1}')"
-    echo "端口: $NEW_PORT" 
-    echo "密码: $NEW_PASSWORD"
-    echo "测试命令: ssh root@$(hostname -I | awk '{print $1}') -p $NEW_PORT"
-    echo "=========================================="
-    log_info "💡 提示：成功登录后请返回此窗口确认"
     
     while true; do
         current_time=$(date +%s)
@@ -21,23 +316,144 @@ check_new_port_connection_simple() {
         
         # 检查是否超时
         if [[ $elapsed_time -ge $ROLLBACK_TIME ]]; then
-            log_warn "⏰ 超时：在 $((ROLLBACK_TIME / 60)) 分钟内未收到确认"
+            log_warn "⏰ 超时：在 5 分钟内未收到确认"
+            echo ""
             return 1
         fi
         
-        # 显示剩余时间并等待用户确认
-        echo "=========================================="
-        log_info "剩余时间: $((remaining_time / 60))分$((remaining_time % 60))秒"
-        read -t 30 -p "✅ 如果您已成功登录新端口，请输入 'confirm' 确认（或按回车继续等待）: " user_confirm
-        
-        if [[ $user_confirm == "confirm" ]]; then
-            log_info "✅ 用户确认成功，新配置将永久生效"
-            return 0
+        # 显示剩余时间
+        if [[ $((elapsed_time % 30)) -eq 0 ]]; then
+            echo ""
+            log_info "剩余时间: $((remaining_time / 60))分$((remaining_time % 60))秒"
+            echo "请输入 'confirm' 确认成功，或等待自动回滚..."
         fi
         
-        # 每30秒显示一次提示
-        if [[ $((remaining_time % 30)) -eq 0 ]]; then
-            log_info "💡 提示：请在新终端中测试连接，成功后再返回确认"
+        # 设置超时读取，避免永久阻塞
+        if read -t 10 -p "请输入 'confirm' 确认: " user_confirm; then
+            if [[ $user_confirm == "confirm" ]]; then
+                log_info "✅ 用户确认成功，新配置将永久生效"
+                echo ""
+                return 0
+            else
+                log_warn "无效输入，请输入 'confirm'"
+            fi
+        fi
+        
+        # 每10秒显示一次提示
+        if [[ $((elapsed_time % 10)) -eq 0 ]]; then
+            echo "等待确认中... (剩余 $((remaining_time / 60))分$((remaining_time % 60))秒)"
         fi
     done
 }
+
+# 显示警告信息
+show_warning() {
+    echo "=========================================="
+    log_warn "              重要警告!"
+    echo "=========================================="
+    log_warn "此脚本将执行以下操作:"
+    log_warn "  • 更改SSH端口为 $NEW_PORT"
+    log_warn "  • 更改root密码为 $NEW_PASSWORD" 
+    log_warn "  • 修改防火墙配置"
+    log_warn "  • 重启SSH服务"
+    echo "=========================================="
+    log_warn "安全机制:"
+    log_warn "  • 如果5分钟内没有确认新配置工作正常"
+    log_warn "  • 系统将自动回滚到原始配置"
+    echo "=========================================="
+    log_warn "在继续之前，请确保:"
+    log_warn "  • 您有服务器的物理访问权限"
+    log_warn "  • 您了解操作风险"
+    log_warn "  • 您已经备份了重要数据"
+    echo "=========================================="
+    
+    # 直接等待回车，避免输入问题
+    echo -e "${YELLOW}按回车键继续，或按 Ctrl+C 取消...${NC}"
+    read
+}
+
+# 清理函数
+cleanup() {
+    rm -f /tmp/old_root_password.hash
+}
+
+# 信号处理
+setup_signal_handlers() {
+    trap 'echo; log_warn "接收到中断信号，开始回滚..."; rollback_changes; cleanup; exit 1' INT TERM
+}
+
+# 主函数
+main() {
+    log_info "开始执行SSH配置脚本（带自动回滚功能）"
+    
+    # 设置信号处理
+    setup_signal_handlers
+    
+    show_warning
+    check_root
+    detect_os
+    get_current_ssh_port
+    
+    # 执行配置更改
+    change_ssh_port
+    change_root_password
+    configure_firewall
+    check_selinux
+    
+    if ! restart_ssh_service; then
+        log_error "SSH服务重启失败，开始回滚"
+        rollback_changes
+        exit 1
+    fi
+    
+    if ! verify_changes; then
+        log_error "配置验证失败，开始回滚"
+        rollback_changes
+        exit 1
+    fi
+    
+    # 启动手动验证
+    log_info "启动配置验证阶段..."
+    if manual_verification; then
+        log_info "✅ 配置验证成功！新SSH配置已生效"
+        log_info "✅ 端口: $NEW_PORT"
+        log_info "✅ 请妥善保管新密码"
+        
+        # 询问是否保留原端口
+        echo "=========================================="
+        if read -p "是否同时保留原SSH端口 $ORIGINAL_PORT? (y/n): " keep_original && [[ $keep_original == "y" || $keep_original == "Y" ]]; then
+            log_info "恢复原端口配置..."
+            # 恢复原端口配置
+            if [[ -f "$BACKUP_FILE" ]]; then
+                # 从备份文件中提取原Port配置
+                original_port_line=$(grep "^Port" "$BACKUP_FILE" | head -1)
+                if [[ -n "$original_port_line" ]]; then
+                    echo "$original_port_line" >> "/etc/ssh/sshd_config"
+                else
+                    echo "Port $ORIGINAL_PORT" >> "/etc/ssh/sshd_config"
+                fi
+            else
+                echo "Port $ORIGINAL_PORT" >> "/etc/ssh/sshd_config"
+            fi
+            
+            if restart_ssh_service; then
+                log_info "现在支持双端口: $ORIGINAL_PORT 和 $NEW_PORT"
+            else
+                log_error "重启SSH服务失败，但新端口配置已生效"
+            fi
+        fi
+        
+        cleanup
+        log_info "🎉 脚本执行完成！新配置已永久生效"
+    else
+        log_error "❌ 配置验证失败，开始回滚..."
+        rollback_changes
+        cleanup
+        exit 1
+    fi
+}
+
+# 检查是否直接运行脚本
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
