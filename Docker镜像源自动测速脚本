@@ -1,186 +1,33 @@
 #!/bin/bash
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-echo -e "${BLUE}🐳 Docker镜像源真实速度测试脚本${NC}"
+echo "🔄 使用真实存在的文件测试下载速度..."
 echo "======================================"
 
-# 定义镜像源
-declare -A MIRRORS=(
-    ["阿里云"]="mirrors.aliyun.com"
-    ["中科大"]="mirrors.ustc.edu.cn" 
-    ["清华"]="mirrors.tuna.tsinghua.edu.cn"
-    ["华为云"]="repo.huaweicloud.com"
-    ["腾讯云"]="mirrors.cloud.tencent.com"
+# 使用确实存在的测试文件
+TEST_FILES=(
+    "http://speedtest.ftp.otenet.gr/files/test1Mb.db"  # 国际测速文件
+    "http://ipv4.download.thinkbroadband.com/1MB.zip"  # 英国测速
+    "http://cachefly.cachefly.net/100mb.test"          # 美国CDN
 )
 
-# 使用Docker的实际安装包进行测速（更大更真实）
-TEST_PATHS=(
-    "docker-ce/pool/stable/amd64/containerd.io_1.7.28-1_amd64.deb"
-    "docker-ce/pool/stable/amd64/docker-ce_25.0.5-1~debian.12~bookworm_amd64.deb"
+# 或者使用国内真实存在的文件
+DOMESTIC_FILES=(
+    "http://mirrors.aliyun.com/ubuntu/ls-lR.gz"
+    "http://mirrors.ustc.edu.cn/ubuntu/ls-lR.gz"
+    "http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz"
 )
 
-# 存储结果
-declare -A AVG_SPEEDS
-
-# 真实下载测速函数
-real_speed_test() {
-    local mirror_name=$1
-    local mirror_url=$2
+for url in "${DOMESTIC_FILES[@]}"; do
+    domain=$(echo "$url" | awk -F/ '{print $3}')
+    echo "测试 $domain ..."
     
-    echo -e "${YELLOW}测试 ${mirror_name} (${mirror_url})...${NC}"
+    # 下载5秒并计算平均速度
+    speed=$(timeout 5 curl -L "$url" -o /dev/null --progress-bar -w "%{speed_download}" 2>/dev/null | awk '{printf "%.0f", $1/1024}')
     
-    local total_speed=0
-    local test_count=0
-    local max_speed=0
-    
-    # 测试多个文件取平均值
-    for test_path in "${TEST_PATHS[@]}"; do
-        local test_url="https://${mirror_url}/${test_path}"
-        
-        echo -n "  下载测速中..."
-        
-        # 使用wget进行真实下载测速（下载10秒）
-        local speed_info=$(timeout 10 wget --progress=dot:binary --output-document=/dev/null "$test_url" 2>&1 | grep -o '[0-9.]\+ [KMG]B/s' | tail -1)
-        
-        if [[ $speed_info ]]; then
-            # 提取速度数值
-            local speed_value=$(echo "$speed_info" | awk '{print $1}')
-            local speed_unit=$(echo "$speed_info" | awk '{print $2}')
-            
-            # 统一转换为KB/s
-            case $speed_unit in
-                "MB/s")
-                    speed_kbs=$(echo "$speed_value * 1024" | bc -l 2>/dev/null | awk '{printf "%.2f", $1}')
-                    ;;
-                "GB/s")
-                    speed_kbs=$(echo "$speed_value * 1024 * 1024" | bc -l 2>/dev/null | awk '{printf "%.2f", $1}')
-                    ;;
-                "KB/s")
-                    speed_kbs=$speed_value
-                    ;;
-                *)
-                    speed_kbs=0
-                    ;;
-            esac
-            
-            if [[ $speed_kbs != "0" ]]; then
-                echo -e " ${GREEN}$speed_info ≈ $(echo "$speed_kbs" | awk '{printf "%.0f", $1}') KB/s${NC}"
-                total_speed=$(echo "$total_speed + $speed_kbs" | bc -l)
-                test_count=$((test_count + 1))
-                
-                # 记录最大速度
-                if (( $(echo "$speed_kbs > $max_speed" | bc -l) )); then
-                    max_speed=$speed_kbs
-                fi
-            else
-                echo -e " ${RED}测速失败${NC}"
-            fi
-        else
-            echo -e " ${RED}无法连接${NC}"
-        fi
-        
-        sleep 1
-    done
-    
-    # 计算平均速度
-    if [[ $test_count -gt 0 ]]; then
-        local avg_speed=$(echo "scale=2; $total_speed / $test_count" | bc -l)
-        AVG_SPEEDS["$mirror_name"]=$avg_speed
-        echo -e "  ${GREEN}✅ 平均速度: $(echo "$avg_speed" | awk '{printf "%.0f", $1}') KB/s (峰值: $(echo "$max_speed" | awk '{printf "%.0f", $1}') KB/s)${NC}"
+    if [[ $speed && $speed -gt 0 ]]; then
+        echo "✅ 下载速度: $speed KB/s"
     else
-        AVG_SPEEDS["$mirror_name"]=0
-        echo -e "  ${RED}❌ 所有测速失败${NC}"
+        echo "❌ 测试失败"
     fi
-    
-    echo ""
-}
-
-# 备用测速方法：使用speedtest-cli
-network_benchmark() {
-    echo -e "${BLUE}🌐 进行网络基准测试...${NC}"
-    
-    if command -v speedtest-cli &> /dev/null; then
-        speedtest-cli --simple
-    else
-        echo "安装speedtest-cli: sudo apt install speedtest-cli"
-    fi
-    echo ""
-}
-
-# 更换镜像源
-change_mirror() {
-    local fastest_mirror=$1
-    local fastest_url=$2
-    
-    echo -e "${GREEN}🎯 切换到最快的镜像源: ${fastest_mirror}${NC}"
-    
-    # 备份原配置
-    sudo cp /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.list.bak.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
-    
-    # 创建新的Docker源配置
-    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null <<EOF
-deb [arch=amd64] https://${fastest_url}/docker-ce/linux/debian bookworm stable
-EOF
-    
-    echo -e "${GREEN}✅ 已更新Docker镜像源${NC}"
-    sudo apt update
-}
-
-main() {
-    # 先进行网络基准测试
-    network_benchmark
-    
-    echo -e "${BLUE}📡 开始真实下载速度测试...${NC}"
-    echo -e "${YELLOW}注意：这将实际下载部分文件，需要较长时间${NC}"
-    echo ""
-    
-    # 检查依赖
-    if ! command -v wget &> /dev/null; then
-        echo "安装wget: sudo apt install wget"
-        sudo apt update && sudo apt install -y wget bc
-    fi
-    
-    # 测试所有镜像源
-    for mirror_name in "${!MIRRORS[@]}"; do
-        real_speed_test "$mirror_name" "${MIRRORS[$mirror_name]}"
-    done
-    
-    # 找出最快的
-    fastest_mirror=""
-    fastest_speed=0
-    
-    echo -e "${BLUE}📊 最终测速结果:${NC}"
-    echo "======================================"
-    
-    for mirror_name in "${!AVG_SPEEDS[@]}"; do
-        speed=${AVG_SPEEDS[$mirror_name]}
-        echo -e "  ${mirror_name}: $(echo "$speed" | awk '{printf "%.0f", $1}') KB/s"
-        
-        if (( $(echo "$speed > $fastest_speed" | bc -l) )); then
-            fastest_speed=$speed
-            fastest_mirror=$mirror_name
-        fi
-    done
-    
-    echo ""
-    
-    if [[ -n "$fastest_mirror" && $(echo "$fastest_speed > 10" | bc -l) -eq 1 ]]; then
-        echo -e "${GREEN}🚀 推荐镜像源: ${fastest_mirror}${NC}"
-        echo -e "${GREEN}📈 平均速度: $(echo "$fastest_speed" | awk '{printf "%.0f", $1}') KB/s${NC}"
-        
-        read -p "是否更换镜像源？(y/N): " confirm
-        if [[ $confirm =~ ^[Yy]$ ]]; then
-            change_mirror "$fastest_mirror" "${MIRRORS[$fastest_mirror]}"
-        fi
-    else
-        echo -e "${RED}❌ 网络状况不佳，建议检查网络连接${NC}"
-    fi
-}
-
-main
+    echo "---"
+done
