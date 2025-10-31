@@ -1,0 +1,283 @@
+#!/bin/bash
+
+# 一键式系统压力测试脚本
+# 文件名: auto_stress.sh
+# 用法: sudo ./auto_stress.sh {install|start|stop|uninstall|status}
+
+SCRIPT_NAME="system_stress"
+SERVICE_FILE="/etc/systemd/system/${SCRIPT_NAME}.service"
+SCRIPT_FILE="/usr/local/bin/${SCRIPT_NAME}.sh"
+PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "此脚本需要root权限，请使用 sudo 运行"
+        exit 1
+    fi
+}
+
+create_stress_script() {
+    cat > "$SCRIPT_FILE" << 'EOF'
+#!/bin/bash
+
+# 系统压力测试脚本
+STRESS_PID_FILE="/var/run/system_stress.pid"
+LOG_FILE="/var/log/system_stress.log"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+start_stress() {
+    log_message "启动系统压力测试"
+    
+    # 清理可能的残留进程
+    pkill -f "dd if=/dev/zero" 2>/dev/null
+    rm -f /dev/shm/stress_mem.* 2>/dev/null
+    
+    # 获取CPU核心数
+    CPU_CORES=$(nproc)
+    MEMORY_AVAILABLE=$(free -g | awk '/Mem:/ {print int($2*0.95)}')
+    
+    log_message "系统信息: CPU核心=$CPU_CORES, 目标内存=${MEMORY_AVAILABLE}G"
+    
+    # 启动CPU压力进程
+    CPU_PIDS=()
+    for i in $(seq 1 $((CPU_CORES * 2))); do
+        (
+            while true; do
+                count=0
+                while [ $count -lt 100000 ]; do
+                    count=$((count + 1))
+                done
+            done
+        ) &
+        CPU_PIDS+=($!)
+    done
+    
+    # 启动内存压力进程
+    (
+        MEM_BLOCKS=()
+        BLOCK_SIZE=100M
+        TARGET_BLOCKS=$((MEMORY_AVAILABLE * 10))
+        
+        for i in $(seq 1 $TARGET_BLOCKS); do
+            if [ $(free -m | awk '/Mem:/ {print $4}') -lt 100 ]; then
+                break
+            fi
+            dd if=/dev/zero of=/dev/shm/stress_mem_$$_$i bs=$BLOCK_SIZE count=1 2>/dev/null &
+            MEM_BLOCKS+=($!)
+            sleep 0.1
+        done
+        
+        wait
+    ) &
+    MEM_PID=$!
+    
+    # 保存所有PID
+    {
+        for pid in "${CPU_PIDS[@]}"; do
+            echo $pid
+        done
+        echo $MEM_PID
+    } > "$STRESS_PID_FILE"
+    
+    log_message "压力测试启动完成 - CPU进程: ${#CPU_PIDS[@]}, 内存PID: $MEM_PID"
+    echo "压力测试已启动 - 查看状态: systemctl status system_stress"
+}
+
+stop_stress() {
+    log_message "停止系统压力测试"
+    
+    if [[ -f "$STRESS_PID_FILE" ]]; then
+        while read pid; do
+            kill -9 "$pid" 2>/dev/null
+        done < "$STRESS_PID_FILE"
+        rm -f "$STRESS_PID_FILE"
+    fi
+    
+    # 清理残留进程和文件
+    pkill -f "dd if=/dev/zero" 2>/dev/null
+    pkill -f "while true; do" 2>/dev/null
+    rm -f /dev/shm/stress_mem.* 2>/dev/null
+    
+    log_message "压力测试已停止"
+    echo "压力测试已停止"
+}
+
+case "$1" in
+    start)
+        start_stress
+        ;;
+    stop)
+        stop_stress
+        ;;
+    *)
+        echo "用法: $0 {start|stop}"
+        exit 1
+        ;;
+esac
+EOF
+
+    chmod +x "$SCRIPT_FILE"
+}
+
+create_service_file() {
+    cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=System Stress Test Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+ExecStart=$SCRIPT_FILE start
+ExecStop=$SCRIPT_FILE stop
+RemainAfterExit=yes
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+install_service() {
+    print_info "安装系统压力测试服务..."
+    
+    check_root
+    
+    # 创建压力测试脚本
+    create_stress_script
+    print_info "压力测试脚本已创建: $SCRIPT_FILE"
+    
+    # 创建systemd服务文件
+    create_service_file
+    print_info "系统服务文件已创建: $SERVICE_FILE"
+    
+    # 重新加载systemd
+    systemctl daemon-reload
+    print_info "systemd配置已重新加载"
+    
+    # 启用开机自启
+    systemctl enable "$SCRIPT_NAME"
+    print_info "开机自启已启用"
+    
+    # 创建日志文件
+    touch /var/log/system_stress.log
+    chmod 644 /var/log/system_stress.log
+    
+    print_info "安装完成！"
+    echo ""
+    print_warning "重要警告：此脚本会让系统资源达到95%使用率，请谨慎使用！"
+    echo ""
+    print_info "使用方法:"
+    echo "  启动压力测试: sudo systemctl start $SCRIPT_NAME"
+    echo "  停止压力测试: sudo systemctl stop $SCRIPT_NAME"
+    echo "  查看状态: sudo systemctl status $SCRIPT_NAME"
+    echo "  查看日志: tail -f /var/log/system_stress.log"
+}
+
+start_stress() {
+    check_root
+    print_info "启动压力测试..."
+    systemctl start "$SCRIPT_NAME"
+    systemctl status "$SCRIPT_NAME" -l
+}
+
+stop_stress() {
+    check_root
+    print_info "停止压力测试..."
+    systemctl stop "$SCRIPT_NAME"
+    print_info "压力测试已停止"
+}
+
+uninstall_service() {
+    check_root
+    print_info "卸载系统压力测试服务..."
+    
+    # 停止服务
+    systemctl stop "$SCRIPT_NAME" 2>/dev/null
+    systemctl disable "$SCRIPT_NAME" 2>/dev/null
+    
+    # 删除文件
+    rm -f "$SERVICE_FILE"
+    rm -f "$SCRIPT_FILE"
+    rm -f "$PID_FILE"
+    rm -f /var/log/system_stress.log
+    
+    # 清理残留进程
+    pkill -f "dd if=/dev/zero" 2>/dev/null
+    pkill -f "while true; do" 2>/dev/null
+    rm -f /dev/shm/stress_mem.* 2>/dev/null
+    
+    # 重新加载systemd
+    systemctl daemon-reload
+    
+    print_info "卸载完成！所有相关文件已清理"
+}
+
+show_status() {
+    if systemctl is-active "$SCRIPT_NAME" >/dev/null 2>&1; then
+        print_info "压力测试服务正在运行"
+        systemctl status "$SCRIPT_NAME" -l
+        echo ""
+        print_info "系统资源使用情况:"
+        top -bn1 | head -10
+    else
+        print_info "压力测试服务未运行"
+    fi
+}
+
+# 主程序
+case "$1" in
+    install)
+        install_service
+        ;;
+    start)
+        start_stress
+        ;;
+    stop)
+        stop_stress
+        ;;
+    uninstall)
+        uninstall_service
+        ;;
+    status)
+        show_status
+        ;;
+    *)
+        echo "系统压力测试一键管理脚本"
+        echo ""
+        echo "用法: $0 {install|start|stop|uninstall|status}"
+        echo ""
+        echo "命令说明:"
+        echo "  install   - 安装并配置压力测试服务（开机自启）"
+        echo "  start     - 立即启动压力测试"
+        echo "  stop      - 立即停止压力测试"
+        echo "  uninstall - 完全卸载压力测试服务"
+        echo "  status    - 查看服务状态和系统资源"
+        echo ""
+        print_warning "警告：此脚本会让系统资源达到高负载，可能影响系统稳定性！"
+        echo ""
+        exit 1
+        ;;
+esac
