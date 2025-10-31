@@ -72,5 +72,8 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/DNS)
 ```
-
+# BorgBacku系统备份软件
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/BorgBacku%E7%B3%BB%E7%BB%9F%E5%A4%87%E4%BB%BD%E8%BD%AF%E4%BB%B6)
+```
 
