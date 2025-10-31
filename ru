@@ -5,7 +5,7 @@ echo "强制修复密钥问题..."
 cd rustdesk-unified-keys
 
 # 完全重置
-docker-compose down
+docker-compose down 2>/dev/null || true
 rm -rf server/*
 
 # 重新生成密钥到正确位置
