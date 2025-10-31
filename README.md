@@ -68,3 +68,9 @@ bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/ma
 ```
 bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/github%E5%AE%89%E8%A3%85)
 ```
+# dns测试更换脚本
+```
+bash <(curl -sSL https://raw.githubusercontent.com/xzx3344521/dock/refs/heads/main/DNS)
+```
+
+
