@@ -27,6 +27,51 @@ log_error() {
     echo -e "${RED}[错误]${NC} $1"
 }
 
+# 检测 Docker Compose 命令
+detect_compose_command() {
+    log_info "检测 Docker Compose 命令..."
+    
+    # 优先使用 docker compose (新版本)
+    if docker compose version &>/dev/null; then
+        COMPOSE_CMD="docker compose"
+        log_success "使用 Docker Compose Plugin (docker compose)"
+        return 0
+    # 检查 docker-compose (旧版本)
+    elif command -v docker-compose &>/dev/null; then
+        COMPOSE_CMD="docker-compose"
+        log_success "使用 Docker Compose Standalone (docker-compose)"
+        return 0
+    else
+        log_error "未找到 Docker Compose 命令"
+        log_info "请安装 Docker Compose:"
+        log_info "1. Docker Compose Plugin: apt-get install docker-compose-plugin"
+        log_info "2. 或 Docker Compose Standalone: curl -L \"https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose"
+        return 1
+    fi
+}
+
+# 检查 Docker 是否安装
+check_docker() {
+    log_info "检查 Docker 环境..."
+    
+    if ! command -v docker &>/dev/null; then
+        log_error "Docker 未安装，请先安装 Docker"
+        exit 1
+    fi
+
+    if ! docker info &>/dev/null; then
+        log_error "Docker 服务异常，请检查 Docker 状态"
+        exit 1
+    fi
+
+    # 检测 Docker Compose 命令
+    if ! detect_compose_command; then
+        exit 1
+    fi
+
+    log_success "Docker 环境检查通过"
+}
+
 # 检查端口是否被占用
 check_port() {
     local port=$1
@@ -67,37 +112,6 @@ check_port() {
     fi
     
     return 0
-}
-
-# 检查 Docker 是否安装
-check_docker() {
-    log_info "检查 Docker 环境..."
-    
-    if ! command -v docker &>/dev/null; then
-        log_error "Docker 未安装，请先安装 Docker"
-        exit 1
-    fi
-
-    if ! docker info &>/dev/null; then
-        log_error "Docker 服务异常，请检查 Docker 状态"
-        exit 1
-    fi
-
-    local compose_available=false
-    if command -v docker-compose &>/dev/null; then
-        compose_available=true
-        log_info "使用 docker-compose"
-    elif docker compose version &>/dev/null; then
-        compose_available=true
-        log_info "使用 docker compose"
-    fi
-
-    if [[ "$compose_available" == "false" ]]; then
-        log_error "Docker Compose 未安装"
-        exit 1
-    fi
-
-    log_success "Docker 环境检查通过"
 }
 
 # 创建目录结构
@@ -501,27 +515,27 @@ deploy_service() {
     
     log_info "开始部署 RustDesk 服务..."
     
-    # 使用 docker-compose 或 docker compose
-    local compose_cmd
-    if command -v docker-compose &>/dev/null; then
-        compose_cmd="docker-compose"
-    else
-        compose_cmd="docker compose"
-    fi
-    
     # 停止并删除现有容器（如果存在）
     if docker ps -a --filter "name=${project_name}-rustdesk" | grep -q "${project_name}-rustdesk"; then
         log_info "停止并删除现有容器..."
         cd /data/rustdesk
-        sudo $compose_cmd -f "$file_path" down || true
+        $COMPOSE_CMD -f "$file_path" down || true
         sleep 5
     fi
     
     # 部署服务
     cd /data/rustdesk
     log_info "启动服务..."
-    if ! sudo $compose_cmd -f "$file_path" up -d; then
+    log_info "使用命令: $COMPOSE_CMD -f \"$file_path\" up -d"
+    
+    if ! $COMPOSE_CMD -f "$file_path" up -d; then
         log_error "服务启动失败"
+        
+        # 提供故障排除建议
+        log_info "故障排除建议:"
+        log_info "1. 检查 Docker 服务状态: systemctl status docker"
+        log_info "2. 检查当前用户是否有 Docker 权限"
+        log_info "3. 尝试手动启动: cd /data/rustdesk && $COMPOSE_CMD up -d"
         return 1
     fi
     
@@ -702,8 +716,8 @@ show_deployment_info() {
     echo "=================== 管理命令 ==================="
     echo -e "查看服务状态: ${YELLOW}docker ps -f name=${project_name}${NC}"
     echo -e "查看服务日志: ${YELLOW}docker logs ${project_name}-rustdesk${NC}"
-    echo -e "停止服务: ${YELLOW}cd /data/rustdesk && docker compose down${NC}"
-    echo -e "重启服务: ${YELLOW}cd /data/rustdesk && docker compose restart${NC}"
+    echo -e "停止服务: ${YELLOW}cd /data/rustdesk && $COMPOSE_CMD down${NC}"
+    echo -e "重启服务: ${YELLOW}cd /data/rustdesk && $COMPOSE_CMD restart${NC}"
     echo "================================================"
     echo
     log_warning "请确保防火墙已开放以下端口:"
@@ -764,7 +778,7 @@ main() {
         log_info "1. 检查 Docker 日志: docker logs ${project_name}-rustdesk"
         log_info "2. 检查端口占用: netstat -tulpn | grep 2111"
         log_info "3. 检查防火墙设置"
-        log_info "4. 尝试手动重启: cd /data/rustdesk && docker compose down && docker compose up -d"
+        log_info "4. 尝试手动重启: cd /data/rustdesk && $COMPOSE_CMD down && $COMPOSE_CMD up -d"
         exit 1
     fi
 }
