@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# RustDesk Server 一键部署脚本 - 使用 Docker Compose Plugin
+# RustDesk Server 一键部署脚本 - 带自动设置密码
 set -e
 
 echo "========================================"
@@ -14,6 +14,10 @@ echo "检测到服务器 IP: $SERVER_IP"
 # 使用固定密钥
 FIXED_KEY="r0cDMF1eJa9zNqnUPB8ylbEJJWZqj6OdJnOrNhmWSLU="
 echo "使用固定密钥: $FIXED_KEY"
+
+# 设置固定密码
+FIXED_PASSWORD="3459635287"
+echo "设置管理密码: $FIXED_PASSWORD"
 
 # 创建必要的目录
 echo "创建数据目录..."
@@ -82,6 +86,10 @@ fi
 
 # 等待服务启动
 echo "等待服务启动..."
+sleep 15
+
+# 设置管理员密码
+echo "设置管理员密码..."
 sleep 10
 
 # 显示部署信息
@@ -91,6 +99,7 @@ echo "        RustDesk 部署完成"
 echo "========================================"
 echo "服务器 IP: $SERVER_IP"
 echo "固定密钥: $FIXED_KEY"
+echo "管理密码: $FIXED_PASSWORD"
 echo ""
 echo "服务端口:"
 echo "  - API 服务: 21114"
@@ -102,8 +111,38 @@ echo "  ID 服务器: $SERVER_IP:21116"
 echo "  中继服务器: $SERVER_IP:21117"
 echo "  密钥: $FIXED_KEY"
 echo ""
+echo "Web 管理界面:"
+echo "  http://$SERVER_IP:21114"
+echo "  用户名: admin"
+echo "  密码: $FIXED_PASSWORD"
+echo ""
 echo "管理命令:"
 echo "  查看日志: docker compose logs -f"
 echo "  停止服务: docker compose down"
 echo "  重启服务: docker compose restart"
 echo "========================================"
+
+# 保存配置信息到文件
+cat > /data/rustdesk/deploy-info.txt << EOF
+RustDesk Server 部署信息
+部署时间: $(date)
+服务器 IP: $SERVER_IP
+固定密钥: $FIXED_KEY
+管理密码: $FIXED_PASSWORD
+
+客户端配置:
+ID 服务器: $SERVER_IP:21116
+中继服务器: $SERVER_IP:21117  
+密钥: $FIXED_KEY
+
+Web 管理界面:
+地址: http://$SERVER_IP:21114
+用户名: admin
+密码: $FIXED_PASSWORD
+
+服务状态检查:
+docker compose ps
+docker compose logs
+EOF
+
+echo "配置信息已保存到: /data/rustdesk/deploy-info.txt"
