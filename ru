@@ -1,209 +1,177 @@
 #!/bin/bash
 
-set -e  # 出现任何错误立即退出
+# RustDesk Server 一键部署脚本
+set -e
 
-echo "🚀 RustDesk 服务器一键部署脚本"
+echo "========================================"
+echo "    RustDesk Server 一键部署脚本"
 echo "========================================"
 
-# 检查 Docker 是否安装
-if ! command -v docker &> /dev/null; then
-    echo "❌ Docker 未安装，请先安装 Docker"
-    exit 1
-fi
+# 创建项目目录
+mkdir -p rustdesk-server
+cd rustdesk-server
 
-# 检查 Docker Compose 是否可用
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-    echo "❌ Docker Compose 不可用，请先安装 Docker Compose"
-    exit 1
-fi
-
-# 使用 docker compose（新版本）或 docker-compose（旧版本）
-DOCKER_COMPOSE_CMD="docker-compose"
-if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-    DOCKER_COMPOSE_CMD="docker compose"
-fi
-
-# 创建工作目录
-WORK_DIR="rustdesk-unified-keys"
-cd "$WORK_DIR" 2>/dev/null || mkdir -p "$WORK_DIR" && cd "$WORK_DIR"
-
-echo "📁 工作目录: $(pwd)"
-
-# 完全重置现有服务
-echo "🔄 清理现有服务..."
-$DOCKER_COMPOSE_CMD down --remove-orphans 2>/dev/null || true
-rm -rf server/* keys/* api-data/* 2>/dev/null || true
-
-# 创建必要的目录结构
-mkdir -p server keys api-data
-
-# 生成固定密钥到 server 目录（容器内的 /root 目录）
-echo "🔑 生成加密密钥..."
-cat > server/id_ed25519 << 'EOF'
+# 生成固定密钥对
+echo "1. 生成密钥对..."
+mkdir -p keys
+openssl genpkey -algorithm ed25519 -out keys/id_ed25519 2>/dev/null || {
+    echo "生成密钥对失败，创建示例密钥..."
+    # 如果 openssl 不可用，创建示例密钥文件
+    cat > keys/id_ed25519 << 'EOF'
 -----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIAE8qD6H5JkG9T5s8s7XaYz1UvP6wQ3rN2tLbKj1mG
 -----END PRIVATE KEY-----
 EOF
-
-cat > server/id_ed25519.pub << 'EOF'
+    cat > keys/id_ed25519.pub << 'EOF'
 -----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE=
 -----END PUBLIC KEY-----
 EOF
+}
 
-# 备份密钥到 keys 目录
-cp server/id_ed25519 keys/
-cp server/id_ed25519.pub keys/
+# 编码密钥为base64
+KEY_PRIV=$(cat keys/id_ed25519 | base64 -w 0)
+KEY_PUB=$(cat keys/id_ed25519.pub | base64 -w 0)
 
-# 设置正确的权限
-chmod 600 server/id_ed25519
-chmod 644 server/id_ed25519.pub
+# 自动检测服务器IP
+echo "2. 检测服务器IP地址..."
+RELAY_SERVER=$(curl -s --connect-timeout 5 http://ipinfo.io/ip || curl -s --connect-timeout 5 http://ifconfig.me || hostname -I | awk '{print $1}')
 
-# 检测公网 IP
-echo "🌐 检测服务器公网 IP..."
-RELAY_SERVER=""
-IP_SERVICES=(
-    "http://ipinfo.io/ip"
-    "http://ifconfig.me"
-    "http://icanhazip.com"
-    "http://ident.me"
-)
-
-for service in "${IP_SERVICES[@]}"; do
-    if RELAY_SERVER=$(curl -s --connect-timeout 3 "$service"); then
-        if [[ "$RELAY_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "✅ 从 $service 获取到 IP: $RELAY_SERVER"
-            break
-        fi
-    fi
-done
-
-# 如果通过服务获取失败，使用本地IP
-if [[ -z "$RELAY_SERVER" || ! "$RELAY_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    RELAY_SERVER=$(hostname -I | awk '{print $1}')
-    echo "⚠️  使用本地 IP: $RELAY_SERVER"
+if [ -z "$RELAY_SERVER" ]; then
+    echo "错误: 无法自动获取服务器IP，请手动输入:"
+    read RELAY_SERVER
+else
+    echo "检测到服务器IP: $RELAY_SERVER"
 fi
 
-# 保存环境变量
-cat > .env << EOF
-# RustDesk 服务器配置
-RELAY_SERVER=$RELAY_SERVER
-FIXED_KEY=2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE=
-TIMEZONE=Asia/Shanghai
-EOF
-
-# 创建完整的 docker-compose 配置
+# 创建docker-compose.yml
+echo "3. 创建Docker Compose配置..."
 cat > docker-compose.yml << EOF
-services:
-  rustdesk:
-    container_name: rustdesk-server
-    ports:
-      - "21114:21114"   # API 服务器
-      - "21115:21115"   # 网页客户端
-      - "21116:21116"   # ID 服务器
-      - "21116:21116/udp"
-      - "21117:21117"   # 中继服务器
-      - "21118:21118"   # 备用端口
-      - "21119:21119"   # 备用端口
-    image: lejianwen/rustdesk-server-s6:latest
-    environment:
-      - RELAY=\${RELAY_SERVER}
-      - ENCRYPTED_ONLY=1
-      - MUST_LOGIN=y
-      - TZ=\${TIMEZONE}
-      - RUSTDESK_API_RUSTDESK_ID_SERVER=\${RELAY_SERVER}:21116
-      - RUSTDESK_API_RUSTDESK_RELAY_SERVER=\${RELAY_SERVER}:21117
-      - RUSTDESK_API_RUSTDESK_API_SERVER=http://\${RELAY_SERVER}:21114
-      - RUSTDESK_API_RUSTDESK_KEY=\${FIXED_KEY}
-      - RUSTDESK_API_RUSTDESK_KEY_FILE=/root/id_ed25519.pub
-      - RUSTDESK_API_JWT_KEY=\${FIXED_KEY}
-      - RUSTDESK_API_LANG=zh-CN
-      - RUSTDESK_API_APP_WEB_CLIENT=1
-      - RUSTDESK_API_APP_REGISTER=false
-      - RUSTDESK_API_APP_CAPTCHA_THRESHOLD=-1
-      - RUSTDESK_API_APP_BAN_THRESHOLD=0
-    volumes:
-      - ./server:/root
-      - ./api-data:/app/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "netstat", "-ltn"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+version: '3'
 
-networks:
-  default:
-    name: rustdesk-network
+services:
+  hbbs:
+    container_name: hbbs
+    ports:
+      - "21115:21115"
+      - "21116:21116" 
+      - "21116:21116/udp"
+      - "21118:21118"
+    image: lejianwen/rustdesk-server:latest
+    command: hbbs -r $RELAY_SERVER:21117
+    volumes:
+      - ./data:/root
+    environment:
+      - RELAY=$RELAY_SERVER
+      - KEY_PUB=$KEY_PUB
+      - KEY_PRIV=$KEY_PRIV
+    restart: unless-stopped
+
+  hbbr:
+    container_name: hbbr  
+    ports:
+      - "21117:21117"
+      - "21119:21119"
+    image: lejianwen/rustdesk-server:latest
+    volumes:
+      - ./data:/root
+    environment:
+      - KEY_PUB=$KEY_PUB
+      - KEY_PRIV=$KEY_PRIV
+    restart: unless-stopped
 EOF
 
-echo "✅ 配置文件创建完成"
+# 创建环境变量文件
+cat > .env << EOF
+RELAY_SERVER=$RELAY_SERVER
+KEY_PUB=$KEY_PUB
+KEY_PRIV=$KEY_PRIV
+EOF
 
-# 验证密钥文件
-echo "🔍 验证密钥文件:"
-ls -la server/
-echo "📄 公钥内容:"
-cat server/id_ed25519.pub
+# 创建启动脚本
+cat > start.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+docker-compose up -d
+echo "RustDesk服务器启动完成！"
+EOF
+
+# 创建停止脚本  
+cat > stop.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+docker-compose down
+echo "RustDesk服务器已停止！"
+EOF
+
+# 创建客户端配置说明
+cat > client-config.md << EOF
+# RustDesk 客户端配置
+
+## 服务器信息
+- ID服务器: $RELAY_SERVER:21116
+- 中继服务器: $RELAY_SERVER:21117  
+- Key: 
+\`\`\`
+$(cat keys/id_ed25519.pub)
+\`\`\`
+
+## 配置步骤
+1. 打开RustDesk客户端
+2. 点击右下角设置按钮
+3. 选择"网络"标签
+4. 填写以下信息：
+   - ID服务器: $RELAY_SERVER:21116
+   - 中继服务器: $RELAY_SERVER:21117
+   - Key: 粘贴上面的公钥内容
+5. 点击"应用"保存设置
+
+## 端口说明
+- 21115: HTTP API端口
+- 21116: ID服务器端口 (TCP)
+- 21117: 中继服务器端口 (TCP)
+- 21118: 网页客户端端口
+- 21119: 中继服务器端口 (备用)
+EOF
+
+# 设置脚本权限
+chmod +x start.sh stop.sh
+
+# 检查Docker环境
+echo "4. 检查Docker环境..."
+if ! command -v docker &> /dev/null; then
+    echo "错误: Docker未安装，请先安装Docker"
+    exit 1
+fi
+
+if ! command -v docker-compose &> /dev/null; then
+    echo "错误: Docker Compose未安装，请先安装Docker Compose"
+    exit 1
+fi
+
+# 拉取镜像
+echo "5. 拉取Docker镜像..."
+docker pull lejianwen/rustdesk-server:latest
 
 # 启动服务
-echo "🔄 启动 RustDesk 服务..."
-$DOCKER_COMPOSE_CMD up -d
+echo "6. 启动RustDesk服务..."
+docker-compose up -d
 
-# 等待服务启动
-echo "⏳ 等待服务启动..."
-for i in {1..30}; do
-    if $DOCKER_COMPOSE_CMD ps | grep -q "Up"; then
-        echo "✅ 服务启动成功"
-        break
-    fi
-    sleep 2
-    echo -n "."
-done
-
-sleep 5
-
-# 显示服务状态
-echo "📊 服务状态:"
-$DOCKER_COMPOSE_CMD ps
-
-# 重置管理员密码
-echo "🔐 重置管理员密码..."
-if docker exec -it rustdesk-server ./apimain reset-admin-pwd 3459635287 2>/dev/null; then
-    echo "✅ 管理员密码已重置: 3459635287"
-else
-    echo "⚠️  密码重置可能失败，请手动检查"
-fi
-
-# 验证部署
-echo "🔍 验证部署结果..."
-SERVER_KEY=$($DOCKER_COMPOSE_CMD logs 2>/dev/null | grep "Key:" | tail -1 | awk '{print $NF}' || echo "")
-FIXED_KEY="2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE="
-
-echo "=== 部署验证结果 ==="
-echo "服务器使用密钥: $SERVER_KEY"
-echo "期望固定密钥: $FIXED_KEY"
-
-if [ "$SERVER_KEY" = "$FIXED_KEY" ]; then
-    echo "✅ 密钥匹配成功！"
-else
-    echo "❌ 密钥不匹配！"
-    echo "调试信息:"
-    $DOCKER_COMPOSE_CMD logs --tail=20 | grep -i key 2>/dev/null || echo "未找到相关日志"
-fi
-
-# 显示最终配置信息
-echo ""
-echo "🎉 RustDesk 服务器部署完成！"
+# 显示部署结果
 echo "========================================"
-echo "📋 客户端配置信息:"
-echo "   ID 服务器: ${RELAY_SERVER}:21116"
-echo "   中继服务器: ${RELAY_SERVER}:21117" 
-echo "   API 服务器: http://${RELAY_SERVER}:21114"
-echo "   密钥: 2Q1Dp4q8q5V7s9kLx2mBwT3zN8rR6vY1zUj5tKfE="
-echo "   管理员密码: 3459635287"
-echo ""
-echo "🔧 管理命令:"
-echo "   查看日志: cd $WORK_DIR && $DOCKER_COMPOSE_CMD logs -f"
-echo "   重启服务: cd $WORK_DIR && $DOCKER_COMPOSE_CMD restart"
-echo "   停止服务: cd $WORK_DIR && $DOCKER_COMPOSE_CMD down"
+echo "       部署完成！"
 echo "========================================"
+echo "服务状态:"
+docker-compose ps
+
+echo -e "\n客户端配置信息已保存到: client-config.md"
+echo -e "\n管理命令:"
+echo "启动服务: ./start.sh"
+echo "停止服务: ./stop.sh"
+echo "查看日志: docker-compose logs -f"
+echo "查看状态: docker-compose ps"
+
+echo -e "\n重要信息:"
+echo "ID服务器: $RELAY_SERVER:21116"
+echo "中继服务器: $RELAY_SERVER:21117"
+echo "密钥文件位置: ./keys/"
