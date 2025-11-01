@@ -73,9 +73,26 @@ EOF
 
 echo "Docker Compose 文件已生成"
 
+# 检查是否使用 docker compose plugin (新版本)
+if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+    echo "使用 Docker Compose Plugin"
+    DOCKER_COMPOSE_CMD="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    echo "使用 Docker-Compose Standalone"
+    # 确保 docker-compose 有执行权限
+    if [ ! -x "$(command -v docker-compose)" ]; then
+        echo "修复 docker-compose 执行权限..."
+        chmod +x $(command -v docker-compose)
+    fi
+    DOCKER_COMPOSE_CMD="docker-compose"
+else
+    echo "错误: 未找到 Docker Compose，请先安装"
+    exit 1
+fi
+
 # 启动服务
 echo "启动 RustDesk 服务..."
-docker-compose up -d
+$DOCKER_COMPOSE_CMD up -d
 
 # 等待服务启动
 echo "等待服务启动..."
@@ -101,9 +118,9 @@ echo "  中继服务器: $SERVER_IP:21117"
 echo "  密钥: $FIXED_KEY"
 echo ""
 echo "管理命令:"
-echo "  查看日志: docker-compose logs -f"
-echo "  停止服务: docker-compose down"
-echo "  重启服务: docker-compose restart"
+echo "  查看日志: $DOCKER_COMPOSE_CMD logs -f"
+echo "  停止服务: $DOCKER_COMPOSE_CMD down"
+echo "  重启服务: $DOCKER_COMPOSE_CMD restart"
 echo "========================================"
 
 # 保存配置信息到文件
@@ -120,8 +137,8 @@ ID 服务器: $SERVER_IP:21116
 密钥: $FIXED_KEY
 
 服务状态检查:
-docker-compose ps
-docker-compose logs
+$DOCKER_COMPOSE_CMD ps
+$DOCKER_COMPOSE_CMD logs
 EOF
 
 echo "配置信息已保存到: /data/rustdesk/deploy-info.txt"
