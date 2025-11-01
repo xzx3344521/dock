@@ -11,18 +11,18 @@ echo "========================================"
 SERVER_IP=$(curl -s http://checkip.amazonaws.com || curl -s http://ipinfo.io/ip || echo "127.0.0.1")
 echo "检测到服务器 IP: $SERVER_IP"
 
-# 生成固定密钥（如果未提供）
+# 使用固定密钥
 FIXED_KEY="r0cDMF1eJa9zNqnUPB8ylbEJJWZqj6OdJnOrNhmWSLU="
 echo "使用固定密钥: $FIXED_KEY"
 
-# 生成随机密码（用于管理）
+# 生成随机管理密码
 ADMIN_PASSWORD=$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | base64 | head -c 16)
 echo "生成的管理密码: $ADMIN_PASSWORD"
 
 # 创建必要的目录
 echo "创建数据目录..."
-sudo mkdir -p /data/rustdesk/server
-sudo mkdir -p /data/rustdesk/api
+mkdir -p /data/rustdesk/server
+mkdir -p /data/rustdesk/api
 
 # 生成 Docker Compose 文件
 cat > docker-compose.yml << EOF
@@ -72,21 +72,6 @@ services:
 EOF
 
 echo "Docker Compose 文件已生成"
-
-# 检查 Docker 是否安装
-if ! command -v docker &> /dev/null; then
-    echo "Docker 未安装，开始安装 Docker..."
-    curl -fsSL https://get.docker.com | sh
-    sudo systemctl start docker
-    sudo systemctl enable docker
-fi
-
-# 检查 Docker Compose 是否安装
-if ! command -v docker-compose &> /dev/null; then
-    echo "Docker Compose 未安装，开始安装..."
-    sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
-fi
 
 # 启动服务
 echo "启动 RustDesk 服务..."
