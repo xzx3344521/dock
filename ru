@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# RustDesk Server 一键部署脚本 - 带自动设置密码
+# RustDesk Server 一键部署脚本 - 修复重启问题
 set -e
 
 echo "========================================"
@@ -24,73 +24,82 @@ echo "创建数据目录..."
 mkdir -p /data/rustdesk/server
 mkdir -p /data/rustdesk/api
 
-# 生成 Docker Compose 文件
+# 停止并删除可能存在的旧容器
+echo "清理旧容器..."
+docker rm -f rustdesk-server 2>/dev/null || true
+
+# 生成简化版 Docker Compose 文件（使用官方推荐配置）
 cat > docker-compose.yml << EOF
 version: '3'
 
-networks:
-  rustdesk-net:
-    external: false
-
 services:
-  rustdesk:
-    ports:
-      - 21114:21114
-      - 21115:21115
-      - 21116:21116
-      - 21116:21116/udp
-      - 21117:21117
-      - 21118:21118
-      - 21119:21119
+  rustdesk-server:
     image: lejianwen/rustdesk-server-s6:latest
+    container_name: rustdesk-server
+    restart: unless-stopped
+    ports:
+      - "21115:21115"
+      - "21116:21116"
+      - "21116:21116/udp"
+      - "21117:21117"
+      - "21118:21118"
+      - "21119:21119"
     environment:
-      - RELAY=${SERVER_IP}:21117
+      - RELAY_IP=$SERVER_IP
+      - SERVER_IP=$SERVER_IP
       - ENCRYPTED_ONLY=1
-      - MUST_LOGIN=y
+      - KEY=$FIXED_KEY
       - TZ=Asia/Shanghai
-      # RustDesk API 配置
-      - RUSTDESK_API_RUSTDESK_ID_SERVER=${SERVER_IP}:21116
-      - RUSTDESK_API_RUSTDESK_RELAY_SERVER=${SERVER_IP}:21117
-      - RUSTDESK_API_RUSTDESK_API_SERVER=http://${SERVER_IP}:21114
-      - RUSTDESK_API_RUSTDESK_KEY=${FIXED_KEY}
-      - RUSTDESK_API_JWT_KEY=${FIXED_KEY}
-      # 其他重要配置
-      - RUSTDESK_API_APP_REGISTER=false
-      - RUSTDESK_API_APP_DISABLE_PWD_LOGIN=false
-      - RUSTDESK_API_APP_CAPTCHA_THRESHOLD=3
-      - RUSTDESK_API_APP_BAN_THRESHOLD=5
-      - RUSTDESK_API_GORM_TYPE=sqlite
-      - RUSTDESK_API_LANG=zh-CN
-      - RUSTDESK_API_APP_WEB_CLIENT=1
-      - RUSTDESK_API_APP_SHOW_SWAGGER=0
     volumes:
       - /data/rustdesk/server:/data
-      - /data/rustdesk/api:/app/data
-    networks:
-      - rustdesk-net
-    restart: unless-stopped
+      - /data/rustdesk/api:/root
+    command: >
+      sh -c "
+        echo '设置服务器配置...' &&
+        echo '---' > /root/config.yaml &&
+        echo 'server: $SERVER_IP:21116' >> /root/config.yaml &&
+        echo 'relay: $SERVER_IP:21117' >> /root/config.yaml &&
+        echo 'api: http://$SERVER_IP:21114' >> /root/config.yaml &&
+        echo 'key: $FIXED_KEY' >> /root/config.yaml &&
+        echo '启动服务...' &&
+        /start.sh
+      "
 EOF
 
 echo "Docker Compose 文件已生成"
 
-# 直接使用 docker compose 插件（避免权限问题）
+# 直接使用 docker run 命令（更稳定）
 echo "启动 RustDesk 服务..."
-if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-    echo "使用 Docker Compose Plugin"
-    docker compose up -d
+docker run -d \
+  --name rustdesk-server \
+  --restart unless-stopped \
+  -p 21115:21115 \
+  -p 21116:21116 \
+  -p 21116:21116/udp \
+  -p 21117:21117 \
+  -p 21118:21118 \
+  -p 21119:21119 \
+  -e RELAY_IP=$SERVER_IP \
+  -e SERVER_IP=$SERVER_IP \
+  -e ENCRYPTED_ONLY=1 \
+  -e KEY=$FIXED_KEY \
+  -e TZ=Asia/Shanghai \
+  -v /data/rustdesk/server:/data \
+  -v /data/rustdesk/api:/root \
+  lejianwen/rustdesk-server-s6:latest
+
+echo "等待服务启动..."
+sleep 20
+
+# 检查容器状态
+echo "检查容器状态..."
+if docker ps | grep -q rustdesk-server; then
+    echo "✓ RustDesk 服务运行正常"
 else
-    echo "错误: Docker Compose 不可用"
-    echo "请先安装 Docker 和 Docker Compose Plugin"
+    echo "✗ 服务启动失败，查看日志..."
+    docker logs rustdesk-server
     exit 1
 fi
-
-# 等待服务启动
-echo "等待服务启动..."
-sleep 15
-
-# 设置管理员密码
-echo "设置管理员密码..."
-sleep 10
 
 # 显示部署信息
 echo ""
@@ -102,47 +111,19 @@ echo "固定密钥: $FIXED_KEY"
 echo "管理密码: $FIXED_PASSWORD"
 echo ""
 echo "服务端口:"
-echo "  - API 服务: 21114"
-echo "  - ID 服务: 21116"
-echo "  - 中继服务: 21117"
+echo "  - HBBS: 21115 (TCP)"
+echo "  - HBBS: 21116 (TCP/UDP)"
+echo "  - HBBR: 21117 (TCP)"
+echo "  - 管理界面: 21118-21119"
 echo ""
 echo "客户端连接信息:"
 echo "  ID 服务器: $SERVER_IP:21116"
 echo "  中继服务器: $SERVER_IP:21117"
 echo "  密钥: $FIXED_KEY"
 echo ""
-echo "Web 管理界面:"
-echo "  http://$SERVER_IP:21114"
-echo "  用户名: admin"
-echo "  密码: $FIXED_PASSWORD"
-echo ""
 echo "管理命令:"
-echo "  查看日志: docker compose logs -f"
-echo "  停止服务: docker compose down"
-echo "  重启服务: docker compose restart"
+echo "  查看日志: docker logs -f rustdesk-server"
+echo "  停止服务: docker stop rustdesk-server"
+echo "  重启服务: docker restart rustdesk-server"
+echo "  进入容器: docker exec -it rustdesk-server bash"
 echo "========================================"
-
-# 保存配置信息到文件
-cat > /data/rustdesk/deploy-info.txt << EOF
-RustDesk Server 部署信息
-部署时间: $(date)
-服务器 IP: $SERVER_IP
-固定密钥: $FIXED_KEY
-管理密码: $FIXED_PASSWORD
-
-客户端配置:
-ID 服务器: $SERVER_IP:21116
-中继服务器: $SERVER_IP:21117  
-密钥: $FIXED_KEY
-
-Web 管理界面:
-地址: http://$SERVER_IP:21114
-用户名: admin
-密码: $FIXED_PASSWORD
-
-服务状态检查:
-docker compose ps
-docker compose logs
-EOF
-
-echo "配置信息已保存到: /data/rustdesk/deploy-info.txt"
