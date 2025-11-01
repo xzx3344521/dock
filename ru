@@ -447,7 +447,7 @@ EOF
 # 检查容器运行状态
 check_container_health() {
     local container_name="$1"
-    local max_checks=20
+    local max_checks=5
     local check_interval=5
     
     log_info "检查容器 $container_name 运行状态..."
