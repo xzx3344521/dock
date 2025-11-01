@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# RustDesk Server 一键部署脚本
+# RustDesk Server 一键部署脚本 - 使用 Docker Compose Plugin
 set -e
 
 echo "========================================"
@@ -14,10 +14,6 @@ echo "检测到服务器 IP: $SERVER_IP"
 # 使用固定密钥
 FIXED_KEY="r0cDMF1eJa9zNqnUPB8ylbEJJWZqj6OdJnOrNhmWSLU="
 echo "使用固定密钥: $FIXED_KEY"
-
-# 生成随机管理密码
-ADMIN_PASSWORD=$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | base64 | head -c 16)
-echo "生成的管理密码: $ADMIN_PASSWORD"
 
 # 创建必要的目录
 echo "创建数据目录..."
@@ -73,26 +69,16 @@ EOF
 
 echo "Docker Compose 文件已生成"
 
-# 检查是否使用 docker compose plugin (新版本)
+# 直接使用 docker compose 插件（避免权限问题）
+echo "启动 RustDesk 服务..."
 if command -v docker &> /dev/null && docker compose version &> /dev/null; then
     echo "使用 Docker Compose Plugin"
-    DOCKER_COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    echo "使用 Docker-Compose Standalone"
-    # 确保 docker-compose 有执行权限
-    if [ ! -x "$(command -v docker-compose)" ]; then
-        echo "修复 docker-compose 执行权限..."
-        chmod +x $(command -v docker-compose)
-    fi
-    DOCKER_COMPOSE_CMD="docker-compose"
+    docker compose up -d
 else
-    echo "错误: 未找到 Docker Compose，请先安装"
+    echo "错误: Docker Compose 不可用"
+    echo "请先安装 Docker 和 Docker Compose Plugin"
     exit 1
 fi
-
-# 启动服务
-echo "启动 RustDesk 服务..."
-$DOCKER_COMPOSE_CMD up -d
 
 # 等待服务启动
 echo "等待服务启动..."
@@ -105,7 +91,6 @@ echo "        RustDesk 部署完成"
 echo "========================================"
 echo "服务器 IP: $SERVER_IP"
 echo "固定密钥: $FIXED_KEY"
-echo "管理密码: $ADMIN_PASSWORD"
 echo ""
 echo "服务端口:"
 echo "  - API 服务: 21114"
@@ -118,27 +103,7 @@ echo "  中继服务器: $SERVER_IP:21117"
 echo "  密钥: $FIXED_KEY"
 echo ""
 echo "管理命令:"
-echo "  查看日志: $DOCKER_COMPOSE_CMD logs -f"
-echo "  停止服务: $DOCKER_COMPOSE_CMD down"
-echo "  重启服务: $DOCKER_COMPOSE_CMD restart"
+echo "  查看日志: docker compose logs -f"
+echo "  停止服务: docker compose down"
+echo "  重启服务: docker compose restart"
 echo "========================================"
-
-# 保存配置信息到文件
-cat > /data/rustdesk/deploy-info.txt << EOF
-RustDesk Server 部署信息
-部署时间: $(date)
-服务器 IP: $SERVER_IP
-固定密钥: $FIXED_KEY
-管理密码: $ADMIN_PASSWORD
-
-客户端配置:
-ID 服务器: $SERVER_IP:21116
-中继服务器: $SERVER_IP:21117  
-密钥: $FIXED_KEY
-
-服务状态检查:
-$DOCKER_COMPOSE_CMD ps
-$DOCKER_COMPOSE_CMD logs
-EOF
-
-echo "配置信息已保存到: /data/rustdesk/deploy-info.txt"
