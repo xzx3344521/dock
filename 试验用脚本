@@ -1,0 +1,209 @@
+cat > auto-config-r2.sh << 'EOF'
+#!/bin/bash
+
+# R2 自动配置脚本
+echo "========================================"
+echo "    Cloudflare R2 自动配置脚本"
+echo "========================================"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# 检查 rclone 是否安装
+check_rclone() {
+    if ! command -v rclone &> /dev/null; then
+        echo -e "${RED}错误: rclone 未安装${NC}"
+        echo "正在安装 rclone..."
+        curl https://rclone.org/install.sh | sudo bash
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}rclone 安装失败${NC}"
+            exit 1
+        fi
+    fi
+    echo -e "${GREEN}✓ rclone 已安装${NC}"
+}
+
+# 获取用户输入
+get_user_input() {
+    echo
+    echo -e "${YELLOW}请输入 Cloudflare R2 配置信息:${NC}"
+    
+    read -p "请输入远程配置名称 [默认: cf-r2]: " REMOTE_NAME
+    REMOTE_NAME=${REMOTE_NAME:-cf-r2}
+    
+    read -p "请输入 Access Key ID: " ACCESS_KEY
+    while [ -z "$ACCESS_KEY" ]; do
+        echo -e "${RED}Access Key ID 不能为空${NC}"
+        read -p "请输入 Access Key ID: " ACCESS_KEY
+    done
+    
+    read -p "请输入 Secret Access Key: " SECRET_KEY
+    while [ -z "$SECRET_KEY" ]; do
+        echo -e "${RED}Secret Access Key 不能为空${NC}"
+        read -p "请输入 Secret Access Key: " SECRET_KEY
+    done
+    
+    read -p "请输入存储桶名称: " BUCKET_NAME
+    while [ -z "$BUCKET_NAME" ]; do
+        echo -e "${RED}存储桶名称不能为空${NC}"
+        read -p "请输入存储桶名称: " BUCKET_NAME
+    done
+    
+    # 固定的 endpoint（根据你之前提供的）
+    ENDPOINT="https://bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com"
+}
+
+# 自动配置 rclone
+configure_rclone() {
+    echo
+    echo -e "${YELLOW}正在配置 rclone...${NC}"
+    
+    # 删除已存在的配置（如果存在）
+    rclone config delete "$REMOTE_NAME" --quiet > /dev/null 2>&1
+    
+    # 创建配置
+    rclone config create "$REMOTE_NAME" s3 \
+        provider "Other" \
+        access_key_id "$ACCESS_KEY" \
+        secret_access_key "$SECRET_KEY" \
+        endpoint "$ENDPOINT" \
+        region "auto" \
+        acl "private" \
+        --non-interactive
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ rclone 配置成功${NC}"
+    else
+        echo -e "${RED}✗ rclone 配置失败${NC}"
+        exit 1
+    fi
+}
+
+# 测试配置
+test_configuration() {
+    echo
+    echo -e "${YELLOW}正在测试配置...${NC}"
+    
+    # 测试列出存储桶
+    echo "测试连接性..."
+    if rclone lsd "$REMOTE_NAME": 2>/dev/null; then
+        echo -e "${GREEN}✓ 连接测试成功${NC}"
+    else
+        echo -e "${YELLOW}⚠ 无法列出存储桶，尝试直接访问指定存储桶...${NC}"
+    fi
+    
+    # 测试访问指定存储桶
+    echo "测试存储桶访问..."
+    if rclone lsd "$REMOTE_NAME":"$BUCKET_NAME" 2>/dev/null; then
+        echo -e "${GREEN}✓ 存储桶访问测试成功${NC}"
+        return 0
+    else
+        # 尝试创建测试文件
+        echo "创建测试文件..."
+        echo "R2 Connection Test - $(date)" > r2_test.txt
+        if rclone copy r2_test.txt "$REMOTE_NAME":"$BUCKET_NAME"/ 2>/dev/null; then
+            echo -e "${GREEN}✓ 写入测试成功${NC}"
+            rm -f r2_test.txt
+            return 0
+        else
+            echo -e "${RED}✗ 配置测试失败${NC}"
+            echo -e "${YELLOW}请检查:${NC}"
+            echo "1. API 密钥是否正确"
+            echo "2. 存储桶名称是否正确"
+            echo "3. API 令牌权限是否足够"
+            return 1
+        fi
+    fi
+}
+
+# 创建备份脚本
+create_backup_script() {
+    cat > backup-to-r2.sh << SCRIPTEOF
+#!/bin/bash
+# 自动备份脚本到 Cloudflare R2
+
+REMOTE="$REMOTE_NAME"
+BUCKET="$BUCKET_NAME"
+BACKUP_SOURCE="\${1:-/opt/1panel}"  # 默认备份 /opt/1panel，可传入参数
+BACKUP_PREFIX="1panel-backup"
+DATE=\$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="/tmp/\${BACKUP_PREFIX}_\${DATE}.tar.gz"
+
+echo "[\$(date)] 开始备份到 Cloudflare R2"
+
+# 创建备份
+tar -czf "\$BACKUP_FILE" -C "\$BACKUP_SOURCE" . 2>/dev/null
+if [ \$? -ne 0 ]; then
+    echo "错误: 备份文件创建失败"
+    exit 1
+fi
+
+# 上传到 R2
+rclone copy "\$BACKUP_FILE" "\$REMOTE:\$BUCKET/backups/"
+if [ \$? -eq 0 ]; then
+    echo "✓ 备份成功: \${BACKUP_PREFIX}_\${DATE}.tar.gz"
+    
+    # 清理本地备份文件（可选）
+    rm -f "\$BACKUP_FILE"
+    
+    # 显示备份信息
+    echo "备份位置: \$REMOTE:\$BUCKET/backups/\${BACKUP_PREFIX}_\${DATE}.tar.gz"
+else
+    echo "错误: 上传到 R2 失败"
+    exit 1
+fi
+
+echo "[\$(date)] 备份完成"
+SCRIPTEOF
+
+    chmod +x backup-to-r2.sh
+    echo -e "${GREEN}✓ 备份脚本已创建: backup-to-r2.sh${NC}"
+}
+
+# 显示使用说明
+show_usage() {
+    echo
+    echo -e "${GREEN}========================================"
+    echo "       配置完成！"
+    echo "========================================"
+    echo
+    echo -e "远程配置名称: ${YELLOW}$REMOTE_NAME${NC}"
+    echo -e "存储桶名称: ${YELLOW}$BUCKET_NAME${NC}"
+    echo -e "Endpoint: ${YELLOW}$ENDPOINT${NC}"
+    echo
+    echo -e "${GREEN}使用方法:${NC}"
+    echo "1. 测试连接: ${YELLOW}rclone lsd $REMOTE_NAME:$BUCKET_NAME${NC}"
+    echo "2. 列出文件: ${YELLOW}rclone ls $REMOTE_NAME:$BUCKET_NAME${NC}"
+    echo "3. 上传文件: ${YELLOW}rclone copy 文件.txt $REMOTE_NAME:$BUCKET_NAME/${NC}"
+    echo "4. 自动备份: ${YELLOW}./backup-to-r2.sh${NC}"
+    echo "5. 备份指定目录: ${YELLOW}./backup-to-r2.sh /path/to/backup${NC}"
+    echo
+    echo -e "${YELLOW}安全提醒: 请妥善保管你的 API 密钥！${NC}"
+    echo "========================================"
+}
+
+# 主函数
+main() {
+    check_rclone
+    get_user_input
+    configure_rclone
+    if test_configuration; then
+        create_backup_script
+        show_usage
+    else
+        echo -e "${RED}配置测试失败，请检查输入的信息${NC}"
+    fi
+}
+
+# 运行主函数
+main
+EOF
+
+# 给脚本执行权限
+chmod +x auto-config-r2.sh
+
+echo "自动配置脚本已创建: auto-config-r2.sh"
+echo "运行命令开始配置: ./auto-config-r2.sh"
