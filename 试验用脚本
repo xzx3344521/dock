@@ -1,35 +1,28 @@
-cat > network-diagnose.sh << 'EOF'
+cat > simple-test.sh << 'EOF'
 #!/bin/bash
 
-echo "=== 网络连接诊断 ==="
+echo "=== 简化配置测试 ==="
 
-ENDPOINT="https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
+# 创建最小化配置
+rclone config create test-r2 s3 \
+    provider Cloudflare \
+    access_key_id 1204a46f27d9490d0fa37f928d6680a4 \
+    secret_access_key 54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90 \
+    endpoint https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bkgMwBgM_h.r2.cloudflarestorage.com \
+    region auto \
+    acl private \
+    --non-interactive
 
-echo "1. 测试基础网络连通性:"
-ping -c 2 cloudflare.com
+echo "配置状态: $?"
 
-echo ""
-echo "2. 测试DNS解析:"
-nslookup r2.cloudflarestorage.com
+# 直接测试，忽略错误
+echo "直接测试命令:"
+rclone lsd test-r2: --config /root/.config/rclone/rclone.conf || echo "命令执行失败"
 
-echo ""
-echo "3. 测试HTTP连接(详细):"
-curl -v -I "$ENDPOINT" --connect-timeout 10
-
-echo ""
-echo "4. 测试不使用HTTPS:"
-curl -v -I "http://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com" --connect-timeout 10
-
-echo ""
-echo "5. 检查系统代理设置:"
-echo "http_proxy: $http_proxy"
-echo "https_proxy: $https_proxy"
-echo "no_proxy: $no_proxy"
-
-echo ""
-echo "6. 检查防火墙:"
-iptables -L 2>/dev/null | head -20
+# 检查配置文件
+echo "配置文件内容:"
+cat /root/.config/rclone/rclone.conf | grep -A 10 "\[test-r2\]"
 EOF
 
-chmod +x network-diagnose.sh
-./network-diagnose.sh
+chmod +x simple-test.sh
+./simple-test.sh
