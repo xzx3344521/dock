@@ -1,28 +1,29 @@
-cat > simple-test.sh << 'EOF'
+cat > /tmp/network-test.sh << 'EOF'
 #!/bin/bash
+echo "=== 网络连接全面诊断 ==="
 
-echo "=== 简化配置测试 ==="
+echo "1. 测试基础连通性:"
+ping -c 2 8.8.8.8
+echo ""
 
-# 创建最小化配置
-rclone config create test-r2 s3 \
-    provider Cloudflare \
-    access_key_id 1204a46f27d9490d0fa37f928d6680a4 \
-    secret_access_key 54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90 \
-    endpoint https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bkgMwBgM_h.r2.cloudflarestorage.com \
-    region auto \
-    acl private \
-    --non-interactive
+echo "2. 测试DNS解析:"
+nslookup cloudflare.com
+echo ""
 
-echo "配置状态: $?"
+echo "3. 测试HTTP访问:"
+curl -s -o /dev/null -w "Google状态: %{http_code}\n" https://www.google.com
+curl -s -o /dev/null -w "Cloudflare状态: %{http_code}\n" https://www.cloudflare.com
+echo ""
 
-# 直接测试，忽略错误
-echo "直接测试命令:"
-rclone lsd test-r2: --config /root/.config/rclone/rclone.conf || echo "命令执行失败"
+echo "4. 测试R2端点:"
+ENDPOINT="https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
+curl -s -o /dev/null -w "R2端点状态: %{http_code}\n" "$ENDPOINT"
+echo ""
 
-# 检查配置文件
-echo "配置文件内容:"
-cat /root/.config/rclone/rclone.conf | grep -A 10 "\[test-r2\]"
+echo "5. 检查网络环境:"
+echo "主机名: $(hostname)"
+echo "IP地址: $(hostname -I 2>/dev/null || ip addr show 2>/dev/null | grep inet)"
+echo "容器检查: $(cat /proc/1/cgroup | grep docker && echo '是Docker容器' || echo '不是Docker容器')"
 EOF
 
-chmod +x simple-test.sh
-./simple-test.sh
+bash /tmp/network-test.sh
