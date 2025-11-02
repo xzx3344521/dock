@@ -1,85 +1,35 @@
-cat > correct-r2-setup.sh << 'EOF'
+cat > network-diagnose.sh << 'EOF'
 #!/bin/bash
 
-echo "========================================"
-echo "   Cloudflare R2 正确配置脚本"
-echo "========================================"
+echo "=== 网络连接诊断 ==="
 
-# 使用正确的信息
-REMOTE_NAME="r2-storage"
-ACCOUNT_ID="c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h"
-ACCESS_KEY="1204a46f27d9490d0fa37f928d6680a4"
-SECRET_KEY="54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90"
-BUCKET_NAME="111"
+ENDPOINT="https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
 
-# 构建正确的 Endpoint
-ENDPOINT="https://${ACCOUNT_ID}.r2.cloudflarestorage.com"
-
-echo "使用配置:"
-echo "Account ID: $ACCOUNT_ID"
-echo "Access Key: ${ACCESS_KEY:0:8}..."
-echo "Secret Key: ${SECRET_KEY:0:8}..."
-echo "Endpoint: $ENDPOINT"
-echo "Bucket: $BUCKET_NAME"
-
-# 删除旧配置
-echo "删除旧配置..."
-rclone config delete "$REMOTE_NAME" --quiet > /dev/null 2>&1
-
-# 使用正确的配置
-echo "创建新配置..."
-rclone config create "$REMOTE_NAME" s3 \
-    provider Cloudflare \
-    access_key_id "$ACCESS_KEY" \
-    secret_access_key "$SECRET_KEY" \
-    endpoint "$ENDPOINT" \
-    region auto \
-    acl private \
-    --non-interactive
-
-if [ $? -eq 0 ]; then
-    echo "✓ 配置创建成功"
-else
-    echo "✗ 配置创建失败"
-    exit 1
-fi
-
-# 测试网络连接
-echo "测试网络连接..."
-curl -s -o /dev/null -w "HTTP状态码: %{http_code}\n" "$ENDPOINT"
-
-# 测试配置
-echo "测试R2配置..."
-echo "1. 尝试列出存储桶..."
-rclone lsd "$REMOTE_NAME":
-
-echo "2. 尝试访问存储桶: $BUCKET_NAME"
-rclone lsd "$REMOTE_NAME:$BUCKET_NAME"
-
-echo "3. 尝试创建测试目录..."
-rclone mkdir "$REMOTE_NAME:$BUCKET_NAME/test-connection"
-
-if [ $? -eq 0 ]; then
-    echo "✓ 配置测试成功"
-    # 清理测试目录
-    rclone rmdir "$REMOTE_NAME:$BUCKET_NAME/test-connection"
-else
-    echo "✗ 配置测试失败"
-fi
+echo "1. 测试基础网络连通性:"
+ping -c 2 cloudflare.com
 
 echo ""
-echo "========================================"
-echo "  配置完成"
-echo "========================================"
-echo "远程名称: $REMOTE_NAME"
-echo "存储桶: $BUCKET_NAME"
-echo "Endpoint: $ENDPOINT"
+echo "2. 测试DNS解析:"
+nslookup r2.cloudflarestorage.com
+
 echo ""
-echo "使用命令:"
-echo "rclone lsd $REMOTE_NAME:"
-echo "rclone ls $REMOTE_NAME:$BUCKET_NAME"
-echo "rclone copy 文件.txt $REMOTE_NAME:$BUCKET_NAME/"
+echo "3. 测试HTTP连接(详细):"
+curl -v -I "$ENDPOINT" --connect-timeout 10
+
+echo ""
+echo "4. 测试不使用HTTPS:"
+curl -v -I "http://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com" --connect-timeout 10
+
+echo ""
+echo "5. 检查系统代理设置:"
+echo "http_proxy: $http_proxy"
+echo "https_proxy: $https_proxy"
+echo "no_proxy: $no_proxy"
+
+echo ""
+echo "6. 检查防火墙:"
+iptables -L 2>/dev/null | head -20
 EOF
 
-chmod +x correct-r2-setup.sh
-./correct-r2-setup.sh
+chmod +x network-diagnose.sh
+./network-diagnose.sh
