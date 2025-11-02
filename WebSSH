@@ -5,9 +5,8 @@ services:
   intellissh:
     image: clusterzx/intellissh:latest
     container_name: intellissh
-    hostname: intellissh
     ports:
-      - "8080:3000"
+      - "3000"  # 只暴露容器端口，主机端口随机
     volumes:
       - ./intellissh-data:/app/server/data
     environment:
@@ -18,17 +17,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-volumes:
-  intellissh-data:
-    driver: local
 
 EOF
 
+# 清理之前的失败容器
+docker rm -f intellissh 2>/dev/null || true
+
+# 重新启动
 mkdir -p ./intellissh-data && docker compose -f /boot/docker-compose.yml up -d
+
+# 查看实际映射的端口
+docker port intellissh
