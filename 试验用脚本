@@ -1,29 +1,34 @@
-cat > /tmp/network-test.sh << 'EOF'
+cat > deep-diagnose.sh << 'EOF'
 #!/bin/bash
-echo "=== 网络连接全面诊断 ==="
+echo "=== R2 连接深度诊断 ==="
 
-echo "1. 测试基础连通性:"
-ping -c 2 8.8.8.8
+ENDPOINT="c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
+
+echo "1. 解析域名:"
+cat /etc/resolv.conf
+echo "尝试解析:"
+getent hosts "$ENDPOINT" || dig "$ENDPOINT" 2>/dev/null || nslookup "$ENDPOINT" 2>/dev/null
+
 echo ""
+echo "2. 测试TCP连接:"
+timeout 5 bash -c "echo 'Testing connection' > /dev/tcp/$ENDPOINT/443" 2>/dev/null && echo "TCP 443端口可达" || echo "TCP 443端口不可达"
 
-echo "2. 测试DNS解析:"
-nslookup cloudflare.com
 echo ""
+echo "3. 使用wget测试:"
+wget -O- "https://$ENDPOINT" --timeout=5 --tries=1 2>&1 | head -5
 
-echo "3. 测试HTTP访问:"
-curl -s -o /dev/null -w "Google状态: %{http_code}\n" https://www.google.com
-curl -s -o /dev/null -w "Cloudflare状态: %{http_code}\n" https://www.cloudflare.com
 echo ""
+echo "4. 检查SSL证书:"
+openssl s_client -connect "$ENDPOINT":443 -servername "$ENDPOINT" < /dev/null 2>/dev/null | head -10
 
-echo "4. 测试R2端点:"
-ENDPOINT="https://c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
-curl -s -o /dev/null -w "R2端点状态: %{http_code}\n" "$ENDPOINT"
 echo ""
+echo "5. 路由跟踪:"
+traceroute -w 1 -m 5 "$ENDPOINT" 2>/dev/null || tracepath "$ENDPOINT" 2>/dev/null
 
-echo "5. 检查网络环境:"
-echo "主机名: $(hostname)"
-echo "IP地址: $(hostname -I 2>/dev/null || ip addr show 2>/dev/null | grep inet)"
-echo "容器检查: $(cat /proc/1/cgroup | grep docker && echo '是Docker容器' || echo '不是Docker容器')"
+echo ""
+echo "6. 检查系统限制:"
+ulimit -a
 EOF
 
-bash /tmp/network-test.sh
+chmod +x deep-diagnose.sh
+./deep-diagnose.sh
