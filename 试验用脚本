@@ -1,86 +1,32 @@
-cat > fix-r2-setup.sh << 'EOF'
+cat > debug-r2.sh << 'EOF'
 #!/bin/bash
 
-echo "========================================"
-echo "   Cloudflare R2 修复配置脚本"
-echo "========================================"
+echo "=== Cloudflare R2 调试脚本 ==="
 
-# 使用你提供的准确信息
-REMOTE_NAME="r2-storage"
-ACCESS_KEY="1204a46f27d9490d0fa37f928d6680a4"
-SECRET_KEY="54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90"
-ENDPOINT="https://bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com"
+# 测试网络连接
+echo "1. 测试网络连接..."
+curl -I https://bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com
 
-echo "使用以下配置:"
-echo "Endpoint: $ENDPOINT"
-echo "Access Key: ${ACCESS_KEY:0:8}..."
-echo "Secret Key: ${SECRET_KEY:0:8}..."
-
-# 删除旧配置
-echo "删除旧配置..."
-rclone config delete "$REMOTE_NAME" --quiet > /dev/null 2>&1
-
-# 方法1: 使用 Cloudflare provider (推荐)
-echo "方法1: 使用 Cloudflare provider..."
-rclone config create "$REMOTE_NAME" s3 \
-    provider Cloudflare \
-    access_key_id "$ACCESS_KEY" \
-    secret_access_key "$SECRET_KEY" \
-    endpoint "$ENDPOINT" \
-    region auto \
-    acl private \
-    --non-interactive
-
-if [ $? -eq 0 ]; then
-    echo "✓ 方法1配置成功"
-else
-    echo "方法1失败，尝试方法2..."
-    
-    # 方法2: 使用 Other provider
-    rclone config create "$REMOTE_NAME" s3 \
-        provider Other \
-        access_key_id "$ACCESS_KEY" \
-        secret_access_key "$SECRET_KEY" \
-        endpoint "$ENDPOINT" \
-        region "" \
-        acl private \
-        --non-interactive
-fi
-
-# 测试配置
-echo "测试配置..."
-echo "1. 测试基本连接..."
-if rclone lsd "$REMOTE_NAME": --config /root/.config/rclone/rclone.conf 2>/dev/null; then
-    echo "✓ 基本连接成功"
-else
-    echo "基本连接失败，但配置可能仍然有效"
-    echo "请手动创建存储桶后测试"
-fi
-
-# 显示使用说明
 echo ""
-echo "========================================"
-echo "  配置完成！下一步操作"
-echo "========================================"
+echo "2. 检查当前配置..."
+rclone config show
+
 echo ""
-echo "1. 在 Cloudflare 控制台创建存储桶:"
-echo "   - 登录 https://dash.cloudflare.com"
-echo "   - 进入 R2 → 创建存储桶"
-echo "   - 输入存储桶名称（如: my-backups）"
-echo ""
-echo "2. 测试配置（创建存储桶后）:"
-echo "   rclone lsd $REMOTE_NAME:"
-echo "   rclone mkdir $REMOTE_NAME:你的存储桶名称"
-echo "   rclone ls $REMOTE_NAME:你的存储桶名称"
-echo ""
-echo "3. 如果仍有问题，检查:"
-echo "   - API 令牌是否有足够权限"
-echo "   - 存储桶是否已创建"
-echo "   - 网络连接是否正常"
-echo ""
-echo "配置文件名: $REMOTE_NAME"
-echo "Endpoint: $ENDPOINT"
+echo "3. 手动交互式配置..."
+echo "请按照以下步骤手动配置:"
+echo "   rclone config"
+echo "   n) New remote"
+echo "   name: r2-storage"
+echo "   Storage: 4 (Amazon S3 Compatible)"
+echo "   Provider: 6 (Cloudflare)"
+echo "   env_auth: 1 (false)"
+echo "   access_key_id: 1204a46f27d9490d0fa37f928d6680a4"
+echo "   secret_access_key: 54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90"
+echo "   region: auto"
+echo "   endpoint: https://bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com"
+echo "   location_constraint: (留空)"
+echo "   acl: 1 (private)"
 EOF
 
-chmod +x fix-r2-setup.sh
-./fix-r2-setup.sh
+chmod +x debug-r2.sh
+./debug-r2.sh
