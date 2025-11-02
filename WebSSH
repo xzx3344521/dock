@@ -1,58 +1,61 @@
-va#!/bin/bash
+#!/bin/bash
 
-# NexTerm 一键安装脚本
-set -e
+echo "🚀 NexTerm 一键安装（Docker Compose + 随机端口）"
 
-echo "🚀 开始安装 NexTerm..."
+# 生成加密密钥
+ENCRYPTION_KEY=$(openssl rand -hex 32)
+echo "🔑 生成加密密钥: $ENCRYPTION_KEY"
 
-# 定义变量
-CONTAINER_NAME="nexterm"
-PORT="6989"
-VOLUME_NAME="nexterm"
-IMAGE="germannewsmaker/nexterm:1.0.5-OPEN-PREVIEW"
+# 创建配置目录
+mkdir -p /boot/docker-apps
 
-# 生成安全的加密密钥（如果未提供）
-if [ -z "$ENCRYPTION_KEY" ]; then
-    echo "🔑 生成加密密钥..."
-    ENCRYPTION_KEY=$(openssl rand -hex 32)
-    echo "生成的加密密钥: $ENCRYPTION_KEY"
-    echo "请妥善保存此密钥！"
-fi
+# 创建 Docker Compose 配置文件
+cat > /boot/docker-apps/nexterm.yml << EOF
+version: '3.8'
 
-# 停止并删除已存在的容器
-echo "🛑 清理现有容器..."
-docker rm -f $CONTAINER_NAME 2>/dev/null || true
+services:
+  nexterm:
+    image: germannewsmaker/nexterm:1.0.5-OPEN-PREVIEW
+    container_name: nexterm
+    ports:
+      - "3000"    # 随机端口
+    environment:
+      - ENCRYPTION_KEY=$ENCRYPTION_KEY
+      - TZ=Asia/Shanghai
+    volumes:
+      - nexterm_data:/app/data
+    restart: unless-stopped
 
-# 创建数据卷
-echo "💾 创建数据卷..."
-docker volume create $VOLUME_NAME 2>/dev/null || true
+volumes:
+  nexterm_data:
+EOF
 
-# 运行容器
-echo "🐳 启动 NexTerm 容器..."
-docker run -d \
-  --name $CONTAINER_NAME \
-  --hostname $CONTAINER_NAME \
-  -p $PORT:6989 \
-  -e ENCRYPTION_KEY=$ENCRYPTION_KEY \
-  -e TZ=Asia/Shanghai \
-  --restart=unless-stopped \
-  --log-opt max-size=10m \
-  --log-opt max-file=3 \
-  -v $VOLUME_NAME:/app/data \
-  $IMAGE
+echo "📁 配置文件已创建: /boot/docker-apps/nexterm.yml"
 
-# 等待服务启动
+# 停止并删除旧版本（如果存在）
+echo "🔄 清理旧版本..."
+docker compose -f /boot/docker-apps/nexterm.yml down 2>/dev/null || true
+
+# 启动服务
+echo "🐳 启动 NexTerm..."
+docker compose -f /boot/docker-apps/nexterm.yml up -d
+
+# 等待启动
 echo "⏳ 等待服务启动..."
 sleep 10
 
-# 检查容器状态
-if docker ps | grep -q $CONTAINER_NAME; then
-    echo "✅ NexTerm 安装成功！"
-    echo "📊 容器名称: $CONTAINER_NAME"
-    echo "🌐 访问地址: http://$(curl -s ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}'):$PORT"
-    echo "🔑 加密密钥: $ENCRYPTION_KEY"
-    echo "💾 数据卷: $VOLUME_NAME"
-else
-    echo "❌ 容器启动失败，请检查日志：docker logs $CONTAINER_NAME"
-    exit 1
-fi
+# 获取实际端口
+ACTUAL_PORT=$(docker compose -f /boot/docker-apps/nexterm.yml port nexterm 3000 | cut -d: -f2)
+SERVER_IP=$(curl -s ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}')
+
+echo ""
+echo "✅ 安装完成！"
+echo "🌐 访问地址: http://$SERVER_IP:$ACTUAL_PORT"
+echo "🔑 加密密钥: $ENCRYPTION_KEY"
+echo ""
+echo "📋 管理命令:"
+echo "   启动: docker compose -f /boot/docker-apps/nexterm.yml start"
+echo "   停止: docker compose -f /boot/docker-apps/nexterm.yml stop"
+echo "   重启: docker compose -f /boot/docker-apps/nexterm.yml restart"
+echo "   卸载: docker compose -f /boot/docker-apps/nexterm.yml down"
+echo "   日志: docker compose -f /boot/docker-apps/nexterm.yml logs"
