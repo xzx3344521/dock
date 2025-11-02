@@ -1,13 +1,34 @@
-cat > /boot/1.YAML << 'EOF'
+cat > /boot/docker-compose.yml << 'EOF'
+version: '3.8'
+
 services:
   intellissh:
     image: clusterzx/intellissh:latest
     container_name: intellissh
+    hostname: intellissh
     ports:
       - "8080:3000"
     volumes:
       - ./intellissh-data:/app/server/data
-    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  intellissh-data:
+    driver: local
+
 EOF
 
-mkdir -p ./intellissh-data && docker compose -f /boot/1.YAML up -d
+mkdir -p ./intellissh-data && docker compose -f /boot/docker-compose.yml up -d
