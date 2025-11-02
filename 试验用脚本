@@ -1,34 +1,23 @@
-cat > deep-diagnose.sh << 'EOF'
+cat > setup-s3cmd.sh << 'EOF'
 #!/bin/bash
-echo "=== R2 连接深度诊断 ==="
+echo "=== s3cmd 一键配置 ==="
 
-ENDPOINT="c5F-lD9CfUvvI5wNsepuS-ghXU_exa0bgiwBgM_h.r2.cloudflarestorage.com"
+# 创建配置文件
+cat > ~/.s3cfg << CONFIG
+[default]
+access_key = 1204a46f27d9490d0fa37f928d6680a4
+secret_key = 54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90
+host_base = bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com
+host_bucket = bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com
+bucket_location = auto
+use_https = True
+signature_v2 = False
+CONFIG
 
-echo "1. 解析域名:"
-cat /etc/resolv.conf
-echo "尝试解析:"
-getent hosts "$ENDPOINT" || dig "$ENDPOINT" 2>/dev/null || nslookup "$ENDPOINT" 2>/dev/null
-
-echo ""
-echo "2. 测试TCP连接:"
-timeout 5 bash -c "echo 'Testing connection' > /dev/tcp/$ENDPOINT/443" 2>/dev/null && echo "TCP 443端口可达" || echo "TCP 443端口不可达"
-
-echo ""
-echo "3. 使用wget测试:"
-wget -O- "https://$ENDPOINT" --timeout=5 --tries=1 2>&1 | head -5
-
-echo ""
-echo "4. 检查SSL证书:"
-openssl s_client -connect "$ENDPOINT":443 -servername "$ENDPOINT" < /dev/null 2>/dev/null | head -10
-
-echo ""
-echo "5. 路由跟踪:"
-traceroute -w 1 -m 5 "$ENDPOINT" 2>/dev/null || tracepath "$ENDPOINT" 2>/dev/null
-
-echo ""
-echo "6. 检查系统限制:"
-ulimit -a
+echo "配置完成！"
+echo "测试连接..."
+s3cmd ls s3://
 EOF
 
-chmod +x deep-diagnose.sh
-./deep-diagnose.sh
+chmod +x setup-s3cmd.sh
+./setup-s3cmd.sh
