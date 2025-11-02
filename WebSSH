@@ -1,110 +1,55 @@
 #!/bin/bash
 
-echo "🔍 开始安全清理 NexTerm..."
+# NexTerm 一键安装脚本
+echo "开始安装 NexTerm..."
 
-# 检查容器是否存在及其状态
-echo "1. 检查容器状态..."
-docker ps -a | grep nexterm
+# 创建安装目录
+mkdir -p /opt/nexterm
+cd /opt/nexterm
 
-# 获取容器的详细信息
-echo "2. 获取容器详细信息..."
-CONTAINER_INFO=$(docker inspect nexterm 2>/dev/null || echo "容器不存在")
+# 创建 docker-compose.yml 文件
+cat > docker-compose.yml << 'EOF'
+version: '3'
 
-if [ "$CONTAINER_INFO" != "容器不存在" ]; then
-    echo "📦 容器信息:"
-    echo "   状态: $(echo "$CONTAINER_INFO" | grep '"Status"' | head -1)"
-    echo "   镜像: $(echo "$CONTAINER_INFO" | grep '"Image"' | head -1)"
-    echo "   创建时间: $(echo "$CONTAINER_INFO" | grep '"Created"' | head -1)"
-    
-    # 获取容器使用的卷
-    echo "3. 检查容器挂载的卷..."
-    MOUNTS=$(echo "$CONTAINER_INFO" | grep '"Source"' | awk -F'"' '{print $4}')
-    if [ -n "$MOUNTS" ]; then
-        echo "📁 容器挂载的目录:"
-        echo "$MOUNTS"
-    fi
-fi
+services:
+  nexterm:
+    environment:
+      ENCRYPTION_KEY: "aba3aa8e29b9904d5d8d705230b664c053415c54be20ad13be99af0057dfa23a"
+    ports:
+      - "4589:6989"
+    restart: always
+    volumes:
+      - nexterm:/app/data
+    image: germannewsmaker/nexterm:1.0.5-OPEN-PREVIEW
 
-# 检查数据卷
-echo "4. 检查数据卷..."
-VOLUME_INFO=$(docker volume inspect nexterm 2>/dev/null || echo "数据卷不存在")
-if [ "$VOLUME_INFO" != "数据卷不存在" ]; then
-    echo "💾 数据卷信息:"
-    VOLUME_PATH=$(echo "$VOLUME_INFO" | grep '"Mountpoint"' | awk -F'"' '{print $4}')
-    echo "   挂载点: $VOLUME_PATH"
-    echo "   数据大小: $(du -sh $VOLUME_PATH 2>/dev/null || echo "无法获取大小")"
-fi
+volumes:
+  nexterm:
+EOF
 
-# 确认删除
-read -p "⚠️  确认要删除 NexTerm 容器和数据卷吗？(y/N): " confirm
-if [[ $confirm != [yY] ]]; then
-    echo "❌ 操作已取消"
-    exit 0
-fi
+# 尝试启动 Docker 服务（如果系统支持）
+systemctl start docker 2>/dev/null || service docker start 2>/dev/null || true
 
-# 开始清理
-echo "5. 开始清理..."
+# 拉取并启动容器
+echo "正在拉取镜像并启动容器..."
+docker-compose pull
+docker-compose up -d
 
-# 停止容器（如果运行中）
-echo "   🛑 停止容器..."
-docker stop nexterm 2>/dev/null && echo "   ✅ 容器已停止" || echo "   ℹ️  容器未运行"
+# 检查服务状态
+echo "等待服务启动..."
+sleep 10
 
-# 删除容器
-echo "   🗑️  删除容器..."
-docker rm nexterm 2>/dev/null && echo "   ✅ 容器已删除" || echo "   ℹ️  容器不存在"
-
-# 删除数据卷
-echo "   🗑️  删除数据卷..."
-docker volume rm nexterm 2>/dev/null && echo "   ✅ 数据卷已删除" || echo "   ℹ️  数据卷不存在"
-
-# 检查是否还有残留
-echo "6. 检查清理结果..."
-CLEAN_RESULT=$(docker ps -a | grep -c nexterm)
-VOLUME_RESULT=$(docker volume ls | grep -c nexterm)
-
-if [ $CLEAN_RESULT -eq 0 ] && [ $VOLUME_RESULT -eq 0 ]; then
-    echo "✅ 清理完成！NexTerm 已完全删除"
-else
-    echo "⚠️  发现残留项目:"
-    [ $CLEAN_RESULT -ne 0 ] && echo "   - 容器残留" && docker ps -a | grep nexterm
-    [ $VOLUME_RESULT -ne 0 ] && echo "   - 数据卷残留" && docker volume ls | grep nexterm
-fi
-
-# 生成新密钥并使用随机端口重新安装
-echo "7. 重新安装（使用随机端口）..."
-NEW_KEY=$(openssl rand -hex 32)
-echo "🔑 新加密密钥: $NEW_KEY"
-echo "💡 请妥善保存此密钥！"
-
-docker run -d \
-  -e ENCRYPTION_KEY=$NEW_KEY \
-  -p 3000 \  # 只指定容器端口，让Docker自动分配主机端口
-  --name nexterm \
-  --restart unless-stopped \
-  -v nexterm:/app/data \
-  germannewsmaker/nexterm:1.0.5-OPEN-PREVIEW
-
-echo "8. 等待容器启动..."
-sleep 8
-
-# 获取实际映射的端口
-echo "9. 获取端口映射信息..."
-ACTUAL_PORT=$(docker port nexterm | grep '3000/tcp' | awk -F: '{print $2}')
-
+# 显示安装结果
 if docker ps | grep -q nexterm; then
-    echo "✅ NexTerm 重新安装成功！"
-    echo "🌐 访问地址: http://服务器IP:${ACTUAL_PORT:-未知端口}"
-    echo "🔑 加密密钥: $NEW_KEY"
-    
-    # 显示完整的端口信息
+    echo "=================================================="
+    echo "NexTerm 安装完成！"
+    echo "访问地址: http://服务器IP:4589"
     echo ""
-    echo "📊 端口映射详情:"
-    docker port nexterm
-    
-    # 获取服务器IP
-    SERVER_IP=$(curl -s ipv4.icanhazip.com 2>/dev/null || hostname -I | awk '{print $1}' || echo "localhost")
-    echo ""
-    echo "🎯 完整访问地址: http://${SERVER_IP}:${ACTUAL_PORT}"
+    echo "检查服务状态: cd /opt/nexterm && docker-compose ps"
+    echo "停止服务: cd /opt/nexterm && docker-compose stop"
+    echo "重启服务: cd /opt/nexterm && docker-compose restart"
+    echo "查看日志: cd /opt/nexterm && docker-compose logs"
+    echo "=================================================="
 else
-    echo "❌ 安装失败，请检查日志: docker logs nexterm"
+    echo "安装可能存在问题，请检查 Docker 服务是否正常运行"
+    echo "可以尝试手动启动: cd /opt/nexterm && docker-compose up -d"
 fi
