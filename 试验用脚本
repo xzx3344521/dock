@@ -1,23 +1,213 @@
-cat > setup-s3cmd.sh << 'EOF'
+cat > install-syncthing.sh << 'EOF'
 #!/bin/bash
-echo "=== s3cmd 一键配置 ==="
 
-# 创建配置文件
-cat > ~/.s3cfg << CONFIG
-[default]
-access_key = 1204a46f27d9490d0fa37f928d6680a4
-secret_key = 54f24822de0265d98e8c2507d40250ba5254426b4c3b6a6745d5e688c832ac90
-host_base = bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com
-host_bucket = bb6985de87fb012b3c626aa13eda6797.r2.cloudflarestorage.com
-bucket_location = auto
-use_https = True
-signature_v2 = False
-CONFIG
+# Syncthing 一键安装脚本
+echo "========================================"
+echo "        Syncthing 一键安装脚本"
+echo "========================================"
 
-echo "配置完成！"
-echo "测试连接..."
-s3cmd ls s3://
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[✓]${NC} $1"; }
+warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+error() { echo -e "${RED}[✗]${NC} $1"; }
+
+# 检测系统
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        VERSION=$VERSION_ID
+    else
+        error "无法检测操作系统"
+        exit 1
+    fi
+}
+
+# 安装 Syncthing
+install_syncthing() {
+    log "检测到系统: $OS $VERSION"
+    
+    case $OS in
+        ubuntu|debian)
+            install_debian ;;
+        centos|rhel|fedora|rocky|almalinux)
+            install_centos ;;
+        *)
+            install_generic ;;
+    esac
+}
+
+# Debian/Ubuntu 安装
+install_debian() {
+    log "安装 Syncthing (Debian/Ubuntu)"
+    
+    # 添加 Syncthing 官方仓库
+    curl -s https://syncthing.net/release-key.txt | sudo apt-key add -
+    echo "deb https://apt.syncthing.net/ syncthing stable" | sudo tee /etc/apt/sources.list.d/syncthing.list
+    
+    # 更新并安装
+    sudo apt update
+    sudo apt install -y syncthing
+}
+
+# CentOS/RHEL 安装
+install_centos() {
+    log "安装 Syncthing (CentOS/RHEL)"
+    
+    # 添加 Syncthing 官方仓库
+    cat > /etc/yum.repos.d/syncthing.repo << REPO
+[syncthing]
+name=Syncthing
+baseurl=https://syncthing.net/repo/redhat
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://syncthing.net/release-key.txt
+REPO
+    
+    # 安装
+    if command -v dnf &> /dev/null; then
+        sudo dnf install -y syncthing
+    else
+        sudo yum install -y syncthing
+    fi
+}
+
+# 通用安装方法
+install_generic() {
+    log "使用通用安装方法"
+    
+    # 下载最新版本
+    LATEST_VERSION=$(curl -s https://api.github.com/repos/syncthing/syncthing/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    ARCH=$(uname -m)
+    
+    case $ARCH in
+        x86_64) ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        armv7l) ARCH="armv7" ;;
+        *) ARCH="amd64" ;;
+    esac
+    
+    log "下载 Syncthing $LATEST_VERSION ($ARCH)"
+    
+    # 下载并解压
+    cd /tmp
+    wget -q https://github.com/syncthing/syncthing/releases/download/${LATEST_VERSION}/syncthing-linux-${ARCH}-${LATEST_VERSION}.tar.gz
+    tar -xzf syncthing-linux-${ARCH}-${LATEST_VERSION}.tar.gz
+    sudo cp syncthing-linux-${ARCH}-${LATEST_VERSION}/syncthing /usr/local/bin/
+    sudo chmod +x /usr/local/bin/syncthing
+}
+
+# 创建系统服务
+create_service() {
+    log "创建系统服务"
+    
+    # 创建用户和目录
+    if ! id syncthing &>/dev/null; then
+        sudo useradd -r -s /bin/false -d /var/lib/syncthing -m syncthing
+    fi
+    
+    sudo mkdir -p /var/lib/syncthing/{config,sync}
+    sudo chown -R syncthing:syncthing /var/lib/syncthing
+    
+    # 创建 systemd 服务
+    cat > /tmp/syncthing.service << SERVICE
+[Unit]
+Description=Syncthing
+Documentation=man:syncthing(1)
+After=network.target
+
+[Service]
+User=syncthing
+ExecStart=/usr/bin/syncthing serve --no-browser --no-restart --home=/var/lib/syncthing/config
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=3 4
+RestartForceExitStatus=3 4
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+    sudo mv /tmp/syncthing.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+}
+
+# 配置防火墙
+setup_firewall() {
+    if command -v ufw &> /dev/null; then
+        log "配置 UFW 防火墙"
+        sudo ufw allow 8384/tcp comment "Syncthing Web UI"
+        sudo ufw allow 22000/tcp comment "Syncthing Transfer"
+        sudo ufw allow 21027/udp comment "Syncthing Discovery"
+    elif command -v firewall-cmd &> /dev/null; then
+        log "配置 FirewallD"
+        sudo firewall-cmd --permanent --add-port=8384/tcp
+        sudo firewall-cmd --permanent --add-port=22000/tcp
+        sudo firewall-cmd --permanent --add-port=21027/udp
+        sudo firewall-cmd --reload
+    fi
+}
+
+# 启动服务
+start_service() {
+    log "启动 Syncthing 服务"
+    sudo systemctl enable syncthing
+    sudo systemctl start syncthing
+    
+    # 等待服务启动
+    sleep 3
+    
+    if sudo systemctl is-active --quiet syncthing; then
+        log "Syncthing 服务启动成功"
+    else
+        error "Syncthing 服务启动失败"
+        sudo systemctl status syncthing
+    fi
+}
+
+# 显示安装信息
+show_info() {
+    echo ""
+    echo "========================================"
+    echo "        Syncthing 安装完成！"
+    echo "========================================"
+    echo ""
+    echo "访问地址: https://$(hostname -I | awk '{print $1}'):8384"
+    echo ""
+    echo "管理命令:"
+    echo "  sudo systemctl start syncthing     # 启动"
+    echo "  sudo systemctl stop syncthing      # 停止"
+    echo "  sudo systemctl restart syncthing   # 重启"
+    echo "  sudo systemctl status syncthing    # 状态"
+    echo ""
+    echo "默认端口:"
+    echo "  - Web 界面: 8384/tcp"
+    echo "  - 文件传输: 22000/tcp"
+    echo "  - 设备发现: 21027/udp"
+    echo ""
+    warn "首次访问需要设置管理员密码"
+    echo ""
+}
+
+# 主函数
+main() {
+    detect_os
+    install_syncthing
+    create_service
+    setup_firewall
+    start_service
+    show_info
+}
+
+# 运行安装
+main
 EOF
 
-chmod +x setup-s3cmd.sh
-./setup-s3cmd.sh
+chmod +x install-syncthing.sh
+./install-syncthing.sh
