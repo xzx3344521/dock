@@ -384,7 +384,7 @@ def main():
     except:
         print("⚠️ 需要root权限执行防御动作")
     
-    defense_system = AIDrivenDefenseSystem(API_KEY)
+    defense_system = sk-61d6716fe6b2452d94a0cee3bc5c4e2e
     defense_system.monitor_loop()
 
 if __name__ == "__main__":
