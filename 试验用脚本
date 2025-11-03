@@ -1,26 +1,51 @@
 #!/bin/bash
-echo "🐱 欢迎使用 Syncthing 萌化一键安装脚本！"
-echo "✨ 开始安装 Syncthing..."
 
-# 检测系统
-if [ -f /etc/debian_version ]; then
-    echo "🍥 检测到 Debian/Ubuntu 系统"
-    # 安装 Syncthing
-    curl -s -o /usr/share/keyrings/syncthing-archive-keyring.gpg https://syncthing.net/release-key.gpg
-    echo "deb [signed-by=/usr/share/keyrings/syncthing-archive-keyring.gpg] https://apt.syncthing.net/ syncthing stable" | tee /etc/apt/sources.list.d/syncthing.list
-    apt update && apt install -y syncthing
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 显示菜单
+show_menu() {
+    echo -e "${BLUE}"
+    echo "🐱====================================🐱"
+    echo "✨  Syncthing 一键管理脚本 ✨"
+    echo "🐱====================================🐱"
+    echo -e "${NC}"
+    echo "1. 🚀 安装 Syncthing"
+    echo "2. 🗑️  卸载 Syncthing" 
+    echo "3. 🔄 重启 Syncthing 服务"
+    echo "4. 📊 查看服务状态"
+    echo "5. ❌ 退出"
+    echo ""
+    read -p "💕 请选择操作 (1-5): " choice
+}
+
+# 安装函数
+install_syncthing() {
+    echo -e "${GREEN}🐱 开始安装 Syncthing...${NC}"
     
-elif [ -f /etc/redhat-release ]; then
-    echo "🎀 检测到 CentOS/RHEL 系统"
-    dnf install -y syncthing || yum install -y epel-release && yum install -y syncthing
-else
-    echo "❌ 不支持的系统"
-    exit 1
-fi
+    # 检测系统
+    if [ -f /etc/debian_version ]; then
+        echo -e "${YELLOW}🍥 检测到 Debian/Ubuntu 系统${NC}"
+        # 安装 Syncthing
+        curl -s -o /usr/share/keyrings/syncthing-archive-keyring.gpg https://syncthing.net/release-key.gpg
+        echo "deb [signed-by=/usr/share/keyrings/syncthing-archive-keyring.gpg] https://apt.syncthing.net/ syncthing stable" | tee /etc/apt/sources.list.d/syncthing.list
+        apt update && apt install -y syncthing
+        
+    elif [ -f /etc/redhat-release ]; then
+        echo -e "${YELLOW}🎀 检测到 CentOS/RHEL 系统${NC}"
+        dnf install -y syncthing 2>/dev/null || (yum install -y epel-release && yum install -y syncthing)
+    else
+        echo -e "${RED}❌ 不支持的系统${NC}"
+        exit 1
+    fi
 
-echo "🎯 配置 Syncthing 服务..."
-# 创建服务配置
-cat > /etc/systemd/system/syncthing@root.service << 'EOF'
+    echo -e "${YELLOW}🎯 配置 Syncthing 服务...${NC}"
+    # 创建服务配置
+    cat > /etc/systemd/system/syncthing@root.service << 'EOF'
 [Unit]
 Description=Syncthing - Open Source Continuous File Synchronization for %i
 Documentation=man:syncthing(1)
@@ -37,40 +62,142 @@ RestartForceExitStatus=3 4
 WantedBy=multi-user.target
 EOF
 
-echo "🔧 设置防火墙..."
-# 开放端口（如果防火墙开启的话）
-if command -v ufw >/dev/null; then
-    ufw allow 8384/tcp comment "Syncthing GUI"
-    ufw allow 22000/tcp comment "Syncthing Transfer"
-    ufw allow 21027/udp comment "Syncthing Discovery"
-elif command -v firewall-cmd >/dev/null; then
-    firewall-cmd --permanent --add-port=8384/tcp
-    firewall-cmd --permanent --add-port=22000/tcp  
-    firewall-cmd --permanent --add-port=21027/udp
-    firewall-cmd --reload
-fi
+    echo -e "${YELLOW}🔧 设置防火墙...${NC}"
+    # 开放端口（如果防火墙开启的话）
+    if command -v ufw >/dev/null; then
+        ufw allow 8384/tcp comment "Syncthing GUI" 2>/dev/null
+        ufw allow 22000/tcp comment "Syncthing Transfer" 2>/dev/null
+        ufw allow 21027/udp comment "Syncthing Discovery" 2>/dev/null
+        echo -e "${GREEN}✅ UFW 防火墙端口已开放${NC}"
+    elif command -v firewall-cmd >/dev/null; then
+        firewall-cmd --permanent --add-port=8384/tcp 2>/dev/null
+        firewall-cmd --permanent --add-port=22000/tcp 2>/dev/null  
+        firewall-cmd --permanent --add-port=21027/udp 2>/dev/null
+        firewall-cmd --reload 2>/dev/null
+        echo -e "${GREEN}✅ Firewalld 防火墙端口已开放${NC}"
+    else
+        echo -e "${YELLOW}📝 未检测到防火墙，跳过端口配置${NC}"
+    fi
 
-echo "📁 创建备份目录..."
-mkdir -p /syncthing_backup
-echo "💾 备份目录已创建: /syncthing_backup"
+    echo -e "${YELLOW}📁 创建备份目录...${NC}"
+    mkdir -p /syncthing_backup
+    echo -e "${GREEN}💾 备份目录已创建: /syncthing_backup${NC}"
 
-echo "🚀 启动服务..."
-systemctl daemon-reload
-systemctl enable syncthing@root
-systemctl start syncthing@root
+    echo -e "${YELLOW}🚀 启动服务...${NC}"
+    systemctl daemon-reload
+    systemctl enable syncthing@root
+    systemctl start syncthing@root
 
-# 等待服务启动
-sleep 5
+    # 等待服务启动
+    sleep 3
 
-echo "🎉 安装完成！"
-echo ""
-echo "========================================"
-echo "🐾 Syncthing 管理界面访问信息："
-echo "🌐 地址: http://$(curl -s ifconfig.me):8384/"
-echo "💻 本地访问: http://localhost:8384/"
-echo "📁 备份目录: /syncthing_backup"
-echo "🔧 服务管理: systemctl status/start/stop syncthing@root"
-echo "========================================"
-echo ""
-echo "💕 首次访问请通过网页设置设备名称和密码～"
-echo "🐱 祝你使用愉快！"
+    echo -e "${GREEN}🎉 Syncthing 安装完成！${NC}"
+    show_access_info
+}
+
+# 卸载函数
+uninstall_syncthing() {
+    echo -e "${YELLOW}🗑️  开始卸载 Syncthing...${NC}"
+    
+    # 停止服务
+    systemctl stop syncthing@root 2>/dev/null
+    systemctl disable syncthing@root 2>/dev/null
+    
+    # 删除服务文件
+    rm -f /etc/systemd/system/syncthing@root.service
+    systemctl daemon-reload
+    
+    # 卸载软件包
+    if [ -f /etc/debian_version ]; then
+        apt remove -y syncthing
+        rm -f /etc/apt/sources.list.d/syncthing.list
+        rm -f /usr/share/keyrings/syncthing-archive-keyring.gpg
+        apt update
+    elif [ -f /etc/redhat-release ]; then
+        dnf remove -y syncthing 2>/dev/null || yum remove -y syncthing
+    fi
+    
+    # 关闭防火墙端口
+    if command -v ufw >/dev/null; then
+        ufw delete allow 8384/tcp 2>/dev/null
+        ufw delete allow 22000/tcp 2>/dev/null
+        ufw delete allow 21027/udp 2>/dev/null
+    elif command -v firewall-cmd >/dev/null; then
+        firewall-cmd --permanent --remove-port=8384/tcp 2>/dev/null
+        firewall-cmd --permanent --remove-port=22000/tcp 2>/dev/null  
+        firewall-cmd --permanent --remove-port=21027/udp 2>/dev/null
+        firewall-cmd --reload 2>/dev/null
+    fi
+    
+    echo -e "${YELLOW}📁 是否删除备份目录？${NC}"
+    read -p "💭 输入 'yes' 删除 /syncthing_backup 目录: " confirm
+    if [ "$confirm" = "yes" ]; then
+        rm -rf /syncthing_backup
+        echo -e "${GREEN}✅ 备份目录已删除${NC}"
+    else
+        echo -e "${YELLOW}📁 备份目录保留在 /syncthing_backup${NC}"
+    fi
+    
+    echo -e "${GREEN}✅ Syncthing 卸载完成！${NC}"
+}
+
+# 重启服务
+restart_service() {
+    echo -e "${YELLOW}🔄 重启 Syncthing 服务...${NC}"
+    systemctl restart syncthing@root
+    sleep 2
+    systemctl status syncthing@root --no-pager
+}
+
+# 查看状态
+show_status() {
+    echo -e "${YELLOW}📊 Syncthing 服务状态：${NC}"
+    systemctl status syncthing@root --no-pager
+    echo ""
+    echo -e "${YELLOW}🌐 端口监听状态：${NC}"
+    netstat -tlnp | grep 8384 || echo "📭 8384 端口未监听"
+    netstat -tlnp | grep 22000 || echo "📭 22000 端口未监听"
+}
+
+# 显示访问信息
+show_access_info() {
+    echo ""
+    echo -e "${BLUE}========================================"
+    echo "🐾 Syncthing 管理界面访问信息："
+    echo "🌐 外网访问: http://$(curl -s ifconfig.me):8384/"
+    echo "💻 本地访问: http://localhost:8384/"
+    echo "📁 备份目录: /syncthing_backup"
+    echo "🔧 服务管理: systemctl status/start/stop syncthing@root"
+    echo "========================================"
+    echo -e "${NC}"
+}
+
+# 主循环
+while true; do
+    show_menu
+    case $choice in
+        1)
+            install_syncthing
+            ;;
+        2)
+            uninstall_syncthing
+            ;;
+        3)
+            restart_service
+            ;;
+        4)
+            show_status
+            ;;
+        5)
+            echo -e "${GREEN}🐱 再见！祝你有个美好的一天！${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}❌ 无效选择，请重新输入${NC}"
+            ;;
+    esac
+    
+    echo ""
+    read -p "💕 按回车键继续..."
+    clear
+done
