@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# AI驱动的问题修复脚本 - 自动识别并解决问题
+# 真正的AI驱动问题解决脚本
+# 完全交给AI操作，自动识别和修复问题
 
 set -e
 
 # 配置
-DEEPSEEK_API_KEY="你的DeepSeek_API密钥"
-LOG_FILE="/var/log/ai_fixer.log"
-TEMP_DIR="/tmp/ai_fixer"
+DEEPSEEK_API_KEY="sk-your-api-key-here"  # 请替换为你的真实API密钥
+LOG_FILE="/tmp/ai_solver.log"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -16,306 +16,257 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 初始化
-init() {
-    echo -e "${BLUE}🚀 AI驱动问题修复系统启动...${NC}"
-    mkdir -p "$TEMP_DIR"
-    sudo touch "$LOG_FILE"
-    sudo chmod 644 "$LOG_FILE"
-    log "系统初始化完成"
-}
-
-# 日志记录
+# 日志函数
 log() {
-    local message="$1"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $message" | sudo tee -a "$LOG_FILE"
-    echo -e "${BLUE}[AI修复]${NC} $message"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+    echo -e "${BLUE}[AI助手]${NC} $1"
 }
 
-# 调用DeepSeek API
-call_ai() {
-    local context="$1"
-    local problem="$2"
+# 调用AI分析问题
+ask_ai() {
+    local problem="$1"
+    local context="$2"
     
-    log "咨询AI助手解决问题: $problem"
+    log "🤖 咨询AI解决方案: $problem"
     
-    # 构建API请求
-    local api_response=$(curl -s -X POST "https://api.deepseek.com/v1/chat/completions" \
+    # 准备API请求
+    local request_data=$(cat << EOF
+{
+    "model": "deepseek-coder",
+    "messages": [
+        {
+            "role": "system",
+            "content": "你是一个Linux系统和脚本问题专家。用户遇到了脚本执行问题，请直接给出具体的修复命令。用中文回答，要具体可执行。"
+        },
+        {
+            "role": "user",
+            "content": "问题：$problem\n\n上下文：$context\n\n请直接给出需要执行的Linux命令："
+        }
+    ],
+    "temperature": 0.3,
+    "max_tokens": 1000
+}
+EOF
+    )
+
+    # 调用API
+    local response=$(curl -s -X POST "https://api.deepseek.com/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
-        -d '{
-            "model": "deepseek-coder",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "你是一个Linux系统和编程专家。请直接给出解决问题的具体命令或代码，用中文简要解释。当前系统：Debian Linux"
-                },
-                {
-                    "role": "user", 
-                    "content": "'"问题上下文: $context\n\n具体问题: $problem\n\n请提供具体的修复命令或脚本:"'"
-                }
-            ],
-            "temperature": 0.3
-        }')
+        -d "$request_data" || echo "AI请求失败")
+
+    # 提取回复
+    local answer=$(echo "$response" | grep -o '"content":"[^"]*"' | cut -d'"' -f4)
     
-    # 提取AI回复
-    local ai_response=$(echo "$api_response" | grep -o '"content":"[^"]*"' | cut -d'"' -f4)
-    
-    if [ -z "$ai_response" ]; then
-        echo "AI请求失败，使用备用方案"
+    if [ -z "$answer" ] || [ "$answer" = "AI请求失败" ]; then
+        echo "备用方案：检测到脚本执行问题，将采用本地修复方案"
         return 1
     fi
     
-    echo "$ai_response"
+    echo "$answer"
 }
 
-# 分析错误信息
-analyze_error() {
-    local error_output="$1"
-    log "分析错误信息..."
+# 执行AI命令
+execute_ai_command() {
+    local command="$1"
+    local description="$2"
     
-    echo "$error_output" > "$TEMP_DIR/error.log"
+    log "执行: $description"
+    log "命令: $command"
     
-    # 检测错误类型
-    if echo "$error_output" | grep -q "command not found"; then
-        echo "Python脚本被当作bash执行"
-        return 1
-    elif echo "$error_output" | grep -q "import.*command not found"; then
-        echo "Python代码在bash中执行错误"
-        return 2
-    elif echo "$error_output" | grep -q "syntax error"; then
-        echo "语法错误"
-        return 3
-    else
-        echo "未知错误类型"
-        return 4
-    fi
+    echo -e "${YELLOW}▶️ 执行: $command${NC}"
+    
+    # 执行命令
+    eval "$command" 2>&1 | while IFS= read -r line; do
+        echo "   $line"
+        echo "$line" >> "$LOG_FILE"
+    done
+    
+    local exit_code=${PIPESTATUS[0]}
+    return $exit_code
 }
 
-# 自动修复Python脚本问题
-fix_python_script() {
-    local script_url="$1"
-    log "修复Python脚本: $script_url"
+# 分析当前问题
+analyze_current_problem() {
+    log "分析当前系统问题..."
     
-    # 下载脚本
-    local original_content=$(curl -sSL "$script_url")
+    # 收集系统信息
+    local system_info=$(uname -a)
+    local os_info=$(cat /etc/os-release 2>/dev/null || echo "Unknown OS")
+    local python_version=$(python3 --version 2>/dev/null || echo "Python not installed")
+    local bash_version=$(bash --version | head -1)
     
-    if [ -z "$original_content" ]; then
-        log "下载脚本失败"
-        return 1
-    fi
+    # 测试脚本URL
+    local test_url="https://github.com/xzx3344521/dock/raw/refs/heads/main/ai"
+    local script_content=$(curl -sSL "$test_url" 2>/dev/null || echo "下载失败")
     
-    echo "$original_content" > "$TEMP_DIR/original_script"
-    
-    # 分析问题并获取AI修复方案
-    local context="原始脚本内容:\n$original_content\n\n错误: Python代码被当作bash执行"
-    local problem="这是一个Python脚本，但被用bash命令执行了，导致import等Python语句报错"
-    
-    local ai_solution=$(call_ai "$context" "$problem")
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}🤖 AI修复方案:${NC}"
-        echo "$ai_solution"
-        echo "$ai_solution" > "$TEMP_DIR/ai_solution"
-        
-        # 执行AI的修复命令
-        execute_ai_solution "$ai_solution"
-    else
-        # 备用修复方案
-        backup_fix "$original_content"
-    fi
+    local problem_context="系统信息: $system_info
+OS信息: $os_info
+Python版本: $python_version
+Bash版本: $bash_version
+
+脚本URL: $test_url
+脚本内容前几行:
+$(echo "$script_content" | head -10)
+
+错误现象: 脚本内容被直接显示而不是执行，出现 'command not found' 错误"
+
+    echo "$problem_context"
 }
 
-# 执行AI的解决方案
-execute_ai_solution() {
+# 主要修复函数
+main_repair() {
+    echo -e "${GREEN}🚀 启动AI问题修复系统...${NC}"
+    echo -e "${YELLOW}⚠️ 全程交给AI操作，请勿中断...${NC}"
+    
+    # 分析问题
+    local problem_context=$(analyze_current_problem)
+    local problem_description="用户尝试执行远程脚本但失败，脚本内容被显示而不是执行，出现命令未找到错误"
+    
+    log "问题描述: $problem_description"
+    
+    # 询问AI解决方案
+    local ai_solution=$(ask_ai "$problem_description" "$problem_context")
+    
+    if [ $? -ne 0 ] || [ -z "$ai_solution" ]; then
+        # AI调用失败，使用备用方案
+        backup_solution
+        return
+    fi
+    
+    echo -e "${GREEN}🤖 AI提供的解决方案:${NC}"
+    echo "$ai_solution"
+    echo ""
+    
+    # 提取并执行命令
+    execute_ai_commands "$ai_solution"
+}
+
+# 执行AI返回的命令
+execute_ai_commands() {
     local solution="$1"
-    log "执行AI解决方案..."
     
-    # 提取命令部分（假设AI返回中包含具体命令）
-    local commands=$(echo "$solution" | grep -E "^(sudo |bash |python |curl |wget |apt)" || echo "$solution")
+    # 提取看起来像命令的行
+    echo -e "${YELLOW}🔧 开始执行修复命令...${NC}"
     
-    # 执行每个找到的命令
     while IFS= read -r line; do
-        if [[ "$line" =~ ^(sudo|bash|python|curl|wget|apt|pip) ]]; then
-            log "执行: $line"
-            eval "$line" 2>&1 | sudo tee -a "$LOG_FILE"
+        # 跳过空行和注释
+        if [[ -z "$line" || "$line" =~ ^# ]]; then
+            continue
         fi
-    done <<< "$commands"
+        
+        # 识别命令（以sudo, apt, curl, wget, python, bash等开头）
+        if [[ "$line" =~ ^(sudo\s+|apt\s+|curl\s+|wget\s+|python|bash\s+|chmod\s+|mkdir\s+|cd\s+|echo\s+) ]]; then
+            log "执行AI命令: $line"
+            execute_ai_command "$line" "AI修复命令"
+        fi
+    done <<< "$solution"
 }
 
-# 备用修复方案
-backup_fix() {
-    local original_content="$1"
-    log "使用备用方案修复..."
+# 备用解决方案
+backup_solution() {
+    echo -e "${YELLOW}🔧 使用备用修复方案...${NC}"
     
-    # 检测脚本类型
-    if echo "$original_content" | grep -q "#!/usr/bin/env python"; then
-        echo -e "${YELLOW}检测到Python脚本，重新下载并正确执行...${NC}"
-        
-        # 下载为Python文件
-        curl -sSL "$script_url" -o "$TEMP_DIR/script.py"
-        chmod +x "$TEMP_DIR/script.py"
-        
-        # 安装必要的Python依赖
-        sudo apt update
-        sudo apt install -y python3 python3-pip
-        
-        # 尝试执行Python脚本
-        python3 "$TEMP_DIR/script.py"
-        
-    elif echo "$original_content" | grep -q "import.*"; then
-        echo -e "${YELLOW}这明显是Python代码，创建正确的Python文件...${NC}"
-        
-        # 创建正确的Python脚本
-        cat > "$TEMP_DIR/fixed_script.py" << EOF
-#!/usr/bin/env python3
-$original_content
-EOF
-        
-        chmod +x "$TEMP_DIR/fixed_script.py"
-        python3 "$TEMP_DIR/fixed_script.py"
-        
+    # 1. 直接下载脚本分析
+    execute_ai_command "curl -sSL -o /tmp/analyze_script.py 'https://github.com/xzx3344521/dock/raw/refs/heads/main/ai'" "下载问题脚本"
+    
+    # 2. 检查脚本类型
+    execute_ai_command "file /tmp/analyze_script.py" "检查脚本类型"
+    execute_ai_command "head -5 /tmp/analyze_script.py" "查看脚本开头"
+    
+    # 3. 安装必要的工具
+    execute_ai_command "sudo apt update && sudo apt install -y python3 python3-pip curl wget" "安装基础工具"
+    
+    # 4. 根据脚本类型执行
+    if head -1 /tmp/analyze_script.py 2>/dev/null | grep -q "python"; then
+        execute_ai_command "python3 /tmp/analyze_script.py" "执行Python脚本"
     else
-        echo -e "${RED}无法自动识别脚本类型${NC}"
-        return 1
+        execute_ai_command "bash /tmp/analyze_script.py" "执行Bash脚本"
     fi
 }
 
-# 创建智能启动器
-create_smart_launcher() {
-    log "创建智能脚本启动器..."
+# 创建智能脚本运行器
+create_smart_runner() {
+    echo -e "${GREEN}🔧 创建智能脚本运行器...${NC}"
     
     cat > /usr/local/bin/ai-run << 'EOF'
 #!/bin/bash
+# AI智能脚本运行器
 
-# AI智能脚本启动器 - 自动识别脚本类型并正确执行
+URL="$1"
+TEMP_SCRIPT="/tmp/smart_script_$$"
 
-SCRIPT_URL="$1"
-TEMP_SCRIPT="/tmp/ai_script_$$"
-
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo -e "${BLUE}🤖 AI智能启动器运行中...${NC}"
-
-# 下载脚本
-if ! curl -sSL "$SCRIPT_URL" -o "$TEMP_SCRIPT"; then
-    echo -e "${RED}❌ 下载脚本失败${NC}"
+if [ -z "$URL" ]; then
+    echo "使用方法: ai-run <脚本URL>"
     exit 1
 fi
 
-# 检测脚本类型
-detect_script_type() {
-    local script_content=$(cat "$TEMP_SCRIPT")
-    
-    # 检查shebang
-    if head -1 "$TEMP_SCRIPT" | grep -q "^#!/usr/bin/env python"; then
-        echo "python"
-    elif head -1 "$TEMP_SCRIPT" | grep -q "^#!/bin/bash"; then
-        echo "bash"
-    elif head -1 "$TEMP_SCRIPT" | grep -q "^#!/bin/sh"; then
-        echo "shell"
-    elif echo "$script_content" | grep -q "import.*"; then
-        echo "python"
-    elif echo "$script_content" | grep -q "def.*("; then
-        echo "python"
-    else
-        echo "unknown"
-    fi
-}
+echo "🤖 AI智能运行器正在处理: $URL"
 
-SCRIPT_TYPE=$(detect_script_type)
+# 下载脚本
+if ! curl -sSL "$URL" -o "$TEMP_SCRIPT"; then
+    echo "❌ 下载失败"
+    exit 1
+fi
 
-echo -e "${YELLOW}检测到脚本类型: $SCRIPT_TYPE${NC}"
-
-# 根据类型执行
-case "$SCRIPT_TYPE" in
-    "python")
-        echo -e "${GREEN}执行Python脚本...${NC}"
-        # 确保有Python环境
-        if ! command -v python3 &> /dev/null; then
-            sudo apt update && sudo apt install -y python3
-        fi
+# 检测并执行
+if head -1 "$TEMP_SCRIPT" | grep -q "python"; then
+    echo "🐍 检测到Python脚本，使用Python执行..."
+    python3 "$TEMP_SCRIPT"
+elif head -1 "$TEMP_SCRIPT" | grep -q "bash"; then
+    echo "💻 检测到Bash脚本，使用Bash执行..."
+    bash "$TEMP_SCRIPT"
+else
+    echo "🔍 自动检测脚本类型..."
+    # 尝试Python
+    if python3 -m py_compile "$TEMP_SCRIPT" 2>/dev/null; then
+        echo "🐍 作为Python脚本执行"
         python3 "$TEMP_SCRIPT"
-        ;;
-    "bash"|"shell")
-        echo -e "${GREEN}执行Bash脚本...${NC}"
-        chmod +x "$TEMP_SCRIPT"
+    else
+        echo "💻 作为Bash脚本执行"
         bash "$TEMP_SCRIPT"
-        ;;
-    *)
-        echo -e "${YELLOW}未知类型，尝试智能执行...${NC}"
-        # 尝试作为bash执行
-        if bash -n "$TEMP_SCRIPT" 2>/dev/null; then
-            echo -e "${GREEN}作为Bash脚本执行${NC}"
-            chmod +x "$TEMP_SCRIPT"
-            bash "$TEMP_SCRIPT"
-        else
-            echo -e "${GREEN}作为Python脚本执行${NC}"
-            python3 "$TEMP_SCRIPT"
-        fi
-        ;;
-esac
+    fi
+fi
 
 # 清理
 rm -f "$TEMP_SCRIPT"
 EOF
 
     chmod +x /usr/local/bin/ai-run
-    echo -e "${GREEN}✅ 智能启动器安装完成${NC}"
-    echo -e "${YELLOW}使用方法: ai-run <脚本URL>${NC}"
+    echo -e "${GREEN}✅ 智能运行器安装完成! 使用: ai-run <URL>${NC}"
 }
 
-# 主修复函数
-main_fix() {
-    local script_url="https://github.com/xzx3344521/dock/raw/refs/heads/main/ai"
-    
-    echo -e "${BLUE}🔍 开始分析问题...${NC}"
-    log "目标脚本: $script_url"
-    
-    # 分析问题
-    analyze_error "Python脚本被当作bash执行，import语句报错"
-    
-    # 修复问题
-    fix_python_script "$script_url"
-    
-    # 创建智能启动器防止未来问题
-    create_smart_launcher
-    
-    echo -e "${GREEN}✅ 修复完成！${NC}"
-    echo -e "${YELLOW}🎯 现在你可以使用: ai-run https://github.com/xzx3344521/dock/raw/refs/heads/main/ai${NC}"
-}
-
-# 显示使用说明
-show_help() {
-    echo -e "${GREEN}AI驱动问题修复系统${NC}"
-    echo "使用方法:"
-    echo "  $0 fix      - 修复当前问题"
-    echo "  $0 run <url> - 智能运行脚本"
-    echo "  $0 help     - 显示此帮助"
+# 显示状态
+show_status() {
+    echo -e "${GREEN}📊 系统状态${NC}"
+    echo "日志文件: $LOG_FILE"
+    echo "临时目录: /tmp/"
+    echo "智能运行器: $(which ai-run 2>/dev/null || echo '未安装')"
 }
 
 # 主程序
 case "${1:-}" in
     "fix")
-        init
-        main_fix
+        main_repair
         ;;
-    "run")
-        if [ -z "$2" ]; then
-            echo "请提供脚本URL"
-            exit 1
-        fi
-        /usr/local/bin/ai-run "$2"
+    "runner")
+        create_smart_runner
         ;;
-    "help"|"")
-        show_help
+    "status")
+        show_status
+        ;;
+    "log")
+        cat "$LOG_FILE"
         ;;
     *)
-        echo "未知命令: $1"
-        show_help
+        echo -e "${GREEN}AI驱动问题解决系统${NC}"
+        echo "使用方法:"
+        echo "  $0 fix     - AI自动修复问题"
+        echo "  $0 runner  - 安装智能脚本运行器"
+        echo "  $0 status  - 查看系统状态"
+        echo "  $0 log     - 查看日志"
+        echo ""
+        echo "当前问题: 远程脚本执行失败，内容被显示而不是执行"
+        echo "解决方案: 运行 '$0 fix' 让AI自动修复"
         ;;
 esac
