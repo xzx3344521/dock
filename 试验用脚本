@@ -1,103 +1,76 @@
-# 完全重新配置
-systemctl stop syncthing
-rm -rf /var/lib/syncthing/config/*
+#!/bin/bash
+echo "🐱 欢迎使用 Syncthing 萌化一键安装脚本！"
+echo "✨ 开始安装 Syncthing..."
 
-# 重新生成配置并指定监听地址
-sudo -u syncthing /usr/local/bin/syncthing -generate="/var/lib/syncthing/config"
+# 检测系统
+if [ -f /etc/debian_version ]; then
+    echo "🍥 检测到 Debian/Ubuntu 系统"
+    # 安装 Syncthing
+    curl -s -o /usr/share/keyrings/syncthing-archive-keyring.gpg https://syncthing.net/release-key.gpg
+    echo "deb [signed-by=/usr/share/keyrings/syncthing-archive-keyring.gpg] https://apt.syncthing.net/ syncthing stable" | tee /etc/apt/sources.list.d/syncthing.list
+    apt update && apt install -y syncthing
+    
+elif [ -f /etc/redhat-release ]; then
+    echo "🎀 检测到 CentOS/RHEL 系统"
+    dnf install -y syncthing || yum install -y epel-release && yum install -y syncthing
+else
+    echo "❌ 不支持的系统"
+    exit 1
+fi
 
-# 手动修改配置
-cat > /var/lib/syncthing/config/config.xml << 'EOF'
-<configuration version="39">
-    <folder id="default" label="Default Folder" path="/var/lib/syncthing/sync" type="sendreceive" rescanIntervalS="3600" fsWatcherEnabled="true" fsWatcherDelayS="10" ignorePerms="false" autoNormalize="true">
-        <filesystemType>basic</filesystemType>
-        <device id="SELF"></device>
-        <minDiskFree unit="%">1</minDiskFree>
-        <versioning></versioning>
-        <copiers>0</copiers>
-        <pullerMaxPendingKiB>0</pullerMaxPendingKiB>
-        <hashers>0</hashers>
-        <order>random</order>
-        <ignoreDelete>false</ignoreDelete>
-        <scanProgressIntervalS>0</scanProgressIntervalS>
-        <pullerPauseS>0</pullerPauseS>
-        <maxConflicts>0</maxConflicts>
-        <disableSparseFiles>false</disableSparseFiles>
-        <disableTempIndexes>false</disableTempIndexes>
-        <paused>false</paused>
-        <weakHashThresholdPct>25</weakHashThresholdPct>
-        <markerName>.stfolder</markerName>
-        <useLargeBlocks>false</useLargeBlocks>
-        <junctionsAsDirs>false</junctionsAsDirs>
-        <syncOwnership>false</syncOwnership>
-        <sendFullIndex>false</sendFullIndex>
-        <caseSensitiveFS>false</caseSensitiveFS>
-        <localFlags></localFlags>
-        <fsync>false</fsync>
-        <blockPullOrder>standard</blockPullOrder>
-        <copyRangeMethod>standard</copyRangeMethod>
-        <modTimeWindowS>0</modTimeWindowS>
-    </folder>
-    <device id="SELF" name="$(hostname)" compression="metadata" introducer="false" skipIntroductionRemovals="false" introducedBy="">
-        <address>dynamic</address>
-    </device>
-    <gui enabled="true" tls="true" debugging="false">
-        <address>0.0.0.0:8384</address>
-        <apikey>$(cat /var/lib/syncthing/config/config.xml | grep apikey | sed -n 's/.*<apikey>\(.*\)<\/apikey>.*/\1/p')</apikey>
-        <theme>default</theme>
-    </gui>
-    <ldap></ldap>
-    <options>
-        <listenAddress>default</listenAddress>
-        <globalAnnounceServer>default</globalAnnounceServer>
-        <globalAnnounceEnabled>true</globalAnnounceEnabled>
-        <localAnnounceEnabled>true</localAnnounceEnabled>
-        <maxSendKbps>0</maxSendKbps>
-        <maxRecvKbps>0</maxRecvKbps>
-        <reconnectionIntervalS>60</reconnectionIntervalS>
-        <relaysEnabled>true</relaysEnabled>
-        <relayReconnectIntervalM>10</relayReconnectIntervalM>
-        <startBrowser>false</startBrowser>
-        <natEnabled>true</natEnabled>
-        <natLeaseMinutes>60</natLeaseMinutes>
-        <natRenewalMinutes>30</natRenewalMinutes>
-        <natTimeoutSeconds>10</natTimeoutSeconds>
-        <urAccepted>0</urAccepted>
-        <urSeen>3</urSeen>
-        <urUniqueID>$(cat /var/lib/syncthing/config/config.xml | grep urUniqueID | sed -n 's/.*<urUniqueID>\(.*\)<\/urUniqueID>.*/\1/p')</urUniqueID>
-        <urURL>https://data.syncthing.net/</urURL>
-        <urPostInsecurely>false</urPostInsecurely>
-        <urInitialDelayS>1800</urInitialDelayS>
-        <restartOnWakeup>true</restartOnWakeup>
-        <autoUpgradeIntervalH>12</autoUpgradeIntervalH>
-        <upgradeToPreReleases>false</upgradeToPreReleases>
-        <keepTemporariesH>24</keepTemporariesH>
-        <cacheIgnoredFiles>false</cacheIgnoredFiles>
-        <progressUpdateIntervalS>5</progressUpdateIntervalS>
-        <limitBandwidthInLan>false</limitBandwidthInLan>
-        <minHomeDiskFree unit="%">1</minHomeDiskFree>
-        <releasesURL>https://upgrades.syncthing.net/meta.json</releasesURL>
-        <overwriteRemoteDeviceNamesOnConnect>false</overwriteRemoteDeviceNamesOnConnect>
-        <tempIndexMinBlocks>10</tempIndexMinBlocks>
-        <unackedNotificationID>authenticationUserAndPassword</unackedNotificationID>
-        <trafficClass>0</trafficClass>
-        <defaultFolderPath>/var/lib/syncthing/sync</defaultFolderPath>
-        <setLowPriority>true</setLowPriority>
-        <minHomeDiskFree unit="%">1</minHomeDiskFree>
-        <crashReportingEnabled>false</crashReportingEnabled>
-        <stunKeepaliveStartS>0</stunKeepaliveStartS>
-        <stunKeepaliveMinS>0</stunKeepaliveMinS>
-        <stunServer>default</stunServer>
-        <databaseTuning>auto</databaseTuning>
-        <maxConcurrentIncomingRequestKiB>0</maxConcurrentIncomingRequestKiB>
-        <announceLANAddresses>true</announceLANAddresses>
-        <sendFullIndexOnUpgrade>false</sendFullIndexOnUpgrade>
-        <featureFlags></featureFlags>
-        <connectionLimitEnough>0</connectionLimitEnough>
-        <connectionLimitMax>0</connectionLimitMax>
-        <insecureAllowOldTLSVersions>false</insecureAllowOldTLSVersions>
-    </options>
-</configuration>
+echo "🎯 配置 Syncthing 服务..."
+# 创建服务配置
+cat > /etc/systemd/system/syncthing@root.service << 'EOF'
+[Unit]
+Description=Syncthing - Open Source Continuous File Synchronization for %i
+Documentation=man:syncthing(1)
+After=network.target
+
+[Service]
+User=%i
+ExecStart=/usr/bin/syncthing serve --no-browser --no-restart --logflags=0 --gui-address="0.0.0.0:8384"
+Restart=on-failure
+SuccessExitStatus=3 4
+RestartForceExitStatus=3 4
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-chown -R syncthing:syncthing /var/lib/syncthing/config
-systemctl start syncthing
+echo "🔧 设置防火墙..."
+# 开放端口（如果防火墙开启的话）
+if command -v ufw >/dev/null; then
+    ufw allow 8384/tcp comment "Syncthing GUI"
+    ufw allow 22000/tcp comment "Syncthing Transfer"
+    ufw allow 21027/udp comment "Syncthing Discovery"
+elif command -v firewall-cmd >/dev/null; then
+    firewall-cmd --permanent --add-port=8384/tcp
+    firewall-cmd --permanent --add-port=22000/tcp  
+    firewall-cmd --permanent --add-port=21027/udp
+    firewall-cmd --reload
+fi
+
+echo "📁 创建备份目录..."
+mkdir -p /syncthing_backup
+echo "💾 备份目录已创建: /syncthing_backup"
+
+echo "🚀 启动服务..."
+systemctl daemon-reload
+systemctl enable syncthing@root
+systemctl start syncthing@root
+
+# 等待服务启动
+sleep 5
+
+echo "🎉 安装完成！"
+echo ""
+echo "========================================"
+echo "🐾 Syncthing 管理界面访问信息："
+echo "🌐 地址: http://$(curl -s ifconfig.me):8384/"
+echo "💻 本地访问: http://localhost:8384/"
+echo "📁 备份目录: /syncthing_backup"
+echo "🔧 服务管理: systemctl status/start/stop syncthing@root"
+echo "========================================"
+echo ""
+echo "💕 首次访问请通过网页设置设备名称和密码～"
+echo "🐱 祝你使用愉快！"
