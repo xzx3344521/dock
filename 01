@@ -23,6 +23,14 @@ print_color() {
     echo -e "${2}${1}${NC}"
 }
 
+# 检查命令是否存在
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 # 检查root权限
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -35,21 +43,54 @@ check_root() {
 install_dependencies() {
     local distro=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
     
+    print_color "检测到系统: $distro" "$BLUE"
+    print_color "安装必要依赖..." "$YELLOW"
+    
     case $distro in
         debian|ubuntu)
             apt-get update
-            apt-get install -y net-tools iproute2
+            apt-get install -y netcat-traditional net-tools iproute2
             ;;
         centos|rhel|fedora)
-            yum install -y net-tools iproute2 || dnf install -y net-tools iproute2
+            if command -v dnf &> /dev/null; then
+                dnf install -y nc net-tools iproute2
+            else
+                yum install -y nc net-tools iproute2
+            fi
             ;;
         alpine)
-            apk add net-tools iproute2
+            apk add netcat-openbsd net-tools iproute2
             ;;
         *)
-            log "未知发行版，请手动安装net-tools和iproute2"
+            log "未知发行版，尝试安装netcat"
+            if command -v apt-get &> /dev/null; then
+                apt-get update && apt-get install -y netcat-traditional
+            elif command -v yum &> /dev/null; then
+                yum install -y nc
+            elif command -v apk &> /dev/null; then
+                apk add netcat-openbsd
+            fi
             ;;
     esac
+    
+    # 检查netcat是否安装成功
+    if ! check_command nc && ! check_command netcat; then
+        print_color "错误: 无法安装netcat，请手动安装" "$RED"
+        exit 1
+    fi
+    
+    print_color "依赖安装完成!" "$GREEN"
+}
+
+# 获取netcat命令
+get_nc_command() {
+    if check_command nc; then
+        echo "nc"
+    elif check_command netcat; then
+        echo "netcat"
+    else
+        echo ""
+    fi
 }
 
 # 初始化环境
@@ -91,20 +132,35 @@ echo "重启SSH服务..."
 systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 EOF
 
-    # 无限重启脚本 (危险)
-    cat > "$SCRIPT_DIR/reboot_loop.sh" << 'EOF'
+    # 系统信息脚本
+    cat > "$SCRIPT_DIR/system_info.sh" << 'EOF'
 #!/bin/bash
-echo "设置无限重启 - 危险操作!"
-(crontab -l 2>/dev/null; echo "*/5 * * * * /sbin/reboot") | crontab -
-reboot
+echo "=== 系统信息 ==="
+echo "主机名: $(hostname)"
+echo "系统: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
+echo "内核: $(uname -r)"
+echo "架构: $(uname -m)"
+echo "上线时间: $(uptime -p)"
+echo "内存使用:"
+free -h
+echo "磁盘使用:"
+df -h
 EOF
 
-    # 取消无限重启
-    cat > "$SCRIPT_DIR/cancel_loop.sh" << 'EOF'
+    # 更新系统脚本
+    cat > "$SCRIPT_DIR/update_system.sh" << 'EOF'
 #!/bin/bash
-echo "取消无限重启..."
-crontab -l | grep -v reboot | crontab -
-echo "已取消计划重启任务"
+echo "开始系统更新..."
+if command -v apt-get &> /dev/null; then
+    apt-get update && apt-get upgrade -y
+elif command -v yum &> /dev/null; then
+    yum update -y
+elif command -v dnf &> /dev/null; then
+    dnf update -y
+elif command -v apk &> /dev/null; then
+    apk update && apk upgrade
+fi
+echo "系统更新完成!"
 EOF
 
     chmod +x "$SCRIPT_DIR"/*.sh
@@ -118,9 +174,11 @@ show_clients() {
     fi
     
     print_color "已连接的客户端列表:" "$BLUE"
-    print_color "序列号 | IP地址 | 主机名 | 系统信息 | 最后在线" "$BLUE"
-    print_color "------------------------------------------------------------" "$BLUE"
-    cat "$CLIENTS_FILE"
+    print_color "序列号    | IP地址       | 主机名 | 最后在线" "$BLUE"
+    print_color "----------------------------------------------------" "$BLUE"
+    while IFS='|' read -r serial ip hostname system last_seen; do
+        printf "%-10s| %-13s| %-15s| %s\n" "$serial" "$ip" "$hostname" "$last_seen"
+    done < "$CLIENTS_FILE"
 }
 
 # 向客户端发送命令
@@ -144,7 +202,13 @@ send_command() {
     print_color "向客户端 $serial ($hostname) 发送命令: $command" "$GREEN"
     
     # 发送命令到客户端
-    echo "COMMAND:$command" | nc -w 5 "$ip" 5556
+    local nc_cmd=$(get_nc_command)
+    if [[ -z "$nc_cmd" ]]; then
+        print_color "错误: netcat 未安装" "$RED"
+        return
+    fi
+    
+    echo "COMMAND:$command" | timeout 5 $nc_cmd "$ip" 5556
     
     if [[ $? -eq 0 ]]; then
         print_color "命令发送成功!" "$GREEN"
@@ -164,10 +228,16 @@ broadcast_command() {
     
     print_color "向所有客户端广播命令: $command" "$YELLOW"
     
+    local nc_cmd=$(get_nc_command)
+    if [[ -z "$nc_cmd" ]]; then
+        print_color "错误: netcat 未安装" "$RED"
+        return
+    fi
+    
     while IFS='|' read -r serial ip hostname system last_seen; do
-        if [[ -n "$serial" ]]; then
-            echo "向 $serial 发送命令..."
-            echo "COMMAND:$command" | nc -w 3 "$ip" 5556
+        if [[ -n "$serial" && -n "$ip" ]]; then
+            echo "向 $serial ($hostname) 发送命令..."
+            echo "COMMAND:$command" | timeout 3 $nc_cmd "$ip" 5556
         fi
     done < "$CLIENTS_FILE"
 }
@@ -200,34 +270,52 @@ execute_script() {
     
     print_color "向客户端 $serial 发送脚本: $script_name" "$GREEN"
     
+    local nc_cmd=$(get_nc_command)
+    if [[ -z "$nc_cmd" ]]; then
+        print_color "错误: netcat 未安装" "$RED"
+        return
+    fi
+    
     # 发送脚本执行命令
-    echo "SCRIPT:$script_name" | nc -w 5 "$ip" 5556
+    echo "SCRIPT:$script_name" | timeout 5 $nc_cmd "$ip" 5556
 }
 
 # 启动服务器
 start_server() {
+    local nc_cmd=$(get_nc_command)
+    if [[ -z "$nc_cmd" ]]; then
+        print_color "错误: netcat 未安装，无法启动服务器" "$RED"
+        return 1
+    fi
+    
     print_color "启动控制器服务器在端口 $SERVER_PORT..." "$GREEN"
+    print_color "使用 netcat 命令: $nc_cmd" "$BLUE"
     print_color "服务器日志: $LOG_FILE" "$BLUE"
     print_color "客户端列表: $CLIENTS_FILE" "$BLUE"
+    print_color "按 Ctrl+C 停止服务器" "$YELLOW"
     
     while true; do
         log "等待客户端连接..."
-        nc -l -p $SERVER_PORT -c '
+        $nc_cmd -l -p $SERVER_PORT -c '
             client_ip=$(echo $SSH_CLIENT | awk "{print \$1}")
+            if [[ -z "$client_ip" ]]; then
+                client_ip="unknown"
+            fi
             read -r data
             timestamp=$(date "+%Y-%m-%d %H:%M:%S")
             
             if echo "$data" | grep -q "HEARTBEAT|"; then
                 IFS="|" read -r heartbeat serial hostname system <<< "$data"
                 # 更新或添加客户端信息
-                grep -v "^$serial|" /var/lib/controller_clients.txt > /tmp/clients.tmp
+                grep -v "^$serial|" /var/lib/controller_clients.txt > /tmp/clients.tmp 2>/dev/null
                 echo "$serial|$client_ip|$hostname|$system|$timestamp" >> /tmp/clients.tmp
                 mv /tmp/clients.tmp /var/lib/controller_clients.txt
                 echo "ACK:OK"
+                echo "客户端 $serial 已连接 - $hostname"
             else
                 echo "ACK:UNKNOWN_COMMAND"
             fi
-        '
+        ' 2>/dev/null
         sleep 1
     done
 }
@@ -246,62 +334,87 @@ show_help() {
     echo "help       - 显示此帮助"
 }
 
+# 停止服务器
+stop_server() {
+    pkill -f "nc -l -p $SERVER_PORT"
+    print_color "服务器已停止" "$GREEN"
+}
+
+# 显示服务器状态
+show_status() {
+    if pgrep -f "nc -l -p $SERVER_PORT" >/dev/null; then
+        print_color "服务器运行中" "$GREEN"
+        print_color "监听端口: $SERVER_PORT" "$BLUE"
+    else
+        print_color "服务器未运行" "$RED"
+    fi
+    
+    if [[ -f "$CLIENTS_FILE" ]]; then
+        client_count=$(grep -c . "$CLIENTS_FILE" 2>/dev/null || echo "0")
+        print_color "已连接客户端: $client_count" "$BLUE"
+    fi
+}
+
 # 主菜单
 main_menu() {
-    print_color "=== 跨平台服务器控制器 ===" "$BLUE"
-    echo "1. 启动服务器"
-    echo "2. 显示客户端列表"
-    echo "3. 发送命令到客户端"
-    echo "4. 广播命令到所有客户端"
-    echo "5. 执行脚本"
-    echo "6. 显示可用脚本"
-    echo "7. 服务器状态"
-    echo "8. 退出"
-    
-    read -p "请选择操作 [1-8]: " choice
-    
-    case $choice in
-        1)
-            start_server
-            ;;
-        2)
-            show_clients
-            ;;
-        3)
-            read -p "输入序列号: " serial
-            read -p "输入命令: " command
-            send_command "$serial" "$command"
-            ;;
-        4)
-            read -p "输入广播命令: " command
-            broadcast_command "$command"
-            ;;
-        5)
-            read -p "输入序列号: " serial
-            read -p "输入脚本名: " script
-            execute_script "$serial" "$script"
-            ;;
-        6)
-            print_color "可用脚本:" "$BLUE"
-            ls "$SCRIPT_DIR"/*.sh | xargs -n 1 basename
-            ;;
-        7)
-            print_color "服务器状态:" "$BLUE"
-            pgrep -f "nc -l -p $SERVER_PORT" >/dev/null && \
-                print_color "服务器运行中" "$GREEN" || \
-                print_color "服务器未运行" "$RED"
-            ;;
-        8)
-            print_color "再见!" "$GREEN"
-            exit 0
-            ;;
-        *)
-            print_color "无效选择!" "$RED"
-            ;;
-    esac
-    
-    echo
-    main_menu
+    while true; do
+        print_color "=== 跨平台服务器控制器 ===" "$BLUE"
+        echo "1. 启动服务器"
+        echo "2. 显示客户端列表"
+        echo "3. 发送命令到客户端"
+        echo "4. 广播命令到所有客户端"
+        echo "5. 执行脚本"
+        echo "6. 显示可用脚本"
+        echo "7. 服务器状态"
+        echo "8. 停止服务器"
+        echo "9. 退出"
+        
+        read -p "请选择操作 [1-9]: " choice
+        
+        case $choice in
+            1)
+                start_server
+                ;;
+            2)
+                show_clients
+                ;;
+            3)
+                read -p "输入序列号: " serial
+                read -p "输入命令: " command
+                send_command "$serial" "$command"
+                ;;
+            4)
+                read -p "输入广播命令: " command
+                broadcast_command "$command"
+                ;;
+            5)
+                read -p "输入序列号: " serial
+                read -p "输入脚本名: " script
+                execute_script "$serial" "$script"
+                ;;
+            6)
+                print_color "可用脚本:" "$BLUE"
+                ls "$SCRIPT_DIR"/*.sh 2>/dev/null | xargs -n 1 basename || echo "无可用脚本"
+                ;;
+            7)
+                show_status
+                ;;
+            8)
+                stop_server
+                ;;
+            9)
+                print_color "再见!" "$GREEN"
+                exit 0
+                ;;
+            *)
+                print_color "无效选择!" "$RED"
+                ;;
+        esac
+        
+        echo
+        read -p "按回车键继续..."
+        clear
+    done
 }
 
 # 脚本入口
@@ -311,6 +424,12 @@ case "${1:-}" in
         install_dependencies
         initialize
         start_server
+        ;;
+    stop)
+        stop_server
+        ;;
+    status)
+        show_status
         ;;
     *)
         check_root
