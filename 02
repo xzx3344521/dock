@@ -3,7 +3,7 @@
 # 客户端脚本 - 连接服务器并执行命令
 # 支持: Debian, Ubuntu, CentOS, RHEL, Fedora, Alpine
 
-SERVER_IP="192.168.1.100"  # 修改为你的服务器IP
+SERVER_IP="159.138.58.239"  # 修改为你的服务器IP
 SERVER_PORT=5555
 CLIENT_PORT=5556
 HEARTBEAT_INTERVAL=30
