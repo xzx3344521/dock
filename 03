@@ -12,9 +12,16 @@ NC='\033[0m' # No Color
 # 显示标题
 echo -e "${CYAN}"
 echo "================================================"
-echo "           网络连接诊断工具 v2.0"
+echo "           全端口扫描诊断工具 v3.0"
 echo "================================================"
 echo -e "${NC}"
+
+# 变量定义
+SCAN_RESULTS=()
+OPEN_PORTS=()
+TOTAL_PORTS_SCANNED=0
+START_TIME=0
+END_TIME=0
 
 # 函数：检查命令是否存在
 check_command() {
@@ -28,17 +35,23 @@ check_command() {
 # 函数：显示帮助信息
 show_help() {
     echo -e "${YELLOW}使用说明：${NC}"
-    echo "1. 本工具用于测试网络连接和端口状态"
+    echo "1. 本工具用于全面扫描目标的所有端口"
     echo "2. 支持IP地址和域名测试"
-    echo "3. 可以测试多个端口"
-    echo "4. 包含详细的连接状态分析"
+    echo "3. 提供多种扫描模式和速度选项"
+    echo "4. 生成详细的扫描报告"
+    echo ""
+    echo -e "${YELLOW}扫描模式：${NC}"
+    echo "  - 快速扫描: 常用端口 (1-1000)"
+    echo "  - 标准扫描: 常见服务端口 (1-10000)" 
+    echo "  - 全面扫描: 所有端口 (1-65535)"
+    echo "  - 自定义扫描: 指定端口范围"
     echo ""
 }
 
 # 函数：输入IP/域名
 input_target() {
     while true; do
-        echo -e "${BLUE}请输入要测试的目标IP地址或域名：${NC}"
+        echo -e "${BLUE}请输入要扫描的目标IP地址或域名：${NC}"
         read -p "目标地址: " TARGET
         
         if [ -z "$TARGET" ]; then
@@ -55,94 +68,232 @@ input_target() {
     done
 }
 
-# 函数：输入端口
-input_ports() {
-    echo -e "${BLUE}请输入要测试的端口（多个端口用空格分隔）：${NC}"
-    read -p "端口: " PORTS_INPUT
+# 函数：选择扫描模式
+select_scan_mode() {
+    echo -e "${BLUE}请选择扫描模式：${NC}"
+    echo "1) 快速扫描 (1-1000端口)"
+    echo "2) 标准扫描 (1-10000端口)"
+    echo "3) 全面扫描 (1-65535端口)"
+    echo "4) 自定义端口范围"
+    echo "5) 常用服务端口扫描"
     
-    if [ -z "$PORTS_INPUT" ]; then
-        echo -e "${YELLOW}警告：未输入端口，使用默认端口 25555${NC}"
-        PORTS=("25555")
+    while true; do
+        read -p "请选择 [1-5]: " MODE
+        
+        case $MODE in
+            1)
+                START_PORT=1
+                END_PORT=1000
+                MODE_NAME="快速扫描"
+                break
+                ;;
+            2)
+                START_PORT=1
+                END_PORT=10000
+                MODE_NAME="标准扫描"
+                break
+                ;;
+            3)
+                START_PORT=1
+                END_PORT=65535
+                MODE_NAME="全面扫描"
+                break
+                ;;
+            4)
+                input_custom_range
+                MODE_NAME="自定义扫描"
+                break
+                ;;
+            5)
+                scan_common_services
+                MODE_NAME="常用服务扫描"
+                break
+                ;;
+            *)
+                echo -e "${RED}错误：请输入1-5之间的数字！${NC}"
+                ;;
+        esac
+    done
+}
+
+# 函数：输入自定义端口范围
+input_custom_range() {
+    while true; do
+        echo -e "${BLUE}请输入自定义端口范围：${NC}"
+        read -p "起始端口: " START_PORT
+        read -p "结束端口: " END_PORT
+        
+        if [[ ! "$START_PORT" =~ ^[0-9]+$ ]] || [[ ! "$END_PORT" =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}错误：端口必须是数字！${NC}"
+            continue
+        fi
+        
+        if [ "$START_PORT" -lt 1 ] || [ "$END_PORT" -gt 65535 ]; then
+            echo -e "${RED}错误：端口范围必须在 1-65535 之间！${NC}"
+            continue
+        fi
+        
+        if [ "$START_PORT" -gt "$END_PORT" ]; then
+            echo -e "${RED}错误：起始端口不能大于结束端口！${NC}"
+            continue
+        fi
+        
+        break
+    done
+}
+
+# 函数：常用服务端口扫描
+scan_common_services() {
+    # 常见服务端口列表
+    COMMON_PORTS=(21 22 23 25 53 80 110 111 135 139 143 443 445 993 995 1723 3306 3389 5432 5900 6379 27017 25565)
+    
+    echo -e "${CYAN}开始扫描常用服务端口...${NC}"
+    echo -e "扫描端口: ${YELLOW}${COMMON_PORTS[*]}${NC}"
+    
+    START_TIME=$(date +%s)
+    
+    for port in "${COMMON_PORTS[@]}"; do
+        scan_single_port "$port"
+    done
+    
+    END_TIME=$(date +%s)
+    return 0
+}
+
+# 函数：扫描单个端口
+scan_single_port() {
+    local port=$1
+    local result=""
+    
+    # 使用TCP连接测试
+    if timeout 1 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
+        result="${GREEN}开放${NC}"
+        OPEN_PORTS+=("$port")
+        
+        # 尝试识别服务
+        local service=$(identify_service "$port")
+        result="$result - $service"
     else
-        # 将输入的端口转换为数组
-        PORTS=($PORTS_INPUT)
+        result="${RED}关闭${NC}"
     fi
+    
+    SCAN_RESULTS+=("端口 $port: $result")
+    TOTAL_PORTS_SCANNED=$((TOTAL_PORTS_SCANNED + 1))
+    
+    # 显示实时进度
+    if [ $TOTAL_PORTS_SCANNED -eq 1 ] || [ $((TOTAL_PORTS_SCANNED % 100)) -eq 0 ] || [ $TOTAL_PORTS_SCANNED -le 50 ]; then
+        echo -e "扫描进度: $TOTAL_PORTS_SCANNED 端口 - 端口 $port: $result"
+    fi
+}
+
+# 函数：识别服务
+identify_service() {
+    local port=$1
+    
+    case $port in
+        21) echo "FTP" ;;
+        22) echo "SSH" ;;
+        23) echo "Telnet" ;;
+        25) echo "SMTP" ;;
+        53) echo "DNS" ;;
+        80) echo "HTTP" ;;
+        110) echo "POP3" ;;
+        111) echo "RPC" ;;
+        135) echo "RPC" ;;
+        139) echo "NetBIOS" ;;
+        143) echo "IMAP" ;;
+        443) echo "HTTPS" ;;
+        445) echo "SMB" ;;
+        993) echo "IMAPS" ;;
+        995) echo "POP3S" ;;
+        1723) echo "PPTP" ;;
+        3306) echo "MySQL" ;;
+        3389) echo "RDP" ;;
+        5432) echo "PostgreSQL" ;;
+        5900) echo "VNC" ;;
+        6379) echo "Redis" ;;
+        27017) echo "MongoDB" ;;
+        25565) echo "Minecraft" ;;
+        *) echo "未知服务" ;;
+    esac
+}
+
+# 函数：端口范围扫描
+scan_port_range() {
+    local start=$1
+    local end=$2
+    
+    echo -e "${CYAN}开始扫描端口范围: $start - $end${NC}"
+    echo -e "目标: ${YELLOW}$TARGET${NC}"
+    echo -e "预计端口数量: $((end - start + 1))"
+    echo ""
+    
+    START_TIME=$(date +%s)
+    
+    for ((port=start; port<=end; port++)); do
+        scan_single_port "$port"
+    done
+    
+    END_TIME=$(date +%s)
+}
+
+# 函数：并行扫描（加速）
+parallel_scan() {
+    local start=$1
+    local end=$2
+    local batch_size=1000
+    local max_parallel=50
+    
+    echo -e "${CYAN}开始并行扫描端口范围: $start - $end${NC}"
+    echo -e "目标: ${YELLOW}$TARGET${NC}"
+    echo -e "并行度: $max_parallel"
+    echo ""
+    
+    START_TIME=$(date +%s)
+    
+    for ((batch_start=start; batch_start<=end; batch_start+=batch_size)); do
+        local batch_end=$((batch_start + batch_size - 1))
+        if [ $batch_end -gt $end ]; then
+            batch_end=$end
+        fi
+        
+        echo -e "${YELLOW}扫描批次: $batch_start - $batch_end${NC}"
+        
+        for ((port=batch_start; port<=batch_end; port++)); do
+            # 控制并行数量
+            ( 
+                if timeout 1 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
+                    echo -e "${GREEN}发现开放端口: $port${NC} - $(identify_service $port)"
+                    OPEN_PORTS+=("$port")
+                fi
+            ) &
+            
+            # 控制并发数
+            if [[ $(jobs -r -p | wc -l) -ge $max_parallel ]]; then
+                wait -n
+            fi
+        done
+        
+        wait
+        TOTAL_PORTS_SCANNED=$((TOTAL_PORTS_SCANNED + batch_size))
+        echo -e "已完成: $TOTAL_PORTS_SCANNED/$((end - start + 1)) 端口"
+    done
+    
+    END_TIME=$(date +%s)
 }
 
 # 函数：Ping测试
 ping_test() {
-    echo -e "\n${PURPLE}=== Ping 连通性测试 ===${NC}"
+    echo -e "\n${PURPLE}=== 网络连通性测试 ===${NC}"
     echo -e "目标: ${YELLOW}$TARGET${NC}"
     
-    if ping -c 4 -W 2 "$TARGET" &> /dev/null; then
-        echo -e "${GREEN}✓ Ping 测试成功 - 网络连通正常${NC}"
-        PING_RESULT=$(ping -c 4 -W 2 "$TARGET" | grep -E "packets transmitted|min/avg/max" 2>/dev/null || echo "Ping 成功但无法解析详细结果")
-        echo "$PING_RESULT"
+    if ping -c 3 -W 2 "$TARGET" &> /dev/null; then
+        echo -e "${GREEN}✓ 网络连通正常${NC}"
         return 0
     else
-        echo -e "${RED}✗ Ping 测试失败 - 网络不通${NC}"
+        echo -e "${RED}✗ 网络不通${NC}"
         return 1
     fi
-}
-
-# 函数：TCP连接测试（主要测试方法）
-tcp_connection_test() {
-    local port=$1
-    echo -e "\n${PURPLE}=== 端口 $port 测试 ===${NC}"
-    
-    # 测试1: TCP 连接测试（主要方法）
-    echo -e "${CYAN}[测试1] TCP 连接测试...${NC}"
-    if timeout 3 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
-        echo -e "${GREEN}✓ TCP 测试 - 端口 $port 开放${NC}"
-        TCP_RESULT=0
-    else
-        echo -e "${RED}✗ TCP 测试 - 端口 $port 关闭或无法连接${NC}"
-        TCP_RESULT=1
-    fi
-    
-    # 测试2: 使用 curl 测试 HTTP/HTTPS 端口（如果适用）
-    if [[ $port -eq 80 || $port -eq 443 || $port -eq 8080 || $port -eq 8443 ]]; then
-        echo -e "${CYAN}[测试2] HTTP/HTTPS 服务检测...${NC}"
-        if check_command curl; then
-            local protocol="http"
-            if [[ $port -eq 443 || $port -eq 8443 ]]; then
-                protocol="https"
-            fi
-            if timeout 5 curl -s -I "${protocol}://${TARGET}:${port}" &> /dev/null; then
-                echo -e "${GREEN}✓ HTTP/HTTPS 服务在端口 $port 运行正常${NC}"
-            else
-                echo -e "${YELLOW}⚠ 端口 $port 可能不是 HTTP/HTTPS 服务或服务无响应${NC}"
-            fi
-        else
-            echo -e "${YELLOW}⚠ curl 命令未安装，跳过HTTP测试${NC}"
-        fi
-    fi
-    
-    # 测试3: 使用 nc 如果可用
-    if check_command nc; then
-        echo -e "${CYAN}[测试3] NC 端口扫描...${NC}"
-        if nc -zv -w 3 "$TARGET" "$port" &> /dev/null; then
-            echo -e "${GREEN}✓ NC 测试 - 端口 $port 开放${NC}"
-        else
-            echo -e "${RED}✗ NC 测试 - 端口 $port 关闭${NC}"
-        fi
-    else
-        echo -e "${YELLOW}⚠ NC 命令未安装，跳过NC测试${NC}"
-    fi
-    
-    # 测试4: 使用 telnet 如果可用
-    if check_command telnet; then
-        echo -e "${CYAN}[测试4] Telnet 测试...${NC}"
-        if timeout 3 telnet "$TARGET" "$port" 2>&1 | grep -q "Connected"; then
-            echo -e "${GREEN}✓ Telnet 测试 - 端口 $port 可连接${NC}"
-        else
-            echo -e "${RED}✗ Telnet 测试 - 端口 $port 无法连接${NC}"
-        fi
-    else
-        echo -e "${YELLOW}⚠ Telnet 命令未安装，跳过Telnet测试${NC}"
-    fi
-    
-    return $TCP_RESULT
 }
 
 # 函数：DNS解析测试
@@ -153,88 +304,106 @@ dns_test() {
         if check_command nslookup; then
             if nslookup "$TARGET" &> /dev/null; then
                 echo -e "${GREEN}✓ DNS 解析成功${NC}"
-                nslookup "$TARGET" | grep -A 10 "Name:" | head -10
-            else
-                echo -e "${RED}✗ DNS 解析失败${NC}"
-            fi
-        elif check_command dig; then
-            if dig "$TARGET" +short &> /dev/null; then
-                echo -e "${GREEN}✓ DNS 解析成功${NC}"
-                dig "$TARGET" +short
+                nslookup "$TARGET" | grep -A 5 "Name:"
             else
                 echo -e "${RED}✗ DNS 解析失败${NC}"
             fi
         else
-            echo -e "${YELLOW}⚠ DNS 查询工具未安装，跳过DNS测试${NC}"
+            echo -e "${YELLOW}⚠ DNS 查询工具未安装${NC}"
         fi
     else
-        echo -e "${CYAN}检测到IP地址，跳过DNS解析测试${NC}"
+        echo -e "${CYAN}检测到IP地址，跳过DNS解析${NC}"
     fi
 }
 
-# 函数：路由跟踪
-trace_route() {
-    echo -e "\n${PURPLE}=== 路由跟踪测试 ===${NC}"
-    echo -e "${YELLOW}是否进行路由跟踪？(y/n, 可能需要较长时间)${NC}"
-    read -p "选择: " DO_TRACE
+# 函数：生成扫描报告
+generate_scan_report() {
+    local duration=$((END_TIME - START_TIME))
     
-    if [[ "$DO_TRACE" == "y" || "$DO_TRACE" == "Y" ]]; then
-        if check_command traceroute; then
-            echo -e "${CYAN}开始路由跟踪...${NC}"
-            traceroute -m 15 "$TARGET"
-        elif check_command tracepath; then
-            echo -e "${CYAN}开始路由跟踪 (使用 tracepath)...${NC}"
-            tracepath "$TARGET"
-        else
-            echo -e "${YELLOW}⚠ 路由跟踪命令未安装${NC}"
-        fi
-    fi
-}
-
-# 函数：生成测试报告
-generate_report() {
-    echo -e "\n${PURPLE}=== 测试报告 ===${NC}"
-    echo -e "测试时间: $(date)"
+    echo -e "\n${PURPLE}=== 扫描报告 ===${NC}"
+    echo -e "扫描时间: $(date)"
     echo -e "目标地址: ${YELLOW}$TARGET${NC}"
-    echo -e "测试端口: ${YELLOW}${PORTS[*]}${NC}"
+    echo -e "扫描模式: ${YELLOW}$MODE_NAME${NC}"
     
-    # 汇总结果
-    echo -e "\n${CYAN}汇总结果:${NC}"
-    if ping -c 1 -W 2 "$TARGET" &> /dev/null; then
-        echo -e "${GREEN}● 网络连通性: 正常${NC}"
-    else
-        echo -e "${RED}● 网络连通性: 异常${NC}"
+    if [ "$MODE_NAME" != "常用服务扫描" ]; then
+        echo -e "端口范围: ${YELLOW}$START_PORT - $END_PORT${NC}"
     fi
     
-    echo -e "● 端口状态:"
-    for port in "${PORTS[@]}"; do
-        if timeout 2 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
-            echo -e "  端口 $port: ${GREEN}开放${NC}"
-        else
-            echo -e "  端口 $port: ${RED}关闭${NC}"
-        fi
-    done
+    echo -e "扫描时长: ${YELLOW}${duration} 秒${NC}"
+    echo -e "扫描端口总数: ${YELLOW}$TOTAL_PORTS_SCANNED${NC}"
+    echo -e "开放端口数量: ${YELLOW}${#OPEN_PORTS[@]}${NC}"
     
-    # 给出建议
-    echo -e "\n${CYAN}建议:${NC}"
-    local all_ports_closed=true
-    for port in "${PORTS[@]}"; do
-        if timeout 2 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
-            all_ports_closed=false
-            break
-        fi
-    done
-    
-    if ! ping -c 1 -W 2 "$TARGET" &> /dev/null; then
-        echo -e "${RED}● 目标主机无法访问，请检查网络连接或目标地址${NC}"
-    elif [ "$all_ports_closed" = true ]; then
-        echo -e "${YELLOW}● 所有测试端口均关闭，可能的原因：${NC}"
-        echo -e "  - 目标服务未运行"
-        echo -e "  - 防火墙阻止了连接"
-        echo -e "  - 目标主机拒绝了连接"
+    if [ ${#OPEN_PORTS[@]} -gt 0 ]; then
+        echo -e "\n${GREEN}=== 开放的端口 ===${NC}"
+        printf "端口\t状态\t服务\n"
+        printf "====\t====\t====\n"
+        
+        # 对端口进行排序
+        IFS=$'\n' sorted_ports=($(sort -n <<<"${OPEN_PORTS[*]}"))
+        unset IFS
+        
+        for port in "${sorted_ports[@]}"; do
+            local service=$(identify_service "$port")
+            printf "%-6d\t${GREEN}%-6s${NC}\t%-15s\n" "$port" "开放" "$service"
+        done
+        
+        # 显示端口统计
+        echo -e "\n${CYAN}端口统计：${NC}"
+        echo -e "标准服务端口 (1-1024): $(echo "${OPEN_PORTS[@]}" | tr ' ' '\n' | awk '$1 <= 1024' | wc -l)"
+        echo -e "注册端口 (1025-49151): $(echo "${OPEN_PORTS[@]}" | tr ' ' '\n' | awk '$1 > 1024 && $1 <= 49151' | wc -l)"
+        echo -e "动态端口 (49152-65535): $(echo "${OPEN_PORTS[@]}" | tr ' ' '\n' | awk '$1 > 49151' | wc -l)"
     else
-        echo -e "${GREEN}● 网络连接正常，部分端口可访问${NC}"
+        echo -e "\n${RED}未发现任何开放端口${NC}"
     fi
+    
+    # 安全建议
+    echo -e "\n${YELLOW}=== 安全建议 ===${NC}"
+    if [ ${#OPEN_PORTS[@]} -eq 0 ]; then
+        echo -e "${GREEN}● 所有扫描端口均关闭，安全性良好${NC}"
+    elif [ ${#OPEN_PORTS[@]} -le 5 ]; then
+        echo -e "${YELLOW}● 开放端口数量较少，建议检查服务配置${NC}"
+    else
+        echo -e "${RED}● 开放端口较多，建议进行安全审计${NC}"
+    fi
+}
+
+# 函数：选择扫描速度
+select_scan_speed() {
+    echo -e "${BLUE}请选择扫描速度：${NC}"
+    echo "1) 慢速扫描 (准确率高)"
+    echo "2) 中速扫描 (平衡模式)"
+    echo "3) 快速扫描 (可能漏扫)"
+    echo "4) 并行扫描 (最快速度)"
+    
+    while true; do
+        read -p "请选择 [1-4]: " SPEED
+        
+        case $SPEED in
+            1)
+                TIMEOUT=2
+                SPEED_NAME="慢速扫描"
+                break
+                ;;
+            2)
+                TIMEOUT=1
+                SPEED_NAME="中速扫描"
+                break
+                ;;
+            3)
+                TIMEOUT=0.5
+                SPEED_NAME="快速扫描"
+                break
+                ;;
+            4)
+                TIMEOUT=1
+                SPEED_NAME="并行扫描"
+                break
+                ;;
+            *)
+                echo -e "${RED}错误：请输入1-4之间的数字！${NC}"
+                ;;
+        esac
+    done
 }
 
 # 主函数
@@ -244,48 +413,51 @@ main() {
     
     # 获取用户输入
     input_target
-    input_ports
     
-    echo -e "\n${GREEN}开始网络诊断测试...${NC}"
-    echo -e "目标: ${YELLOW}$TARGET${NC}"
-    echo -e "端口: ${YELLOW}${PORTS[*]}${NC}"
-    echo ""
-    
-    # 执行各项测试
+    # 网络基础测试
     dns_test
-    ping_test
-    ping_result=$?
-    
-    # 如果ping不通，询问是否继续
-    if [ $ping_result -ne 0 ]; then
-        echo -e "\n${YELLOW}警告: Ping 测试失败，目标可能无法访问${NC}"
-        echo -e "${YELLOW}是否继续端口测试？(y/n)${NC}"
+    if ! ping_test; then
+        echo -e "${YELLOW}网络不通，是否继续扫描？(y/n)${NC}"
         read -p "选择: " CONTINUE
         if [[ "$CONTINUE" != "y" && "$CONTINUE" != "Y" ]]; then
-            echo -e "${RED}测试终止${NC}"
+            echo -e "${RED}扫描终止${NC}"
             exit 1
         fi
     fi
     
-    # 端口测试
-    for port in "${PORTS[@]}"; do
-        tcp_connection_test "$port"
-    done
+    # 选择扫描模式和速度
+    select_scan_mode
+    select_scan_speed
     
-    # 路由跟踪
-    trace_route
+    echo -e "\n${GREEN}开始端口扫描...${NC}"
+    echo -e "目标: ${YELLOW}$TARGET${NC}"
+    echo -e "模式: ${YELLOW}$MODE_NAME${NC}"
+    echo -e "速度: ${YELLOW}$SPEED_NAME${NC}"
+    
+    # 执行扫描
+    case $MODE in
+        5)
+            # 常用服务扫描已在 select_scan_mode 中处理
+            ;;
+        *)
+            if [ "$SPEED_NAME" = "并行扫描" ]; then
+                parallel_scan "$START_PORT" "$END_PORT"
+            else
+                scan_port_range "$START_PORT" "$END_PORT"
+            fi
+            ;;
+    esac
     
     # 生成报告
-    generate_report
+    generate_scan_report
     
-    echo -e "\n${GREEN}网络诊断完成！${NC}"
+    echo -e "\n${GREEN}端口扫描完成！${NC}"
 }
 
-# 检查必要命令（简化版）
+# 检查系统要求
 check_requirements() {
     local missing=()
     
-    # 只检查最基础的命令
     for cmd in ping timeout; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
@@ -297,17 +469,6 @@ check_requirements() {
         echo -e "${YELLOW}请安装缺少的命令后重新运行脚本${NC}"
         exit 1
     fi
-    
-    # 检查可选命令并提示
-    echo -e "${CYAN}检测可选工具...${NC}"
-    for cmd in nc telnet curl nslookup dig traceroute tracepath; do
-        if ! command -v "$cmd" &> /dev/null; then
-            echo -e "${YELLOW}⚠ 可选工具 '$cmd' 未安装，相关测试将跳过${NC}"
-        else
-            echo -e "${GREEN}✓ 工具 '$cmd' 可用${NC}"
-        fi
-    done
-    echo ""
 }
 
 # 脚本入口
