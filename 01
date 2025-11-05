@@ -1,38 +1,376 @@
 #!/bin/bash
-# 修复版服务器 - 绑定所有接口
+
+# 完整服务器控制器 v3.0
+# 支持多客户端管理、命令执行、脚本分发
 
 SERVER_PORT=25555
-LOG_FILE="/tmp/server_fixed.log"
+LOG_FILE="/var/log/controller_server.log"
+CLIENTS_FILE="/var/lib/controller_clients.txt"
+SCRIPT_DIR="/opt/controller_scripts"
+BACKUP_DIR="/var/backup/controller"
+CONFIG_FILE="/etc/controller_server.conf"
+PID_FILE="/var/run/controller_server.pid"
 
-echo "启动修复版服务器（绑定所有接口）..."
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-while true; do
-    echo "$(date): 等待客户端连接 0.0.0.0:$SERVER_PORT..." | tee -a "$LOG_FILE"
+# 初始化
+init_server() {
+    mkdir -p "$(dirname "$LOG_FILE")"
+    mkdir -p "$(dirname "$CLIENTS_FILE")"
+    mkdir -p "$SCRIPT_DIR"
+    mkdir -p "$BACKUP_DIR"
     
-    # 使用-l 和 -k 参数，绑定所有接口并保持监听
-    nc -l -k -p $SERVER_PORT -s 0.0.0.0 -c '
-        client_ip=$(echo $SSH_CLIENT | awk "{print \$1}")
-        if [[ -z "$client_ip" ]]; then
-            client_ip="unknown"
-        fi
-        
-        read -r data
-        timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-        
-        echo "收到来自 $client_ip 的数据: $data" | tee -a /tmp/server_debug.log
-        
-        if echo "$data" | grep -q "HEARTBEAT|"; then
-            IFS="|" read -r heartbeat serial hostname system <<< "$data"
-            
-            # 记录到临时文件
-            echo "$serial|$client_ip|$hostname|$system|$timestamp" >> /tmp/clients_debug.txt
-            
-            echo "ACK:OK"
-            echo "✅ 客户端 $serial 连接成功 - $hostname ($client_ip)" | tee -a "$LOG_FILE"
-        else
-            echo "ACK:UNKNOWN_COMMAND"
-        fi
-    '
+    # 创建配置文件
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" << EOF
+SERVER_PORT=$SERVER_PORT
+LOG_FILE="$LOG_FILE"
+CLIENTS_FILE="$CLIENTS_FILE"
+SCRIPT_DIR="$SCRIPT_DIR"
+HEARTBEAT_TIMEOUT=300
+MAX_CLIENTS=1000
+EOF
+    fi
     
-    sleep 1
-done
+    source "$CONFIG_FILE"
+    create_default_scripts
+}
+
+# 创建默认脚本
+create_default_scripts() {
+    # 系统管理脚本
+    cat > "$SCRIPT_DIR/system_info.sh" << 'EOF'
+#!/bin/bash
+echo "=== 系统信息 ==="
+echo "主机名: $(hostname)"
+echo "系统: $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo 'unknown')"
+echo "内核: $(uname -r)"
+echo "架构: $(uname -m)"
+echo "上线时间: $(uptime -p 2>/dev/null || uptime)"
+echo "内存: $(free -h 2>/dev/null || echo 'unknown')"
+echo "磁盘: $(df -h 2>/dev/null || echo 'unknown')"
+EOF
+
+    # 服务管理脚本
+    cat > "$SCRIPT_DIR/restart_services.sh" << 'EOF'
+#!/bin/bash
+echo "重启系统服务..."
+systemctl restart networking 2>/dev/null || systemctl restart network 2>/dev/null
+systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+echo "服务重启完成"
+EOF
+
+    # 更新脚本
+    cat > "$SCRIPT_DIR/update_system.sh" << 'EOF'
+#!/bin/bash
+echo "开始系统更新..."
+if command -v apt-get &>/dev/null; then
+    apt-get update && apt-get upgrade -y
+elif command -v yum &>/dev/null; then
+    yum update -y
+elif command -v dnf &>/dev/null; then
+    dnf update -y
+elif command -v apk &>/dev/null; then
+    apk update && apk upgrade
+fi
+echo "系统更新完成"
+EOF
+
+    # 网络诊断脚本
+    cat > "$SCRIPT_DIR/network_info.sh" << 'EOF'
+#!/bin/bash
+echo "=== 网络信息 ==="
+ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "无法获取网络信息"
+echo "=== 路由表 ==="
+ip route show 2>/dev/null || route -n 2>/dev/null || echo "无法获取路由信息"
+EOF
+
+    chmod +x "$SCRIPT_DIR"/*.sh
+}
+
+# 日志函数
+log() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "[$timestamp] $1" | tee -a "$LOG_FILE"
+}
+
+print_color() {
+    echo -e "${2}${1}${NC}"
+}
+
+# 服务器状态
+is_server_running() {
+    [[ -f "$PID_FILE" ]] && kill -0 $(cat "$PID_FILE") 2>/dev/null
+}
+
+# 启动服务器
+start_server() {
+    if is_server_running; then
+        print_color "服务器已在运行 (PID: $(cat "$PID_FILE"))" "$YELLOW"
+        return
+    fi
+    
+    print_color "启动服务器端口: $SERVER_PORT" "$GREEN"
+    echo $$ > "$PID_FILE"
+    
+    # 主服务器循环
+    while true; do
+        log "等待客户端连接..."
+        nc -l -p $SERVER_PORT -c "
+            client_ip=\$(echo \$SSH_CLIENT | awk '{print \$1}')
+            [[ -z \"\$client_ip\" ]] && client_ip=\"unknown\"
+            
+            read -r data
+            timestamp=\$(date '+%Y-%m-%d %H:%M:%S')
+            
+            if echo \"\$data\" | grep -q \"HEARTBEAT|\"; then
+                IFS=\"|\" read -r heartbeat serial hostname system <<< \"\$data\"
+                
+                # 更新客户端信息
+                grep -v \"^\$serial|\" \"$CLIENTS_FILE\" > /tmp/clients.tmp 2>/dev/null
+                echo \"\$serial|\$client_ip|\$hostname|\$system|\$timestamp\" >> /tmp/clients.tmp
+                mv /tmp/clients.tmp \"$CLIENTS_FILE\" 2>/dev/null
+                
+                echo \"ACK:OK\"
+                log \"客户端 \$serial 已连接 - \$hostname (\$client_ip)\"
+            else
+                echo \"ACK:UNKNOWN\"
+            fi
+        " 2>/dev/null
+        sleep 1
+    done
+}
+
+# 停止服务器
+stop_server() {
+    if is_server_running; then
+        local pid=$(cat "$PID_FILE")
+        print_color "停止服务器 (PID: $pid)" "$GREEN"
+        kill "$pid"
+        rm -f "$PID_FILE"
+    else
+        print_color "服务器未运行" "$YELLOW"
+    fi
+}
+
+# 显示客户端列表
+show_clients() {
+    if [[ ! -s "$CLIENTS_FILE" ]]; then
+        print_color "没有客户端连接" "$YELLOW"
+        return
+    fi
+    
+    local count=$(wc -l < "$CLIENTS_FILE" 2>/dev/null || echo "0")
+    print_color "已连接客户端 ($count):" "$BLUE"
+    
+    print_color "┌────────────┬───────────────┬──────────────────┬─────────────────┬─────────────────────┐" "$CYAN"
+    print_color "│   序列号   │    IP地址     │      主机名      │      系统       │     最后在线       │" "$CYAN"
+    print_color "├────────────┼───────────────┼──────────────────┼─────────────────┼─────────────────────┤" "$CYAN"
+    
+    while IFS='|' read -r serial ip hostname system last_seen; do
+        if [[ -n "$serial" ]]; then
+            printf "│ ${GREEN}%-10s${NC} │ ${YELLOW}%-13s${NC} │ ${BLUE}%-16s${NC} │ ${PURPLE}%-15s${NC} │ ${GREEN}%-19s${NC} │\n" \
+                   "$serial" "$ip" "$hostname" "$system" "$last_seen"
+        fi
+    done < "$CLIENTS_FILE"
+    
+    print_color "└────────────┴───────────────┴──────────────────┴─────────────────┴─────────────────────┘" "$CYAN"
+}
+
+# 发送命令到客户端
+send_command() {
+    local serial="$1"
+    local command="$2"
+    
+    [[ -z "$serial" || -z "$command" ]] && {
+        print_color "用法: send <序列号> <命令>" "$RED"
+        return
+    }
+    
+    local client_info=$(grep "^$serial|" "$CLIENTS_FILE")
+    [[ -z "$client_info" ]] && {
+        print_color "客户端未找到: $serial" "$RED"
+        return
+    }
+    
+    IFS='|' read -r serial ip hostname system last_seen <<< "$client_info"
+    
+    print_color "发送命令到 $serial ($hostname)..." "$GREEN"
+    print_color "命令: $command" "$YELLOW"
+    
+    # 发送命令
+    echo "COMMAND:$command" | timeout 5 nc -w 3 "$ip" 5556
+    
+    [[ $? -eq 0 ]] && {
+        log "命令发送成功: $serial -> $command"
+        print_color "命令发送成功!" "$GREEN"
+    } || {
+        log "命令发送失败: $serial -> $command"
+        print_color "命令发送失败!" "$RED"
+    }
+}
+
+# 执行脚本
+execute_script() {
+    local serial="$1"
+    local script_name="$2"
+    
+    [[ -z "$serial" || -z "$script_name" ]] && {
+        print_color "用法: script <序列号> <脚本名>" "$RED"
+        show_scripts
+        return
+    }
+    
+    local script_path="$SCRIPT_DIR/$script_name"
+    [[ ! -f "$script_path" ]] && {
+        print_color "脚本不存在: $script_name" "$RED"
+        show_scripts
+        return
+    }
+    
+    local client_info=$(grep "^$serial|" "$CLIENTS_FILE")
+    [[ -z "$client_info" ]] && {
+        print_color "客户端未找到: $serial" "$RED"
+        return
+    }
+    
+    IFS='|' read -r serial ip hostname system last_seen <<< "$client_info"
+    
+    print_color "执行脚本到 $serial ($hostname)..." "$GREEN"
+    print_color "脚本: $script_name" "$YELLOW"
+    
+    echo "SCRIPT:$script_name" | timeout 5 nc -w 3 "$ip" 5556
+    
+    [[ $? -eq 0 ]] && {
+        log "脚本执行成功: $serial -> $script_name"
+        print_color "脚本执行成功!" "$GREEN"
+    } || {
+        log "脚本执行失败: $serial -> $script_name"
+        print_color "脚本执行失败!" "$RED"
+    }
+}
+
+# 显示可用脚本
+show_scripts() {
+    print_color "可用脚本:" "$BLUE"
+    ls "$SCRIPT_DIR"/*.sh 2>/dev/null | xargs -n 1 basename | while read script; do
+        print_color "  📜 $script" "$GREEN"
+    done || print_color "  无可用脚本" "$YELLOW"
+}
+
+# 广播命令
+broadcast_command() {
+    local command="$1"
+    [[ -z "$command" ]] && {
+        print_color "用法: broadcast <命令>" "$RED"
+        return
+    }
+    
+    local count=0
+    print_color "广播命令: $command" "$YELLOW"
+    
+    while IFS='|' read -r serial ip hostname system last_seen; do
+        [[ -n "$serial" ]] && {
+            echo "发送到 $serial..."
+            echo "COMMAND:$command" | timeout 3 nc -w 2 "$ip" 5556 &
+            count=$((count + 1))
+        }
+    done < "$CLIENTS_FILE"
+    
+    wait
+    print_color "广播完成! 发送到 $count 个客户端" "$GREEN"
+}
+
+# 显示服务器状态
+show_status() {
+    print_color "=== 服务器状态 ===" "$BLUE"
+    print_color "端口: $SERVER_PORT" "$GREEN"
+    print_color "运行状态: $(is_server_running && echo '运行中' || echo '未运行')" "$YELLOW"
+    print_color "客户端数: $(wc -l < "$CLIENTS_FILE" 2>/dev/null || echo "0")" "$CYAN"
+    print_color "日志文件: $LOG_FILE" "$PURPLE"
+}
+
+# 主菜单
+main_menu() {
+    while true; do
+        clear
+        print_color "╔══════════════════════════════════════════════════════════════╗" "$CYAN"
+        print_color "║                   服务器控制器 v3.0                         ║" "$BLUE"
+        print_color "║                 Server Controller v3.0                      ║" "$BLUE"
+        print_color "╠══════════════════════════════════════════════════════════════╣" "$CYAN"
+        print_color "║ 端口: $SERVER_PORT | 客户端: $(wc -l < "$CLIENTS_FILE" 2>/dev/null || echo "0") | 状态: $(is_server_running && echo -e "${GREEN}运行中${NC}" || echo -e "${RED}未运行${NC}") ║" "$GREEN"
+        print_color "╚══════════════════════════════════════════════════════════════╝" "$CYAN"
+        echo
+        
+        print_color "1. 启动服务器" "$GREEN"
+        print_color "2. 停止服务器" "$RED"
+        print_color "3. 客户端列表" "$CYAN"
+        print_color "4. 发送命令" "$YELLOW"
+        print_color "5. 执行脚本" "$BLUE"
+        print_color "6. 广播命令" "$PURPLE"
+        print_color "7. 显示脚本" "$CYAN"
+        print_color "8. 服务器状态" "$GREEN"
+        print_color "9. 查看日志" "$YELLOW"
+        print_color "0. 退出" "$RED"
+        echo
+        
+        read -p "请选择操作 [0-9]: " choice
+        
+        case $choice in
+            1) start_server ;;
+            2) stop_server ;;
+            3) show_clients ;;
+            4)
+                read -p "序列号: " serial
+                read -p "命令: " cmd
+                send_command "$serial" "$cmd"
+                ;;
+            5)
+                read -p "序列号: " serial
+                read -p "脚本名: " script
+                execute_script "$serial" "$script"
+                ;;
+            6)
+                read -p "广播命令: " cmd
+                broadcast_command "$cmd"
+                ;;
+            7) show_scripts ;;
+            8) show_status ;;
+            9) tail -f "$LOG_FILE" ;;
+            0)
+                print_color "再见!" "$GREEN"
+                exit 0
+                ;;
+            *) print_color "无效选择!" "$RED" ;;
+        esac
+        
+        echo
+        read -p "按回车继续..."
+    done
+}
+
+# 命令行处理
+case "${1:-}" in
+    start)
+        init_server
+        start_server
+        ;;
+    stop)
+        stop_server
+        ;;
+    status)
+        init_server
+        show_status
+        ;;
+    *)
+        init_server
+        main_menu
+        ;;
+esac
