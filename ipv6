@@ -1,42 +1,285 @@
 #!/bin/bash
 
-echo "=== Ubuntu IPv6 基础检测 ==="
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 
-# 检查系统版本
-echo "1. 系统信息:"
-lsb_release -d 2>/dev/null || echo "  Ubuntu $(uname -r)"
+# 变量定义
+IPV4_API="https://api.ipify.org?format=json"
+IPV6_API="https://api64.ipify.org?format=json"
+GEO_API="http://ip-api.com/json/"
+IPINFO_API="https://ipinfo.io/"
 
-# 检查NetworkManager状态（Ubuntu默认）
-echo "2. 网络管理器状态:"
-if systemctl is-active NetworkManager >/dev/null 2>&1; then
-    echo "  ✓ NetworkManager 运行中"
-else
-    echo "  ⚠ NetworkManager 未运行"
-fi
-
-# 检查IPv6内核参数
-echo "3. IPv6内核参数:"
-if [[ $(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null) -eq 0 ]]; then
-    echo "  ✓ IPv6已启用"
-else
-    echo "  ✗ IPv6被禁用"
-fi
-
-# 检查网络接口
-echo "4. 网络接口IPv6状态:"
-for iface in $(ip -o link show | awk -F': ' '{print $2}'); do
-    ipv6_status=$(cat /proc/sys/net/ipv6/conf/$iface/disable_ipv6 2>/dev/null)
-    if [[ $ipv6_status -eq 0 ]]; then
-        echo "  ✓ $iface: IPv6已启用"
-    else
-        echo "  ✗ $iface: IPv6被禁用"
+# 检查依赖
+check_dependencies() {
+    local deps=("curl" "jq" "ping" "ip")
+    local missing=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            missing+=("$dep")
+        fi
+    done
+    
+    if [ ${#missing[@]} -ne 0 ]; then
+        echo -e "${RED}缺少必要依赖: ${missing[*]}${NC}"
+        echo "正在安装依赖..."
+        apt update && apt install -y "${missing[@]}" 2>/dev/null || \
+        yum install -y "${missing[@]}" 2>/dev/null || \
+        echo "请手动安装缺少的依赖"
     fi
-done
+}
 
-# 测试连通性
-echo "5. IPv6连通性测试:"
-if ping6 -c 2 -W 3 2001:4860:4860::8888 >/dev/null 2>&1; then
-    echo "  ✓ IPv6外网连通正常"
-else
-    echo "  ✗ IPv6外网连通失败"
-fi
+# 获取公网IPv4地址和地理位置
+get_ipv4_info() {
+    echo -e "${CYAN}=== IPv4 信息检测 ===${NC}"
+    
+    local ipv4_info=$(curl -s -4 --connect-timeout 5 "$IPV4_API")
+    if [ -n "$ipv4_info" ]; then
+        local ipv4=$(echo "$ipv4_info" | jq -r '.ip')
+        echo -e "${GREEN}公网IPv4地址: $ipv4${NC}"
+        
+        # 获取地理位置
+        local geo_info=$(curl -s --connect-timeout 5 "${GEO_API}${ipv4}")
+        if [ -n "$geo_info" ]; then
+            local country=$(echo "$geo_info" | jq -r '.country // "未知"')
+            local region=$(echo "$geo_info" | jq -r '.regionName // "未知"')
+            local city=$(echo "$geo_info" | jq -r '.city // "未知"')
+            local isp=$(echo "$geo_info" | jq -r '.isp // "未知"')
+            local as=$(echo "$geo_info" | jq -r '.as // "未知"')
+            
+            echo -e "地理位置: ${YELLOW}$country - $region - $city${NC}"
+            echo -e "网络运营商: ${BLUE}$isp${NC}"
+            echo -e "ASN: ${PURPLE}$as${NC}"
+        else
+            echo -e "${RED}无法获取IPv4地理位置信息${NC}"
+        fi
+    else
+        echo -e "${RED}无法获取公网IPv4地址${NC}"
+    fi
+    echo
+}
+
+# 获取公网IPv6地址和地理位置
+get_ipv6_info() {
+    echo -e "${CYAN}=== IPv6 信息检测 ===${NC}"
+    
+    local ipv6_info=$(curl -s -6 --connect-timeout 5 "$IPV6_API")
+    if [ -n "$ipv6_info" ]; then
+        local ipv6=$(echo "$ipv6_info" | jq -r '.ip')
+        echo -e "${GREEN}公网IPv6地址: $ipv6${NC}"
+        
+        # 获取地理位置
+        local geo_info=$(curl -s --connect-timeout 5 "${GEO_API}${ipv6}")
+        if [ -n "$geo_info" ]; then
+            local country=$(echo "$geo_info" | jq -r '.country // "未知"')
+            local region=$(echo "$geo_info" | jq -r '.regionName // "未知"')
+            local city=$(echo "$geo_info" | jq -r '.city // "未知"')
+            local isp=$(echo "$geo_info" | jq -r '.isp // "未知"')
+            local as=$(echo "$geo_info" | jq -r '.as // "未知"')
+            
+            echo -e "地理位置: ${YELLOW}$country - $region - $city${NC}"
+            echo -e "网络运营商: ${BLUE}$isp${NC}"
+            echo -e "ASN: ${PURPLE}$as${NC}"
+        else
+            echo -e "${RED}无法获取IPv6地理位置信息${NC}"
+        fi
+    else
+        echo -e "${RED}无法获取公网IPv6地址${NC}"
+    fi
+    echo
+}
+
+# 检测本地网络接口
+get_local_network_info() {
+    echo -e "${CYAN}=== 本地网络接口信息 ===${NC}"
+    
+    # 获取所有网络接口
+    local interfaces=$(ip -o link show | awk -F': ' '{print $2}')
+    
+    for iface in $interfaces; do
+        # 跳过lo和docker虚拟接口
+        if [[ "$iface" == "lo" ]] || [[ "$iface" == docker* ]] || [[ "$iface" == veth* ]]; then
+            continue
+        fi
+        
+        echo -e "${BLUE}接口: $iface${NC}"
+        
+        # IPv4信息
+        local ipv4_addr=$(ip -4 addr show dev "$iface" | grep inet | awk '{print $2}')
+        if [ -n "$ipv4_addr" ]; then
+            echo -e "  IPv4: ${GREEN}$ipv4_addr${NC}"
+        else
+            echo -e "  IPv4: ${RED}无${NC}"
+        fi
+        
+        # IPv6信息
+        local ipv6_addr=$(ip -6 addr show dev "$iface" scope global | grep inet6 | awk '{print $2}' | head -1)
+        if [ -n "$ipv6_addr" ]; then
+            echo -e "  IPv6: ${GREEN}$ipv6_addr${NC}"
+        else
+            echo -e "  IPv6: ${RED}无${NC}"
+        fi
+        
+        # MAC地址
+        local mac_addr=$(ip link show dev "$iface" | grep link/ether | awk '{print $2}')
+        if [ -n "$mac_addr" ]; then
+            echo -e "  MAC: ${YELLOW}$mac_addr${NC}"
+        fi
+        echo
+    done
+}
+
+# 网络连通性测试
+test_connectivity() {
+    echo -e "${CYAN}=== 网络连通性测试 ===${NC}"
+    
+    # IPv4测试目标
+    local ipv4_targets=(
+        "8.8.8.8 Google DNS"
+        "1.1.1.1 Cloudflare DNS"
+        "114.114.114.114 国内DNS"
+        "223.5.5.5 阿里DNS"
+    )
+    
+    # IPv6测试目标
+    local ipv6_targets=(
+        "2001:4860:4860::8888 Google DNS"
+        "2606:4700:4700::1111 Cloudflare DNS"
+        "2400:3200::1 阿里DNS"
+        "2408:8899::8 百度DNS"
+    )
+    
+    echo -e "${YELLOW}IPv4 连通性:${NC}"
+    for target in "${ipv4_targets[@]}"; do
+        local ip=$(echo "$target" | awk '{print $1}')
+        local name=$(echo "$target" | awk '{print $2}')
+        
+        if ping -c 2 -W 2 "$ip" &> /dev/null; then
+            echo -e "  ${GREEN}✓ $name ($ip) - 可达${NC}"
+        else
+            echo -e "  ${RED}✗ $name ($ip) - 不可达${NC}"
+        fi
+    done
+    echo
+    
+    echo -e "${YELLOW}IPv6 连通性:${NC}"
+    for target in "${ipv6_targets[@]}"; do
+        local ip=$(echo "$target" | awk '{print $1}')
+        local name=$(echo "$target" | awk '{print $2}')
+        
+        if ping6 -c 2 -W 2 "$ip" &> /dev/null; then
+            echo -e "  ${GREEN}✓ $name ($ip) - 可达${NC}"
+        else
+            echo -e "  ${RED}✗ $name ($ip) - 不可达${NC}"
+        fi
+    done
+    echo
+}
+
+# 路由跟踪测试
+test_traceroute() {
+    echo -e "${CYAN}=== 路由跟踪测试 ===${NC}"
+    
+    echo -e "${YELLOW}IPv4 路由跟踪 (前3跳):${NC}"
+    if command -v traceroute &> /dev/null; then
+        traceroute -m 3 -w 1 8.8.8.8 2>/dev/null | head -5
+    else
+        echo "traceroute命令不可用"
+    fi
+    echo
+    
+    echo -e "${YELLOW}IPv6 路由跟踪 (前3跳):${NC}"
+    if command -v traceroute6 &> /dev/null; then
+        traceroute6 -m 3 -w 1 2001:4860:4860::8888 2>/dev/null | head -5
+    else
+        echo "traceroute6命令不可用"
+    fi
+    echo
+}
+
+# 获取详细IP信息
+get_detailed_ip_info() {
+    echo -e "${CYAN}=== 详细IP信息 ===${NC}"
+    
+    # 获取公网IP
+    local public_ipv4=$(curl -s -4 --connect-timeout 5 "https://api.ipify.org")
+    local public_ipv6=$(curl -s -6 --connect-timeout 5 "https://api64.ipify.org")
+    
+    if [ -n "$public_ipv4" ]; then
+        echo -e "${GREEN}公网IPv4: $public_ipv4${NC}"
+        local ipinfo=$(curl -s --connect-timeout 5 "https://ipinfo.io/$public_ipv4/json")
+        if [ -n "$ipinfo" ]; then
+            echo "$ipinfo" | jq '. | {country: .country, region: .region, city: .city, loc: .loc, org: .org, timezone: .timezone}' 2>/dev/null
+        fi
+        echo
+    fi
+    
+    if [ -n "$public_ipv6" ]; then
+        echo -e "${GREEN}公网IPv6: $public_ipv6${NC}"
+        local ipinfo=$(curl -s --connect-timeout 5 "https://ipinfo.io/$public_ipv6/json")
+        if [ -n "$ipinfo" ]; then
+            echo "$ipinfo" | jq '. | {country: .country, region: .region, city: .city, loc: .loc, org: .org, timezone: .timezone}' 2>/dev/null
+        fi
+        echo
+    fi
+}
+
+# 网络速度测试（可选）
+test_speed() {
+    echo -e "${CYAN}=== 网络速度测试 (可选) ===${NC}"
+    read -p "是否进行网络速度测试? (y/N): " choice
+    if [[ $choice == "y" || $choice == "Y" ]]; then
+        if command -v speedtest-cli &> /dev/null; then
+            echo "正在进行速度测试..."
+            speedtest-cli --simple
+        else
+            echo "speedtest-cli未安装，跳过速度测试"
+            echo "安装命令: apt install speedtest-cli 或 pip install speedtest-cli"
+        fi
+    fi
+    echo
+}
+
+# 生成报告
+generate_report() {
+    echo -e "${CYAN}=== 网络检测报告 ===${NC}"
+    echo "检测时间: $(date)"
+    echo "主机名: $(hostname)"
+    echo "系统: $(uname -s -r)"
+    echo
+}
+
+# 主函数
+main() {
+    clear
+    echo -e "${PURPLE}================================${NC}"
+    echo -e "${PURPLE}   全能网络检测脚本 v2.0${NC}"
+    echo -e "${PURPLE}================================${NC}"
+    echo
+    
+    # 检查依赖
+    check_dependencies
+    
+    # 生成报告头
+    generate_report
+    
+    # 执行各项检测
+    get_local_network_info
+    get_ipv4_info
+    get_ipv6_info
+    test_connectivity
+    test_traceroute
+    get_detailed_ip_info
+    test_speed
+    
+    echo -e "${GREEN}=== 检测完成 ===${NC}"
+}
+
+# 执行主函数
+main "$@"
