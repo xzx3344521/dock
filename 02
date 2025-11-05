@@ -1,12 +1,55 @@
 #!/bin/bash
 
-# 无依赖客户端脚本 - 使用系统自带工具
-# 支持: Debian, Ubuntu, CentOS, RHEL, Fedora, Alpine
+# 增强版控制器客户端
+# 支持后台运行、开机自启、进程管理
 
-SERVER_IP="159.138.58.239"  # 你的服务器IP
+SERVER_IP="159.138.58.239"  # 修改为你的服务器IP
 SERVER_PORT=5555
 CLIENT_PORT=5556
 HEARTBEAT_INTERVAL=30
+CONFIG_FILE="/etc/controller_client.conf"
+PID_FILE="/var/run/controller_client.pid"
+LOG_FILE="/var/log/controller_client.log"
+SCRIPT_DIR="/opt/controller_scripts"
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log() {
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+print_color() {
+    echo -e "${2}${1}${NC}"
+}
+
+# 检查root权限
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_color "错误: 此操作需要root权限" "$RED"
+        exit 1
+    fi
+}
+
+# 安装依赖
+install_dependencies() {
+    print_color "安装必要依赖..." "$YELLOW"
+    
+    if command -v apt-get &> /dev/null; then
+        apt-get update
+        apt-get install -y netcat-traditional curl wget
+    elif command -v yum &> /dev/null; then
+        yum install -y nc curl wget
+    elif command -v dnf &> /dev/null; then
+        dnf install -y nc curl wget
+    elif command -v apk &> /dev/null; then
+        apk add netcat-openbsd curl wget
+    fi
+}
 
 # 获取系统信息
 get_system_info() {
@@ -28,113 +71,161 @@ generate_serial() {
     fi
 }
 
-SERIAL=$(generate_serial)
-HOSTNAME=$(hostname)
-SYSTEM_INFO=$(get_system_info)
-
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log() {
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S') - $1"
-}
-
-print_color() {
-    echo -e "${2}${1}${NC}"
-}
-
-# 检查可用工具
-check_tool() {
-    for tool in "$@"; do
-        if command -v "$tool" &> /dev/null; then
-            echo "$tool"
-            return 0
-        fi
-    done
-    echo ""
-}
-
-# 发送数据到服务器
-send_data() {
-    local data="$1"
-    local port="$2"
+# 初始化配置
+init_config() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    mkdir -p "$(dirname "$LOG_FILE")"
+    mkdir -p "$SCRIPT_DIR"
     
-    # 尝试多种方法发送数据
-    local tool=$(check_tool nc netcat telnet)
-    
-    if [[ -n "$tool" ]]; then
-        # 使用netcat或telnet
-        if [[ "$tool" == "telnet" ]]; then
-            echo "$data" | timeout 5 telnet "$SERVER_IP" "$port" 2>/dev/null
-        else
-            echo "$data" | timeout 5 "$tool" "$SERVER_IP" "$port" 2>/dev/null
-        fi
-    elif command -v bash &> /dev/null && command -v cat &> /dev/null; then
-        # 使用bash内置的TCP功能
-        exec 3<>/dev/tcp/$SERVER_IP/$port 2>/dev/null
-        if [[ $? -eq 0 ]]; then
-            echo "$data" >&3
-            cat <&3 2>/dev/null &
-            sleep 1
-            exec 3>&-
-            return 0
-        fi
-    elif command -v /bin/echo &> /dev/null && [[ -e /dev/tcp ]]; then
-        # 另一种TCP方法
-        /bin/echo "$data" > /dev/tcp/$SERVER_IP/$port 2>/dev/null &
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" << EOF
+# 控制器客户端配置
+SERVER_IP="$SERVER_IP"
+SERVER_PORT="$SERVER_PORT"
+CLIENT_PORT="$CLIENT_PORT"
+HEARTBEAT_INTERVAL="$HEARTBEAT_INTERVAL"
+LOG_FILE="$LOG_FILE"
+PID_FILE="$PID_FILE"
+EOF
     fi
     
+    # 加载配置
+    source "$CONFIG_FILE"
+    
+    # 设置变量
+    SERIAL=$(generate_serial)
+    HOSTNAME=$(hostname)
+    SYSTEM_INFO=$(get_system_info)
+}
+
+# 检查进程是否运行
+is_running() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
     return 1
 }
 
-# 监听端口
-listen_port() {
-    local port="$1"
+# 启动客户端
+start_client() {
+    if is_running; then
+        print_color "客户端已经在运行 (PID: $(cat "$PID_FILE"))" "$YELLOW"
+        return 0
+    fi
     
-    # 尝试多种监听方法
-    local tool=$(check_tool nc netcat)
+    print_color "启动控制器客户端..." "$GREEN"
     
-    if [[ -n "$tool" ]]; then
-        # 使用netcat监听
-        $tool -l -p "$port" -c 'read -r data; echo "$data"'
-    elif command -v bash &> /dev/null; then
-        # 使用bash监听（简单版本）
+    # 后台运行主程序
+    {
+        echo $$ > "$PID_FILE"
+        trap "rm -f '$PID_FILE'; exit 0" INT TERM
+        
+        # 主循环
         while true; do
-            {
-                while read -r line; do
-                    echo "$line"
-                    break
-                done
-            } < /dev/tcp/0.0.0.0/"$port" 2>/dev/null || sleep 1
-        done
-    else
-        # 最后的方法：使用临时文件轮询
-        local temp_file="/tmp/client_cmd_$$"
-        while true; do
-            if [[ -f "$temp_file" ]]; then
-                cat "$temp_file"
-                rm -f "$temp_file"
+            if main_loop; then
+                log "主循环正常结束，重新启动"
+            else
+                log "主循环异常结束，10秒后重新启动"
+                sleep 10
             fi
-            sleep 1
         done
+    } &
+    
+    local pid=$!
+    echo $pid > "$PID_FILE"
+    
+    sleep 2
+    if is_running; then
+        print_color "客户端启动成功! PID: $pid" "$GREEN"
+        print_color "日志文件: $LOG_FILE" "$BLUE"
+        print_color "序列号: $SERIAL" "$BLUE"
+    else
+        print_color "客户端启动失败!" "$RED"
+    fi
+}
+
+# 停止客户端
+stop_client() {
+    if ! is_running; then
+        print_color "客户端未在运行" "$YELLOW"
+        return 0
+    fi
+    
+    local pid=$(cat "$PID_FILE")
+    print_color "停止客户端 (PID: $pid)..." "$GREEN"
+    
+    kill "$pid" 2>/dev/null
+    sleep 2
+    
+    if is_running; then
+        kill -9 "$pid" 2>/dev/null
+        sleep 1
+    fi
+    
+    if is_running; then
+        print_color "无法停止客户端" "$RED"
+        return 1
+    else
+        rm -f "$PID_FILE"
+        print_color "客户端已停止" "$GREEN"
+        return 0
+    fi
+}
+
+# 重启客户端
+restart_client() {
+    stop_client
+    sleep 2
+    start_client
+}
+
+# 查看状态
+status_client() {
+    if is_running; then
+        local pid=$(cat "$PID_FILE")
+        print_color "客户端运行中 - PID: $pid" "$GREEN"
+        print_color "序列号: $SERIAL" "$BLUE"
+        print_color "服务器: $SERVER_IP:$SERVER_PORT" "$BLUE"
+        
+        # 显示最近日志
+        echo
+        print_color "最近日志:" "$YELLOW"
+        tail -10 "$LOG_FILE" 2>/dev/null || echo "无日志文件"
+    else
+        print_color "客户端未运行" "$RED"
+    fi
+}
+
+# 查看日志
+tail_log() {
+    if [[ -f "$LOG_FILE" ]]; then
+        tail -f "$LOG_FILE"
+    else
+        print_color "日志文件不存在: $LOG_FILE" "$RED"
     fi
 }
 
 # 发送心跳包
 send_heartbeat() {
-    while true; do
-        if send_data "HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO" "$SERVER_PORT"; then
-            log "心跳包发送成功"
-        else
-            print_color "无法连接到服务器 $SERVER_IP:$SERVER_PORT" "$RED"
-            print_color "将在 ${HEARTBEAT_INTERVAL} 秒后重试..." "$YELLOW"
-        fi
-        sleep $HEARTBEAT_INTERVAL
-    done
+    local nc_cmd=$(command -v nc || command -v netcat)
+    
+    if [[ -z "$nc_cmd" ]]; then
+        log "错误: netcat 未安装"
+        return 1
+    fi
+    
+    if echo "HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO" | timeout 10 $nc_cmd "$SERVER_IP" "$SERVER_PORT"; then
+        log "心跳包发送成功"
+        return 0
+    else
+        log "无法连接到服务器 $SERVER_IP:$SERVER_PORT"
+        return 1
+    fi
 }
 
 # 执行命令
@@ -142,33 +233,38 @@ execute_command() {
     local command="$1"
     log "执行命令: $command"
     
-    # 执行命令并捕获输出
+    # 执行命令并记录结果
     result=$(eval "$command" 2>&1)
-    echo "命令执行结果: $result"
+    log "命令结果: $result"
+    echo "$result"
 }
 
-# 执行预定义脚本
+# 执行脚本
 execute_script() {
     local script_name="$1"
     
     case "$script_name" in
         "shutdown")
             print_color "执行关机命令..." "$RED"
+            log "执行关机命令"
             shutdown -h now
             ;;
         "reboot")
             print_color "执行重启命令..." "$YELLOW"
+            log "执行重启命令"
             reboot
             ;;
         "restart_services")
             print_color "重启系统服务..." "$YELLOW"
+            log "重启系统服务"
             systemctl restart networking 2>/dev/null || systemctl restart network 2>/dev/null
             systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
             ;;
         "system_info")
             print_color "收集系统信息..." "$GREEN"
+            log "收集系统信息"
             echo "=== 系统信息 ==="
-            echo "主机名: $(hostname)"
+            echo "主机名: $HOSTNAME"
             echo "序列号: $SERIAL"
             echo "系统: $SYSTEM_INFO"
             echo "内核: $(uname -r)"
@@ -181,6 +277,7 @@ execute_script() {
             ;;
         "update_system")
             print_color "开始系统更新..." "$YELLOW"
+            log "开始系统更新"
             if command -v apt-get &> /dev/null; then
                 apt-get update && apt-get upgrade -y
             elif command -v yum &> /dev/null; then
@@ -189,49 +286,40 @@ execute_script() {
                 dnf update -y
             elif command -v apk &> /dev/null; then
                 apk update && apk upgrade
-            else
-                echo "未找到包管理器"
             fi
             echo "系统更新完成!"
             ;;
-        "network_info")
-            print_color "网络信息..." "$GREEN"
-            ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "无法获取网络信息"
-            ;;
-        "process_info")
-            print_color "进程信息..." "$GREEN"
-            ps aux 2>/dev/null | head -20
-            ;;
         *)
-            print_color "未知命令: $script_name" "$RED"
-            echo "可用命令: shutdown, reboot, restart_services, system_info, update_system, network_info, process_info"
+            log "未知脚本: $script_name"
+            echo "未知脚本: $script_name"
             ;;
     esac
 }
 
-# 启动命令监听
+# 命令监听器
 start_listener() {
-    print_color "启动命令监听器在端口 $CLIENT_PORT..." "$GREEN"
-    print_color "客户端信息: $SERIAL - $HOSTNAME - $SYSTEM_INFO" "$BLUE"
-    print_color "使用通信方法: $(check_tool nc netcat || echo "bash TCP")" "$BLUE"
+    local nc_cmd=$(command -v nc || command -v netcat)
+    
+    if [[ -z "$nc_cmd" ]]; then
+        log "错误: netcat 未安装，无法启动监听器"
+        return 1
+    fi
     
     while true; do
         log "等待命令..."
-        command_data=$(listen_port "$CLIENT_PORT")
+        command_data=$($nc_cmd -l -p "$CLIENT_PORT" -w 300 2>/dev/null)
         
         if [[ -n "$command_data" ]]; then
             log "收到命令: $command_data"
             
             if echo "$command_data" | grep -q "^COMMAND:"; then
                 cmd=$(echo "$command_data" | cut -d: -f2-)
-                echo "执行命令: $cmd"
                 execute_command "$cmd"
             elif echo "$command_data" | grep -q "^SCRIPT:"; then
                 script_name=$(echo "$command_data" | cut -d: -f2-)
-                echo "执行脚本: $script_name"
                 execute_script "$script_name"
             else
-                echo "未知命令格式: $command_data"
+                log "未知命令格式: $command_data"
             fi
         fi
         
@@ -239,53 +327,148 @@ start_listener() {
     done
 }
 
-# 清理函数
-cleanup() {
-    print_color "客户端停止" "$RED"
-    exit 0
+# 主循环
+main_loop() {
+    log "=== 控制器客户端启动 ==="
+    log "序列号: $SERIAL, 主机名: $HOSTNAME, 系统: $SYSTEM_INFO"
+    
+    # 启动心跳包循环
+    while true; do
+        send_heartbeat
+        sleep "$HEARTBEAT_INTERVAL"
+    done &
+    
+    local heartbeat_pid=$!
+    
+    # 启动命令监听器
+    start_listener &
+    local listener_pid=$!
+    
+    # 等待进程结束
+    wait $heartbeat_pid $listener_pid
+    kill $heartbeat_pid $listener_pid 2>/dev/null
+    
+    return 0
 }
 
-# 设置信号处理
-trap cleanup INT TERM
+# 安装系统服务
+install_service() {
+    check_root
+    
+    print_color "安装系统服务..." "$GREEN"
+    
+    # 创建服务文件
+    local service_file="/etc/systemd/system/controller-client.service"
+    
+    cat > "$service_file" << EOF
+[Unit]
+Description=Controller Client
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+ExecStart=$(realpath "$0") start
+ExecStop=$(realpath "$0") stop
+ExecReload=$(realpath "$0") restart
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 重载systemd
+    systemctl daemon-reload
+    
+    # 启用开机自启
+    systemctl enable controller-client
+    
+    print_color "系统服务安装完成!" "$GREEN"
+    print_color "使用方法:" "$BLUE"
+    echo "  systemctl start controller-client    # 启动服务"
+    echo "  systemctl stop controller-client     # 停止服务"
+    echo "  systemctl status controller-client   # 查看状态"
+    echo "  journalctl -u controller-client -f   # 查看日志"
+}
+
+# 卸载系统服务
+uninstall_service() {
+    check_root
+    
+    print_color "卸载系统服务..." "$YELLOW"
+    
+    systemctl stop controller-client 2>/dev/null
+    systemctl disable controller-client 2>/dev/null
+    rm -f /etc/systemd/system/controller-client.service
+    systemctl daemon-reload
+    
+    print_color "系统服务已卸载" "$GREEN"
+}
+
+# 显示使用帮助
+show_help() {
+    print_color "控制器客户端管理脚本" "$BLUE"
+    echo
+    echo "用法: $0 {start|stop|restart|status|log|install|uninstall|help}"
+    echo
+    echo "命令:"
+    echo "  start      - 启动客户端"
+    echo "  stop       - 停止客户端"
+    echo "  restart    - 重启客户端"
+    echo "  status     - 查看状态"
+    echo "  log        - 查看日志"
+    echo "  install    - 安装系统服务(开机自启)"
+    echo "  uninstall  - 卸载系统服务"
+    echo "  help       - 显示帮助"
+    echo
+    echo "示例:"
+    echo "  $0 start          # 启动客户端"
+    echo "  $0 install        # 安装系统服务"
+    echo "  systemctl status controller-client  # 查看服务状态"
+}
 
 # 主函数
 main() {
-    print_color "=== 无依赖控制器客户端 ===" "$BLUE"
-    print_color "序列号: $SERIAL" "$GREEN"
-    print_color "主机名: $HOSTNAME" "$GREEN"
-    print_color "系统: $SYSTEM_INFO" "$GREEN"
-    print_color "服务器: $SERVER_IP:$SERVER_PORT" "$BLUE"
+    init_config
     
-    # 显示可用工具
-    print_color "检测到以下通信工具:" "$YELLOW"
-    for tool in nc netcat telnet bash; do
-        if command -v "$tool" &> /dev/null; then
-            echo "  ✓ $tool"
-        fi
-    done
-    
-    # 启动心跳包发送（后台进程）
-    print_color "启动心跳服务..." "$GREEN"
-    send_heartbeat &
-    
-    # 启动命令监听
-    print_color "启动命令监听..." "$GREEN"
-    start_listener
+    case "${1:-}" in
+        "start")
+            check_root
+            start_client
+            ;;
+        "stop")
+            check_root
+            stop_client
+            ;;
+        "restart")
+            check_root
+            restart_client
+            ;;
+        "status")
+            status_client
+            ;;
+        "log")
+            tail_log
+            ;;
+        "install")
+            install_dependencies
+            install_service
+            ;;
+        "uninstall")
+            uninstall_service
+            ;;
+        "help")
+            show_help
+            ;;
+        *)
+            show_help
+            ;;
+    esac
 }
 
 # 脚本入口
-case "${1:-}" in
-    "execute_script")
-        execute_script "$2"
-        ;;
-    "heartbeat")
-        send_heartbeat
-        ;;
-    "test")
-        echo "测试连接到服务器..."
-        send_data "TEST|$SERIAL" "$SERVER_PORT"
-        ;;
-    *)
-        main
-        ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
