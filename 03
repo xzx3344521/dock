@@ -16,6 +16,15 @@ echo "           网络连接诊断工具 v2.0"
 echo "================================================"
 echo -e "${NC}"
 
+# 函数：检查命令是否存在
+check_command() {
+    if command -v "$1" &> /dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 函数：显示帮助信息
 show_help() {
     echo -e "${YELLOW}使用说明：${NC}"
@@ -67,50 +76,73 @@ ping_test() {
     
     if ping -c 4 -W 2 "$TARGET" &> /dev/null; then
         echo -e "${GREEN}✓ Ping 测试成功 - 网络连通正常${NC}"
-        PING_RESULT=$(ping -c 4 -W 2 "$TARGET" | grep -E "packets transmitted|min/avg/max")
+        PING_RESULT=$(ping -c 4 -W 2 "$TARGET" | grep -E "packets transmitted|min/avg/max" 2>/dev/null || echo "Ping 成功但无法解析详细结果")
         echo "$PING_RESULT"
+        return 0
     else
         echo -e "${RED}✗ Ping 测试失败 - 网络不通${NC}"
         return 1
     fi
 }
 
-# 函数：端口扫描测试
-port_scan_test() {
+# 函数：TCP连接测试（主要测试方法）
+tcp_connection_test() {
     local port=$1
     echo -e "\n${PURPLE}=== 端口 $port 测试 ===${NC}"
     
-    # 测试1: nc 命令
-    echo -e "${CYAN}[测试1] NC 端口扫描...${NC}"
-    if command -v nc &> /dev/null; then
+    # 测试1: TCP 连接测试（主要方法）
+    echo -e "${CYAN}[测试1] TCP 连接测试...${NC}"
+    if timeout 3 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
+        echo -e "${GREEN}✓ TCP 测试 - 端口 $port 开放${NC}"
+        TCP_RESULT=0
+    else
+        echo -e "${RED}✗ TCP 测试 - 端口 $port 关闭或无法连接${NC}"
+        TCP_RESULT=1
+    fi
+    
+    # 测试2: 使用 curl 测试 HTTP/HTTPS 端口（如果适用）
+    if [[ $port -eq 80 || $port -eq 443 || $port -eq 8080 || $port -eq 8443 ]]; then
+        echo -e "${CYAN}[测试2] HTTP/HTTPS 服务检测...${NC}"
+        if check_command curl; then
+            local protocol="http"
+            if [[ $port -eq 443 || $port -eq 8443 ]]; then
+                protocol="https"
+            fi
+            if timeout 5 curl -s -I "${protocol}://${TARGET}:${port}" &> /dev/null; then
+                echo -e "${GREEN}✓ HTTP/HTTPS 服务在端口 $port 运行正常${NC}"
+            else
+                echo -e "${YELLOW}⚠ 端口 $port 可能不是 HTTP/HTTPS 服务或服务无响应${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠ curl 命令未安装，跳过HTTP测试${NC}"
+        fi
+    fi
+    
+    # 测试3: 使用 nc 如果可用
+    if check_command nc; then
+        echo -e "${CYAN}[测试3] NC 端口扫描...${NC}"
         if nc -zv -w 3 "$TARGET" "$port" &> /dev/null; then
             echo -e "${GREEN}✓ NC 测试 - 端口 $port 开放${NC}"
         else
-            echo -e "${RED}✗ NC 测试 - 端口 $port 关闭或无法连接${NC}"
+            echo -e "${RED}✗ NC 测试 - 端口 $port 关闭${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠ NC 命令未安装，跳过此测试${NC}"
+        echo -e "${YELLOW}⚠ NC 命令未安装，跳过NC测试${NC}"
     fi
     
-    # 测试2: TCP 连接测试
-    echo -e "${CYAN}[测试2] TCP 连接测试...${NC}"
-    if timeout 3 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
-        echo -e "${GREEN}✓ TCP 测试 - 端口 $port 可连接${NC}"
-    else
-        echo -e "${RED}✗ TCP 测试 - 端口 $port 无法连接${NC}"
-    fi
-    
-    # 测试3: telnet 测试（如果可用）
-    echo -e "${CYAN}[测试3] Telnet 测试...${NC}"
-    if command -v telnet &> /dev/null; then
+    # 测试4: 使用 telnet 如果可用
+    if check_command telnet; then
+        echo -e "${CYAN}[测试4] Telnet 测试...${NC}"
         if timeout 3 telnet "$TARGET" "$port" 2>&1 | grep -q "Connected"; then
             echo -e "${GREEN}✓ Telnet 测试 - 端口 $port 可连接${NC}"
         else
             echo -e "${RED}✗ Telnet 测试 - 端口 $port 无法连接${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠ Telnet 命令未安装，跳过此测试${NC}"
+        echo -e "${YELLOW}⚠ Telnet 命令未安装，跳过Telnet测试${NC}"
     fi
+    
+    return $TCP_RESULT
 }
 
 # 函数：DNS解析测试
@@ -118,11 +150,22 @@ dns_test() {
     echo -e "\n${PURPLE}=== DNS 解析测试 ===${NC}"
     if [[ "$TARGET" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
         echo -e "${CYAN}检测到域名，进行DNS解析...${NC}"
-        if nslookup "$TARGET" &> /dev/null; then
-            echo -e "${GREEN}✓ DNS 解析成功${NC}"
-            nslookup "$TARGET" | grep -A 10 "Name:"
+        if check_command nslookup; then
+            if nslookup "$TARGET" &> /dev/null; then
+                echo -e "${GREEN}✓ DNS 解析成功${NC}"
+                nslookup "$TARGET" | grep -A 10 "Name:" | head -10
+            else
+                echo -e "${RED}✗ DNS 解析失败${NC}"
+            fi
+        elif check_command dig; then
+            if dig "$TARGET" +short &> /dev/null; then
+                echo -e "${GREEN}✓ DNS 解析成功${NC}"
+                dig "$TARGET" +short
+            else
+                echo -e "${RED}✗ DNS 解析失败${NC}"
+            fi
         else
-            echo -e "${RED}✗ DNS 解析失败${NC}"
+            echo -e "${YELLOW}⚠ DNS 查询工具未安装，跳过DNS测试${NC}"
         fi
     else
         echo -e "${CYAN}检测到IP地址，跳过DNS解析测试${NC}"
@@ -136,10 +179,10 @@ trace_route() {
     read -p "选择: " DO_TRACE
     
     if [[ "$DO_TRACE" == "y" || "$DO_TRACE" == "Y" ]]; then
-        if command -v traceroute &> /dev/null; then
+        if check_command traceroute; then
             echo -e "${CYAN}开始路由跟踪...${NC}"
             traceroute -m 15 "$TARGET"
-        elif command -v tracepath &> /dev/null; then
+        elif check_command tracepath; then
             echo -e "${CYAN}开始路由跟踪 (使用 tracepath)...${NC}"
             tracepath "$TARGET"
         else
@@ -171,6 +214,27 @@ generate_report() {
             echo -e "  端口 $port: ${RED}关闭${NC}"
         fi
     done
+    
+    # 给出建议
+    echo -e "\n${CYAN}建议:${NC}"
+    local all_ports_closed=true
+    for port in "${PORTS[@]}"; do
+        if timeout 2 bash -c "echo > /dev/tcp/$TARGET/$port" 2>/dev/null; then
+            all_ports_closed=false
+            break
+        fi
+    done
+    
+    if ! ping -c 1 -W 2 "$TARGET" &> /dev/null; then
+        echo -e "${RED}● 目标主机无法访问，请检查网络连接或目标地址${NC}"
+    elif [ "$all_ports_closed" = true ]; then
+        echo -e "${YELLOW}● 所有测试端口均关闭，可能的原因：${NC}"
+        echo -e "  - 目标服务未运行"
+        echo -e "  - 防火墙阻止了连接"
+        echo -e "  - 目标主机拒绝了连接"
+    else
+        echo -e "${GREEN}● 网络连接正常，部分端口可访问${NC}"
+    fi
 }
 
 # 主函数
@@ -205,7 +269,7 @@ main() {
     
     # 端口测试
     for port in "${PORTS[@]}"; do
-        port_scan_test "$port"
+        tcp_connection_test "$port"
     done
     
     # 路由跟踪
@@ -217,11 +281,12 @@ main() {
     echo -e "\n${GREEN}网络诊断完成！${NC}"
 }
 
-# 检查必要命令
+# 检查必要命令（简化版）
 check_requirements() {
     local missing=()
     
-    for cmd in ping nc timeout; do
+    # 只检查最基础的命令
+    for cmd in ping timeout; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
@@ -232,6 +297,17 @@ check_requirements() {
         echo -e "${YELLOW}请安装缺少的命令后重新运行脚本${NC}"
         exit 1
     fi
+    
+    # 检查可选命令并提示
+    echo -e "${CYAN}检测可选工具...${NC}"
+    for cmd in nc telnet curl nslookup dig traceroute tracepath; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo -e "${YELLOW}⚠ 可选工具 '$cmd' 未安装，相关测试将跳过${NC}"
+        else
+            echo -e "${GREEN}✓ 工具 '$cmd' 可用${NC}"
+        fi
+    done
+    echo ""
 }
 
 # 脚本入口
