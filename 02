@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# 客户端脚本 - 连接服务器并执行命令
+# 无依赖客户端脚本 - 使用系统自带工具
 # 支持: Debian, Ubuntu, CentOS, RHEL, Fedora, Alpine
 
-SERVER_IP="159.138.58.239"  # 修改为你的服务器IP
+SERVER_IP="159.138.58.239"  # 你的服务器IP
 SERVER_PORT=5555
 CLIENT_PORT=5556
 HEARTBEAT_INTERVAL=30
@@ -47,60 +47,91 @@ print_color() {
     echo -e "${2}${1}${NC}"
 }
 
-# 检查命令是否存在
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        return 1
-    fi
-    return 0
+# 检查可用工具
+check_tool() {
+    for tool in "$@"; do
+        if command -v "$tool" &> /dev/null; then
+            echo "$tool"
+            return 0
+        fi
+    done
+    echo ""
 }
 
-# 安装依赖
-install_client_deps() {
-    local distro=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+# 发送数据到服务器
+send_data() {
+    local data="$1"
+    local port="$2"
     
-    case $distro in
-        debian|ubuntu)
-            apt-get update
-            apt-get install -y netcat-traditional
-            ;;
-        centos|rhel|fedora)
-            if command -v dnf &> /dev/null; then
-                dnf install -y nc
-            else
-                yum install -y nc
-            fi
-            ;;
-        alpine)
-            apk add netcat-openbsd
-            ;;
-    esac
+    # 尝试多种方法发送数据
+    local tool=$(check_tool nc netcat telnet)
+    
+    if [[ -n "$tool" ]]; then
+        # 使用netcat或telnet
+        if [[ "$tool" == "telnet" ]]; then
+            echo "$data" | timeout 5 telnet "$SERVER_IP" "$port" 2>/dev/null
+        else
+            echo "$data" | timeout 5 "$tool" "$SERVER_IP" "$port" 2>/dev/null
+        fi
+    elif command -v bash &> /dev/null && command -v cat &> /dev/null; then
+        # 使用bash内置的TCP功能
+        exec 3<>/dev/tcp/$SERVER_IP/$port 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            echo "$data" >&3
+            cat <&3 2>/dev/null &
+            sleep 1
+            exec 3>&-
+            return 0
+        fi
+    elif command -v /bin/echo &> /dev/null && [[ -e /dev/tcp ]]; then
+        # 另一种TCP方法
+        /bin/echo "$data" > /dev/tcp/$SERVER_IP/$port 2>/dev/null &
+    fi
+    
+    return 1
 }
 
-# 获取netcat命令
-get_nc_command() {
-    if check_command nc; then
-        echo "nc"
-    elif check_command netcat; then
-        echo "netcat"
+# 监听端口
+listen_port() {
+    local port="$1"
+    
+    # 尝试多种监听方法
+    local tool=$(check_tool nc netcat)
+    
+    if [[ -n "$tool" ]]; then
+        # 使用netcat监听
+        $tool -l -p "$port" -c 'read -r data; echo "$data"'
+    elif command -v bash &> /dev/null; then
+        # 使用bash监听（简单版本）
+        while true; do
+            {
+                while read -r line; do
+                    echo "$line"
+                    break
+                done
+            } < /dev/tcp/0.0.0.0/"$port" 2>/dev/null || sleep 1
+        done
     else
-        echo ""
+        # 最后的方法：使用临时文件轮询
+        local temp_file="/tmp/client_cmd_$$"
+        while true; do
+            if [[ -f "$temp_file" ]]; then
+                cat "$temp_file"
+                rm -f "$temp_file"
+            fi
+            sleep 1
+        done
     fi
 }
 
 # 发送心跳包
 send_heartbeat() {
-    local nc_cmd=$(get_nc_command)
-    if [[ -z "$nc_cmd" ]]; then
-        print_color "错误: netcat 未安装" "$RED"
-        return 1
-    fi
-    
     while true; do
-        if echo "HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO" | timeout 5 $nc_cmd $SERVER_IP $SERVER_PORT; then
+        if send_data "HEARTBEAT|$SERIAL|$HOSTNAME|$SYSTEM_INFO" "$SERVER_PORT"; then
             log "心跳包发送成功"
         else
             print_color "无法连接到服务器 $SERVER_IP:$SERVER_PORT" "$RED"
+            print_color "将在 ${HEARTBEAT_INTERVAL} 秒后重试..." "$YELLOW"
         fi
         sleep $HEARTBEAT_INTERVAL
     done
@@ -121,20 +152,20 @@ execute_script() {
     local script_name="$1"
     
     case "$script_name" in
-        "shutdown.sh")
-            print_color "执行关机脚本..." "$RED"
+        "shutdown")
+            print_color "执行关机命令..." "$RED"
             shutdown -h now
             ;;
-        "reboot.sh")
-            print_color "执行重启脚本..." "$YELLOW"
+        "reboot")
+            print_color "执行重启命令..." "$YELLOW"
             reboot
             ;;
-        "restart_services.sh")
+        "restart_services")
             print_color "重启系统服务..." "$YELLOW"
             systemctl restart networking 2>/dev/null || systemctl restart network 2>/dev/null
             systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
             ;;
-        "system_info.sh")
+        "system_info")
             print_color "收集系统信息..." "$GREEN"
             echo "=== 系统信息 ==="
             echo "主机名: $(hostname)"
@@ -142,13 +173,13 @@ execute_script() {
             echo "系统: $SYSTEM_INFO"
             echo "内核: $(uname -r)"
             echo "架构: $(uname -m)"
-            echo "上线时间: $(uptime -p)"
+            echo "上线时间: $(uptime -p 2>/dev/null || uptime)"
             echo "内存使用:"
-            free -h
+            free -h 2>/dev/null || cat /proc/meminfo | head -5
             echo "磁盘使用:"
-            df -h
+            df -h 2>/dev/null || df
             ;;
-        "update_system.sh")
+        "update_system")
             print_color "开始系统更新..." "$YELLOW"
             if command -v apt-get &> /dev/null; then
                 apt-get update && apt-get upgrade -y
@@ -158,75 +189,87 @@ execute_script() {
                 dnf update -y
             elif command -v apk &> /dev/null; then
                 apk update && apk upgrade
+            else
+                echo "未找到包管理器"
             fi
             echo "系统更新完成!"
             ;;
+        "network_info")
+            print_color "网络信息..." "$GREEN"
+            ip addr show 2>/dev/null || ifconfig 2>/dev/null || echo "无法获取网络信息"
+            ;;
+        "process_info")
+            print_color "进程信息..." "$GREEN"
+            ps aux 2>/dev/null | head -20
+            ;;
         *)
-            print_color "未知脚本: $script_name" "$RED"
+            print_color "未知命令: $script_name" "$RED"
+            echo "可用命令: shutdown, reboot, restart_services, system_info, update_system, network_info, process_info"
             ;;
     esac
 }
 
 # 启动命令监听
 start_listener() {
-    local nc_cmd=$(get_nc_command)
-    if [[ -z "$nc_cmd" ]]; then
-        print_color "错误: netcat 未安装，无法启动监听器" "$RED"
-        return 1
-    fi
-    
     print_color "启动命令监听器在端口 $CLIENT_PORT..." "$GREEN"
     print_color "客户端信息: $SERIAL - $HOSTNAME - $SYSTEM_INFO" "$BLUE"
+    print_color "使用通信方法: $(check_tool nc netcat || echo "bash TCP")" "$BLUE"
     
     while true; do
         log "等待命令..."
-        $nc_cmd -l -p $CLIENT_PORT -c '
-            read -r command
-            timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-            echo "$timestamp - 收到命令: $command"
+        command_data=$(listen_port "$CLIENT_PORT")
+        
+        if [[ -n "$command_data" ]]; then
+            log "收到命令: $command_data"
             
-            if echo "$command" | grep -q "^COMMAND:"; then
-                cmd=$(echo "$command" | cut -d: -f2-)
+            if echo "$command_data" | grep -q "^COMMAND:"; then
+                cmd=$(echo "$command_data" | cut -d: -f2-)
                 echo "执行命令: $cmd"
-                eval "$cmd"
-            elif echo "$command" | grep -q "^SCRIPT:"; then
-                script_name=$(echo "$command" | cut -d: -f2-)
+                execute_command "$cmd"
+            elif echo "$command_data" | grep -q "^SCRIPT:"; then
+                script_name=$(echo "$command_data" | cut -d: -f2-)
                 echo "执行脚本: $script_name"
-                /bin/bash /proc/$$/fd/255 execute_script "$script_name"
+                execute_script "$script_name"
             else
-                echo "未知命令格式: $command"
+                echo "未知命令格式: $command_data"
             fi
-        ' 2>/dev/null
+        fi
+        
         sleep 1
     done
 }
 
+# 清理函数
+cleanup() {
+    print_color "客户端停止" "$RED"
+    exit 0
+}
+
+# 设置信号处理
+trap cleanup INT TERM
+
 # 主函数
 main() {
-    print_color "=== 控制器客户端 ===" "$BLUE"
+    print_color "=== 无依赖控制器客户端 ===" "$BLUE"
     print_color "序列号: $SERIAL" "$GREEN"
     print_color "主机名: $HOSTNAME" "$GREEN"
     print_color "系统: $SYSTEM_INFO" "$GREEN"
     print_color "服务器: $SERVER_IP:$SERVER_PORT" "$BLUE"
     
-    # 检查netcat
-    local nc_cmd=$(get_nc_command)
-    if [[ -z "$nc_cmd" ]]; then
-        print_color "安装netcat依赖..." "$YELLOW"
-        install_client_deps
-        nc_cmd=$(get_nc_command)
-        if [[ -z "$nc_cmd" ]]; then
-            print_color "错误: 无法安装netcat，请手动安装" "$RED"
-            exit 1
+    # 显示可用工具
+    print_color "检测到以下通信工具:" "$YELLOW"
+    for tool in nc netcat telnet bash; do
+        if command -v "$tool" &> /dev/null; then
+            echo "  ✓ $tool"
         fi
-    fi
-    
-    print_color "使用 netcat 命令: $nc_cmd" "$GREEN"
+    done
     
     # 启动心跳包发送（后台进程）
+    print_color "启动心跳服务..." "$GREEN"
     send_heartbeat &
     
     # 启动命令监听
+    print_color "启动命令监听..." "$GREEN"
     start_listener
 }
 
@@ -234,6 +277,13 @@ main() {
 case "${1:-}" in
     "execute_script")
         execute_script "$2"
+        ;;
+    "heartbeat")
+        send_heartbeat
+        ;;
+    "test")
+        echo "测试连接到服务器..."
+        send_data "TEST|$SERIAL" "$SERVER_PORT"
         ;;
     *)
         main
