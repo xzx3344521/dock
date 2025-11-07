@@ -1,279 +1,148 @@
 #!/bin/bash
 
-# Syncthing 智能管理脚本 - 安装/卸载二合一
-set -e
+# 网络环境检测脚本
+# 功能：检测公网 IPv4 和 IPv6 地址
+# 作者：AI 助手
 
-# 配置变量
-SYNCTHING_VERSION="v1.27.7"
-INSTALL_DIR="/opt/syncthing"
-CONFIG_DIR="$HOME/.config/syncthing"
-SERVICE_FILE="/etc/systemd/system/syncthing.service"
-BIN_PATH="/usr/local/bin/syncthing"
+# 设置严格模式
+set -euo pipefail
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# 输出函数
-log_info() { echo -e "${BLUE}ℹ️  $1${NC}"; }
-log_success() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warning() { echo -e "${YELLOW}⚠️  $1${NC}"; }
-log_error() { echo -e "${RED}❌ $1${NC}"; }
-
-# 显示使用说明
-show_usage() {
-    echo -e "${BLUE}"
-    echo "================================================"
-    echo "          Syncthing 智能管理脚本"
-    echo "================================================"
-    echo -e "${NC}"
-    echo "使用方法: $0 [command]"
-    echo ""
-    echo "命令:"
-    echo "  install    - 安装 Syncthing"
-    echo "  uninstall  - 卸载 Syncthing" 
-    echo "  reinstall  - 重新安装 Syncthing"
-    echo "  status     - 查看服务状态"
-    echo "  restart    - 重启服务"
-    echo "  不指定命令 - 自动检测并安装或显示状态"
-    echo ""
-    echo "特性:"
-    echo "  ✅ 直接IP访问 (0.0.0.0:8384)"
-    echo "  ✅ 系统服务守护"
-    echo "  ✅ 完整文件权限"
-    echo "  ✅ 一键安装卸载"
-    echo -e "${BLUE}================================================"
-    echo -e "${NC}"
+# 日志函数
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
 }
 
-# 检查是否已安装
-check_installed() {
-    if [ -f "$BIN_PATH" ] || [ -f "$INSTALL_DIR/syncthing" ] || systemctl is-enabled syncthing 2>/dev/null | grep -q enabled; then
-        return 0  # 已安装
-    else
-        return 1  # 未安装
-    fi
+# 错误处理函数
+error() {
+    log "❌ $*" >&2
+    exit 1
 }
 
-# 获取本机IP
-get_ip() {
-    hostname -I | awk '{print $1}' 2>/dev/null || echo "127.0.0.1"
+# 警告处理函数
+warn() {
+    log "⚠️  $*" >&2
 }
 
-# 显示状态
-show_status() {
-    if check_installed; then
-        log_success "Syncthing 已安装"
-        echo ""
-        echo "📁 安装目录: $INSTALL_DIR"
-        echo "⚙️  配置目录: $CONFIG_DIR"
-        echo "🔧 二进制文件: $BIN_PATH"
-        echo ""
-        
-        # 检查服务状态
-        if systemctl is-active --quiet syncthing; then
-            log_success "服务状态: 运行中"
-            echo "🌐 访问地址: http://$(get_ip):8384"
-        else
-            log_warning "服务状态: 已停止"
-        fi
-        
-        # 检查端口监听
-        if netstat -tuln 2>/dev/null | grep -q ":8384 "; then
-            log_success "端口 8384: 正在监听"
-        else
-            log_warning "端口 8384: 未监听"
-        fi
-    else
-        log_warning "Syncthing 未安装"
-    fi
+# 信息输出函数
+info() {
+    log "📝 $*"
 }
 
-# 安装函数
-install_syncthing() {
-    log_info "开始安装 Syncthing..."
+# 检查命令是否存在
+has_cmd() {
+    command -v "$1" &>/dev/null
+}
+
+# 获取公网 IPv4 地址
+get_public_ipv4() {
+    local timeout=10
+    local url="http://ipv4.icanhazip.com"
     
-    # 检查是否已安装
-    if check_installed; then
-        log_warning "Syncthing 已安装，如需重新安装请使用: $0 reinstall"
-        show_status
-        exit 1
+    if ! has_cmd curl; then
+        error "curl 命令未找到，请安装 curl"
     fi
-
-    # 创建安装目录
-    log_info "创建安装目录..."
-    sudo mkdir -p $INSTALL_DIR
-    sudo chown $USER:$USER $INSTALL_DIR
-
-    # 下载并安装
-    log_info "下载 Syncthing $SYNCTHING_VERSION..."
-    cd /tmp
-    wget -q --show-progress https://github.com/syncthing/syncthing/releases/download/$SYNCTHING_VERSION/syncthing-linux-amd64-$SYNCTHING_VERSION.tar.gz
-
-    log_info "解压安装包..."
-    tar xzf syncthing-linux-amd64-$SYNCTHING_VERSION.tar.gz
-    cd syncthing-linux-amd64-$SYNCTHING_VERSION
-
-    # 安装二进制文件
-    log_info "安装二进制文件..."
-    sudo cp syncthing $INSTALL_DIR/
-    sudo chmod +x $INSTALL_DIR/syncthing
-    sudo ln -sf $INSTALL_DIR/syncthing $BIN_PATH
-
-    # 创建配置目录
-    log_info "创建配置目录..."
-    mkdir -p $CONFIG_DIR
-
-    # 创建 systemd 服务文件
-    log_info "创建系统服务..."
-    sudo tee $SERVICE_FILE > /dev/null <<EOF
-[Unit]
-Description=Syncthing - Open Source Continuous File Synchronization
-Documentation=man:syncthing(1)
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-ExecStart=$BIN_PATH -no-browser -gui-address="0.0.0.0:8384" -no-restart
-Restart=on-failure
-RestartSec=5
-SuccessExitStatus=3 4
-RestartForceExitStatus=3 4
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 重新加载 systemd
-    sudo systemctl daemon-reload
-
-    # 启动服务
-    log_info "启动 Syncthing 服务..."
-    sudo systemctl enable syncthing
-    sudo systemctl start syncthing
-
-    # 等待服务启动
-    log_info "等待服务启动..."
-    for i in {1..10}; do
-        if systemctl is-active --quiet syncthing; then
-            break
-        fi
-        sleep 2
-    done
-
-    # 检查服务状态
-    if systemctl is-active --quiet syncthing; then
-        log_success "Syncthing 安装成功！"
-        log_success "访问地址: http://$(get_ip):8384"
-        log_success "配置目录: $CONFIG_DIR"
-    else
-        log_error "服务启动失败，检查日志: journalctl -u syncthing -f"
-        exit 1
-    fi
-
-    # 清理临时文件
-    rm -rf /tmp/syncthing-linux-amd64*
-}
-
-# 卸载函数
-uninstall_syncthing() {
-    log_info "开始卸载 Syncthing..."
     
-    if ! check_installed; then
-        log_warning "Syncthing 未安装，无需卸载"
-        exit 1
-    fi
-
-    # 停止服务
-    log_info "停止服务..."
-    sudo systemctl stop syncthing 2>/dev/null || true
-    sudo systemctl disable syncthing 2>/dev/null || true
-
-    # 删除服务文件
-    log_info "删除服务文件..."
-    sudo rm -f $SERVICE_FILE
-    sudo systemctl daemon-reload
-
-    # 删除安装文件
-    log_info "删除安装文件..."
-    sudo rm -rf $INSTALL_DIR
-
-    # 删除符号链接
-    log_info "删除符号链接..."
-    sudo rm -f $BIN_PATH
-
-    # 询问是否删除配置
-    echo ""
-    read -p "❓ 是否删除配置文件和数据? [y/N]: " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        log_info "删除配置文件..."
-        rm -rf $CONFIG_DIR
-        log_success "配置已删除"
+    local response
+    response=$(curl -s -m "$timeout" "$url" 2>/dev/null) || {
+        warn "无法连接到 IPv4 服务，请检查网络设置。"
+        return 1
+    }
+    
+    # 检查返回的是否为有效的 IPv4 地址
+    if [[ $response =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo "$response"
+        return 0
     else
-        log_info "配置保留在: $CONFIG_DIR"
+        warn "请求的服务返回异常数据：$response"
+        return 1
     fi
-
-    log_success "Syncthing 卸载完成！"
 }
 
-# 重新安装函数
-reinstall_syncthing() {
-    log_info "开始重新安装 Syncthing..."
-    $0 uninstall
-    sleep 2
-    $0 install
-}
-
-# 重启服务
-restart_service() {
-    if check_installed; then
-        log_info "重启 Syncthing 服务..."
-        sudo systemctl restart syncthing
-        sleep 3
-        show_status
+# 获取公网 IPv6 地址
+get_public_ipv6() {
+    local timeout=10
+    local url="http://ipv6.icanhazip.com"
+    
+    if ! has_cmd curl; then
+        error "curl 命令未找到，请安装 curl"
+    fi
+    
+    local response
+    response=$(curl -s -m "$timeout" "$url" 2>/dev/null) || {
+        warn "无法连接到 IPv6 服务，请检查网络设置。"
+        return 1
+    }
+    
+    # 检查返回的是否为有效的 IPv6 地址（简化验证）
+    if [[ $response =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]]; then
+        echo "$response"
+        return 0
     else
-        log_error "Syncthing 未安装，请先安装"
-        exit 1
+        warn "请求的服务返回异常数据：$response"
+        return 1
     fi
 }
 
-# 主程序
-case "${1:-}" in
-    "install")
-        install_syncthing
-        ;;
-    "uninstall")
-        uninstall_syncthing
-        ;;
-    "reinstall")
-        reinstall_syncthing
-        ;;
-    "status")
-        show_status
-        ;;
-    "restart")
-        restart_service
-        ;;
-    "")
-        # 无参数时自动判断
-        if check_installed; then
-            show_status
+# 验证 IPv4 地址格式
+is_valid_ipv4() {
+    local ip="$1"
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        local IFS='.'
+        local -a octets=($ip)
+        for octet in "${octets[@]}"; do
+            if [[ $octet -gt 255 ]]; then
+                return 1
+            fi
+        done
+        return 0
+    fi
+    return 1
+}
+
+# 验证 IPv6 地址格式（简化验证）
+is_valid_ipv6() {
+    local ip="$1"
+    # 检查是否为有效的 IPv6 地址格式
+    if [[ $ip =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]] || [[ $ip =~ ^::1$ ]] || [[ $ip =~ ^::$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# 主函数
+main() {
+    info "开始检测网络环境..."
+    
+    # 检测公网 IPv4 地址
+    info "检测公网 IPv4 地址..."
+    local ipv4_result
+    if ipv4_result=$(get_public_ipv4); then
+        if is_valid_ipv4 "$ipv4_result"; then
+            info "当前拥有公网 IPv4 地址：$ipv4_result"
         else
-            log_info "未检测到 Syncthing，开始安装..."
-            install_syncthing
+            warn "获取到的 IPv4 地址无效：$ipv4_result"
         fi
-        ;;
-    "help"|"-h"|"--help")
-        show_usage
-        ;;
-    *)
-        log_error "未知命令: $1"
-        show_usage
-        exit 1
-        ;;
-esac
+    else
+        info "当前没有公网 IPv4 地址"
+    fi
+    
+    # 检测公网 IPv6 地址
+    info "检测公网 IPv6 地址..."
+    local ipv6_result
+    if ipv6_result=$(get_public_ipv6); then
+        if is_valid_ipv6 "$ipv6_result"; then
+            info "当前拥有公网 IPv6 地址：$ipv6_result"
+        else
+            warn "获取到的 IPv6 地址无效：$ipv6_result"
+        fi
+    else
+        info "当前没有公网 IPv6 地址"
+    fi
+    
+    info "网络环境检测完成。"
+}
+
+# 执行主函数
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
