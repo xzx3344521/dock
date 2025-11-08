@@ -1,9 +1,17 @@
 #!/bin/bash
 echo "Docker 测速工具安装脚本"
 
+# 基础数据目录（与RustDesk保持一致）
+BASE_DIR="/data/speedtest"
+mkdir -p $BASE_DIR
+
 # 停止并删除旧容器
 docker stop speedtest 2>/dev/null
 docker rm speedtest 2>/dev/null
+docker stop librespeed 2>/dev/null  
+docker rm librespeed 2>/dev/null
+docker stop iperf3 2>/dev/null
+docker rm iperf3 2>/dev/null
 
 echo "请选择测速工具："
 echo "1) LibreSpeed (网页测速)"
@@ -15,56 +23,78 @@ read -p "请输入选择 (1-4): " choice
 
 case $choice in
     1)
-        # LibreSpeed
-        docker run -d \
-            --name speedtest \
-            -p 8080:80 \
-            -p 8081:81 \
-            --restart unless-stopped \
-            adolfintel/speedtest
-        echo "LibreSpeed 安装完成!"
-        echo "访问地址: http://你的服务器IP:8080"
-        ;;
-    2)
-        # iPerf3 服务器
-        docker run -d \
-            --name speedtest \
-            -p 5201:5201 \
-            --restart unless-stopped \
-            networkstatic/iperf3 -s
-        echo "iPerf3 服务器安装完成!"
-        echo "测试命令: iperf3 -c 你的服务器IP -p 5201"
-        ;;
-    3)
-        # Speedtest CLI 容器版
-        docker run -it --rm \
-            --name speedtest \
-            appropriate/curl \
-            curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -
-        ;;
-    4)
-        # 安装所有
+        # LibreSpeed - 使用数据持久化
+        mkdir -p $BASE_DIR/librespeed
         docker run -d \
             --name librespeed \
             -p 8080:80 \
             -p 8081:81 \
+            -v $BASE_DIR/librespeed:/var/www/html/results \
+            --restart unless-stopped \
             adolfintel/speedtest
-            
+        echo "LibreSpeed 安装完成!"
+        echo "访问地址: http://你的服务器IP:8080"
+        echo "数据存储: $BASE_DIR/librespeed"
+        ;;
+    2)
+        # iPerf3 服务器 - 使用数据持久化
+        mkdir -p $BASE_DIR/iperf3
         docker run -d \
             --name iperf3 \
             -p 5201:5201 \
+            -v $BASE_DIR/iperf3:/logs \
+            --restart unless-stopped \
+            networkstatic/iperf3 -s
+        echo "iPerf3 服务器安装完成!"
+        echo "测试命令: iperf3 -c 你的服务器IP -p 5201"
+        echo "日志目录: $BASE_DIR/iperf3"
+        ;;
+    3)
+        # Speedtest CLI 容器版 - 临时运行，不持久化
+        docker run -it --rm \
+            --name speedtest \
+            -v $BASE_DIR/cli:/data \
+            appropriate/curl \
+            curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -
+        ;;
+    4)
+        # 安装所有 - 全部使用持久化存储
+        mkdir -p $BASE_DIR/{librespeed,iperf3,cli}
+        
+        # LibreSpeed
+        docker run -d \
+            --name librespeed \
+            -p 8080:80 \
+            -p 8081:81 \
+            -v $BASE_DIR/librespeed:/var/www/html/results \
+            --restart unless-stopped \
+            adolfintel/speedtest
+            
+        # iPerf3
+        docker run -d \
+            --name iperf3 \
+            -p 5201:5201 \
+            -v $BASE_DIR/iperf3:/logs \
+            --restart unless-stopped \
             networkstatic/iperf3 -s
             
         echo "所有测速工具安装完成!"
-        echo "LibreSpeed: http://你的服务器IP:8080"
-        echo "iPerf3 端口: 5201"
+        echo "LibreSpeed: http://你的服务器IP:8080 (数据: $BASE_DIR/librespeed)"
+        echo "iPerf3 端口: 5201 (日志: $BASE_DIR/iperf3)"
+        echo "Speedtest CLI 数据: $BASE_DIR/cli"
         ;;
     *)
         echo "无效选择"
+        exit 1
         ;;
 esac
+
+# 显示目录结构
+echo ""
+echo "数据目录结构:"
+ls -la $BASE_DIR/
 
 # 显示运行状态
 echo ""
 echo "容器状态:"
-docker ps
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
