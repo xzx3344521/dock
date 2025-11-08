@@ -1,7 +1,8 @@
 #!/bin/bash
 echo "Docker 测速工具安装脚本 - 稳定版"
 
-BASE_DIR="/opt/1panel/docker/compose/networks/speedtest"
+# 使用与RustDesk相同的目录结构
+BASE_DIR="/data/speedtest"
 mkdir -p $BASE_DIR
 
 # 停止并删除旧容器
@@ -10,7 +11,10 @@ docker rm librespeed 2>/dev/null
 
 echo "正在安装 LibreSpeed..."
 
-# 方法1: 使用更稳定的 linuxserver/librespeed 镜像
+# 创建目录结构
+mkdir -p $BASE_DIR/{config,results,logs}
+
+# 使用稳定的 linuxserver/librespeed 镜像
 docker run -d \
     --name librespeed \
     -p 8080:80 \
@@ -18,42 +22,30 @@ docker run -d \
     -e PUID=1000 \
     -e PGID=1000 \
     -e TZ=Asia/Shanghai \
-    -v $BASE_DIR/librespeed/config:/config \
+    # 按照RustDesk的挂载模式
+    -v $BASE_DIR/config:/config \
+    -v $BASE_DIR/results:/results \
+    -v $BASE_DIR/logs:/logs \
     --restart=unless-stopped \
     linuxserver/librespeed:latest
 
-sleep 5
-
-# 检查是否成功
-if [ $(docker inspect -f '{{.State.Running}}' librespeed 2>/dev/null) = "true" ]; then
-    echo "✅ LibreSpeed 安装成功!"
-else
-    echo "❌ 方法1失败，尝试方法2..."
-    docker stop librespeed 2>/dev/null
-    docker rm librespeed 2>/dev/null
-    
-    # 方法2: 使用原始镜像但简化配置
-    docker run -d \
-        --name librespeed \
-        -p 8080:80 \
-        --restart=on-failure:3 \
-        adolfintel/speedtest:latest
-fi
-
-echo ""
-echo "等待10秒检查最终状态..."
+echo "等待容器启动..."
 sleep 10
 
-# 最终状态检查
-echo "=== 最终安装状态 ==="
+# 检查安装状态
 if docker ps -f name=librespeed | grep -q librespeed; then
-    echo "✅ LibreSpeed 运行正常"
+    echo "✅ LibreSpeed 安装成功!"
     echo "📊 访问地址: http://你的服务器IP:8080"
-    echo "💾 数据目录: $BASE_DIR/librespeed"
+    echo "💾 数据目录: $BASE_DIR/"
 else
-    echo "❌ LibreSpeed 启动失败"
-    echo "查看日志: docker logs librespeed"
+    echo "❌ 安装失败，查看日志:"
+    docker logs librespeed
 fi
 
 echo ""
+echo "目录结构:"
+ls -la $BASE_DIR/
+
+echo ""
+echo "容器状态:"
 docker ps -f name=librespeed --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
