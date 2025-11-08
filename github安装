@@ -16,6 +16,13 @@ echo "📋 安装配置:"
 echo "   - 容器名称: hubproxy"
 echo "   - 映射端口: 5000"
 echo "   - 镜像: ghcr.io/sky22333/hubproxy"
+echo "   - 数据目录: /data/hubproxy"
+
+# 创建数据目录
+echo "📁 创建数据目录..."
+sudo mkdir -p /data/hubproxy
+sudo chown -R $USER:$USER /data/hubproxy
+sudo chmod -R 755 /data/hubproxy
 
 # 停止并清理旧容器
 echo "🧹 清理旧容器..."
@@ -30,6 +37,7 @@ echo "🐳 启动容器..."
 docker run -d \
   --name hubproxy \
   -p 5000:5000 \
+  -v /data/hubproxy:/app/data \
   --restart always \
   ghcr.io/sky22333/hubproxy
 
@@ -56,6 +64,7 @@ echo "========================================"
 echo "🌐 访问地址: http://$IP:5000"
 echo "🔗 本地访问: http://localhost:5000"
 echo "📌 端口: 5000"
+echo "📁 数据目录: /data/hubproxy"
 echo "🐳 容器状态: $(docker inspect -f '{{.State.Status}}' hubproxy)"
 echo ""
 echo "📋 常用命令:"
@@ -63,4 +72,5 @@ echo "   查看日志: docker logs hubproxy"
 echo "   停止服务: docker stop hubproxy"
 echo "   启动服务: docker start hubproxy"
 echo "   重启服务: docker restart hubproxy"
+echo "   查看数据: ls -la /data/hubproxy"
 echo "========================================"
