@@ -23,9 +23,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./db:/app/db
-      - ./template:/app/template
-      - ./logs:/app/logs
+      - /data/sublinkx/db:/app/db
+      - /data/sublinkx/template:/app/template
+      - /data/sublinkx/logs:/app/logs
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped
