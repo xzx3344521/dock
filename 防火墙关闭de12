@@ -1,0 +1,54 @@
+#!/bin/bash
+# 综合防火墙关闭脚本
+
+echo "=== 开始关闭系统防火墙 ==="
+
+# 检查并关闭 UFW
+if command -v ufw &> /dev/null; then
+    echo "关闭 UFW..."
+    ufw disable
+fi
+
+# 检查并停止 nftables
+if systemctl is-active --quiet nftables; then
+    echo "停止 nftables..."
+    systemctl stop nftables
+    systemctl disable nftables
+    nft flush ruleset
+fi
+
+# 检查并停止 iptables
+if systemctl is-active --quiet iptables; then
+    echo "停止 iptables..."
+    systemctl stop iptables
+    systemctl disable iptables
+fi
+
+# 清除 iptables 规则
+echo "清除 iptables 规则..."
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
+# 清除 ip6tables 规则
+ip6tables -F
+ip6tables -X
+ip6tables -t nat -F
+ip6tables -t nat -X
+ip6tables -t mangle -F
+ip6tables -t mangle -X
+ip6tables -P INPUT ACCEPT
+ip6tables -P FORWARD ACCEPT
+ip6tables -P OUTPUT ACCEPT
+
+echo "=== 防火墙关闭完成 ==="
+echo "当前防火墙状态："
+echo "UFW: $(ufw status 2>/dev/null | head -n1 || echo '未安装')"
+echo "nftables: $(systemctl is-active nftables 2>/dev/null || echo '未运行')"
+echo "iptables: $(systemctl is-active iptables 2>/dev/null || echo '未运行')"
