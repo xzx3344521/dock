@@ -1,12 +1,67 @@
-sudo systemctl stop docker docker.socket containerd 2>/dev/null;
-sudo pkill -9 -f docker 2>/dev/null;
-sudo pkill -9 -f containerd 2>/dev/null;
-sudo umount /var/lib/docker/overlay2/*/merged 2>/dev/null || true;
-sudo yum remove -y docker* containerd* runc 2>/dev/null || sudo apt-get purge -y docker* containerd* runc 2>/dev/null;
-sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker /var/run/docker.sock /var/run/containerd /etc/apparmor.d/docker /usr/bin/docker* /usr/libexec/docker /usr/lib/docker* /usr/share/docker* /opt/docker* ~/.docker;
-sudo find / -name "*docker*" -type f -delete 2>/dev/null || true;
-sudo find / -name "*containerd*" -type f -delete 2>/dev/null || true;
-sudo groupdel docker 2>/dev/null;
-sudo yum autoremove -y 2>/dev/null || sudo apt-get autoremove -y 2>/dev/null;
-sudo yum clean all 2>/dev/null || sudo apt-get clean 2>/dev/null;
-which docker >/dev/null 2>&1 && echo "❌ 仍有残留" || echo "✅ Docker已从系统中彻底清除"
+#!/bin/bash
+
+set -e
+
+echo "🚀 开始在 AlmaLinux 9.4 上安装 Docker..."
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# 检测系统
+if [ ! -f /etc/almalinux-release ]; then
+    echo -e "${RED}错误: 这个脚本只支持 AlmaLinux${NC}"
+    exit 1
+fi
+
+echo -e "${YELLOW}[1/7] 清理旧版本...${NC}"
+sudo dnf remove -y docker* podman* containerd* || true
+
+echo -e "${YELLOW}[2/7] 安装依赖...${NC}"
+sudo dnf install -y dnf-plugins-core yum-utils device-mapper-persistent-data lvm2
+
+echo -e "${YELLOW}[3/7] 添加 Docker 仓库...${NC}"
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+echo -e "${YELLOW}[4/7] 启用 CRB 仓库...${NC}"
+sudo dnf config-manager --set-enabled crb
+
+echo -e "${YELLOW}[5/7] 安装 Docker...${NC}"
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+echo -e "${YELLOW}[6/7] 配置 Docker...${NC}"
+sudo systemctl start docker
+sudo systemctl enable docker
+
+echo -e "${YELLOW}[7/7] 配置用户权限...${NC}"
+sudo usermod -aG docker $USER
+
+# 配置镜像加速器（国内用户）
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json > /dev/null <<EOF
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://registry.docker-cn.com"
+  ],
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  }
+}
+EOF
+
+sudo systemctl restart docker
+
+echo -e "${GREEN}✅ Docker 安装成功！${NC}"
+echo -e "${YELLOW}📋 版本信息:${NC}"
+docker --version
+docker-compose --version
+
+echo -e "${YELLOW}🔧 请重新登录或运行以下命令:${NC}"
+echo "  newgrp docker"
+echo -e "${YELLOW}🐳 测试命令:${NC}"
+echo "  docker run hello-world"
