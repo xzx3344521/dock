@@ -1,213 +1,345 @@
 #!/bin/bash
 
-# 多方案端口检测脚本
-# 用法: ./port_check.sh IP地址 端口号 [超时时间]
+# 一键网络检测脚本
+# 功能：自动安装依赖 + 多方案检测 + 详细报告
 
-TARGET_HOST="${1}"
-TARGET_PORT="${2}"
-TIMEOUT="${3:-5}"  # 默认超时5秒
+set -e
 
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
 
 # 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+log() {
+    echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"
 }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+success() {
+    echo -e "${GREEN}✓${NC} $1"
 }
 
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
 }
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+error() {
+    echo -e "${RED}✗${NC} $1"
 }
 
-# 检查依赖工具
-check_dependencies() {
-    local tools=("nc" "telnet" "curl" "timeout" "nmap")
-    local missing=()
+info() {
+    echo -e "${CYAN}ℹ${NC} $1"
+}
+
+# 检查系统类型
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+    else
+        OS=$(uname -s)
+    fi
+    log "检测到系统: $OS"
+}
+
+# 安装依赖工具
+install_dependencies() {
+    log "检查并安装必要的网络工具..."
     
+    local tools=("curl" "wget" "netcat" "telnet" "nmap" "traceroute")
+    local to_install=()
+    
+    # 检查缺失的工具
     for tool in "${tools[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
-            missing+=("$tool")
+            to_install+=("$tool")
         fi
     done
     
-    if [ ${#missing[@]} -gt 0 ]; then
-        log_warning "以下工具未安装: ${missing[*]}"
-        log_info "部分检测功能可能受限"
+    if [ ${#to_install[@]} -eq 0 ]; then
+        success "所有必要工具已安装"
+        return 0
     fi
-}
-
-# 方案1: 使用nc (netcat) 检测端口
-check_with_nc() {
-    log_info "方案1: 使用 netcat 检测端口..."
     
-    if command -v nc &> /dev/null; then
-        if timeout "$TIMEOUT" nc -z -w "$TIMEOUT" "$TARGET_HOST" "$TARGET_PORT" &> /dev/null; then
-            log_success "nc检测: 端口 $TARGET_PORT 可达"
-            return 0
-        else
-            log_error "nc检测: 端口 $TARGET_PORT 不可达"
-            return 1
-        fi
-    else
-        log_warning "nc 未安装，跳过此方案"
-        return 2
-    fi
-}
-
-# 方案2: 使用telnet检测端口
-check_with_telnet() {
-    log_info "方案2: 使用 telnet 检测端口..."
+    info "需要安装的工具: ${to_install[*]}"
     
-    if command -v telnet &> /dev/null; then
-        # 创建telnet命令脚本
-        local telnet_cmd="echo 'quit' | timeout $TIMEOUT telnet $TARGET_HOST $TARGET_PORT"
-        
-        if eval "$telnet_cmd" 2>&1 | grep -q "Connected\|Escape character"; then
-            log_success "telnet检测: 端口 $TARGET_PORT 可达"
-            return 0
-        else
-            log_error "telnet检测: 端口 $TARGET_PORT 不可达"
-            return 1
-        fi
-    else
-        log_warning "telnet 未安装，跳过此方案"
-        return 2
-    fi
-}
-
-# 方案3: 使用curl检测HTTP/HTTPS端口
-check_with_curl() {
-    log_info "方案3: 使用 curl 检测HTTP服务..."
-    
-    if command -v curl &> /dev/null; then
-        local protocols=("http" "https")
-        
-        for proto in "${protocols[@]}"; do
-            log_info "尝试 $proto 协议..."
-            if timeout "$TIMEOUT" curl -s -I "${proto}://${TARGET_HOST}:${TARGET_PORT}/" &> /dev/null; then
-                log_success "curl检测: $proto 服务在端口 $TARGET_PORT 可达"
-                return 0
+    case $OS in
+        ubuntu|debian)
+            apt update
+            apt install -y "${to_install[@]}"
+            ;;
+        centos|rhel|fedora)
+            if command -v dnf &> /dev/null; then
+                dnf install -y "${to_install[@]}"
+            else
+                yum install -y "${to_install[@]}"
             fi
-        done
-        
-        log_error "curl检测: HTTP/HTTPS服务在端口 $TARGET_PORT 不可达"
-        return 1
-    else
-        log_warning "curl 未安装，跳过此方案"
-        return 2
-    fi
-}
-
-# 方案4: 使用nmap检测端口
-check_with_nmap() {
-    log_info "方案4: 使用 nmap 检测端口..."
-    
-    if command -v nmap &> /dev/null; then
-        if timeout "$TIMEOUT" nmap -p "$TARGET_PORT" "$TARGET_HOST" 2>&1 | grep -q "$TARGET_PORT/tcp open"; then
-            log_success "nmap检测: 端口 $TARGET_PORT 开放"
-            return 0
-        else
-            log_error "nmap检测: 端口 $TARGET_PORT 关闭"
+            ;;
+        alpine)
+            apk add "${to_install[@]}"
+            ;;
+        *)
+            warning "未知系统，请手动安装以下工具: ${to_install[*]}"
             return 1
-        fi
-    else
-        log_warning "nmap 未安装，跳过此方案"
-        return 2
-    fi
+            ;;
+    esac
+    
+    success "工具安装完成"
 }
 
-# 方案5: 使用/dev/tcp检测 (bash内置)
-check_with_bash_tcp() {
-    log_info "方案5: 使用 bash /dev/tcp 检测..."
+# 基础网络检测
+basic_network_check() {
+    log "执行基础网络检测..."
     
-    if timeout "$TIMEOUT" bash -c "echo > /dev/tcp/$TARGET_HOST/$TARGET_PORT" &> /dev/null; then
-        log_success "bash /dev/tcp检测: 端口 $TARGET_PORT 可达"
-        return 0
+    # 检测DNS
+    if nslookup google.com &> /dev/null; then
+        success "DNS解析正常"
     else
-        log_error "bash /dev/tcp检测: 端口 $TARGET_PORT 不可达"
-        return 1
+        error "DNS解析失败"
     fi
-}
-
-# 方案6: 使用ping检测主机可达性
-check_ping() {
-    log_info "方案6: 检测主机网络连通性..."
     
-    if ping -c 2 -W 2 "$TARGET_HOST" &> /dev/null; then
-        log_success "ping检测: 主机 $TARGET_HOST 网络可达"
-        return 0
-    else
-        log_error "ping检测: 主机 $TARGET_HOST 网络不可达"
-        return 1
-    fi
-}
-
-# 主检测函数
-main_check() {
-    log_info "开始检测 $TARGET_HOST:$TARGET_PORT ..."
-    log_info "超时时间: $TIMEOUT 秒"
-    echo "========================================"
-    
-    # 检查依赖
-    check_dependencies
-    echo "----------------------------------------"
-    
-    local results=()
-    local methods=("check_with_nc" "check_with_telnet" "check_with_curl" "check_with_nmap" "check_with_bash_tcp")
-    
-    # 先检查主机连通性
-    if ! check_ping; then
-        log_error "主机网络不可达，可能无法连接端口"
-    fi
-    echo "----------------------------------------"
-    
-    # 执行各种检测方法
-    for method in "${methods[@]}"; do
-        if $method; then
-            results+=("$method: 成功")
+    # 检测网关
+    if ip route show default &> /dev/null; then
+        local gateway=$(ip route show default | awk '/default/ {print $3}')
+        success "默认网关: $gateway"
+        
+        # ping网关
+        if ping -c 2 -W 1 "$gateway" &> /dev/null; then
+            success "网关连通性正常"
         else
-            case $? in
-                1) results+=("$method: 失败") ;;
-                2) results+=("$method: 跳过") ;;
-            esac
+            error "网关无法连通"
         fi
-        echo "----------------------------------------"
-    done
+    fi
     
-    # 汇总结果
-    log_info "检测结果汇总:"
-    for result in "${results[@]}"; do
-        echo "  - $result"
+    # 检测外网
+    if ping -c 2 -W 3 8.8.8.8 &> /dev/null; then
+        success "外网连通性正常"
+    else
+        error "外网无法连通"
+    fi
+}
+
+# 端口检测函数
+check_port() {
+    local host=$1
+    local port=$2
+    local timeout=$3
+    
+    log "检测 $host:$port ..."
+    
+    # 方法1: nc
+    if command -v nc &> /dev/null; then
+        if timeout "$timeout" nc -z -w "$timeout" "$host" "$port" &> /dev/null; then
+            success "nc检测: 端口 $port 开放"
+            return 0
+        fi
+    fi
+    
+    # 方法2: telnet
+    if command -v telnet &> /dev/null; then
+        if echo "quit" | timeout "$timeout" telnet "$host" "$port" 2>&1 | grep -q "Connected\|Escape character"; then
+            success "telnet检测: 端口 $port 开放"
+            return 0
+        fi
+    fi
+    
+    # 方法3: /dev/tcp
+    if timeout "$timeout" bash -c "echo > /dev/tcp/$host/$port" &> /dev/null; then
+        success "bash检测: 端口 $port 开放"
+        return 0
+    fi
+    
+    # 方法4: nmap
+    if command -v nmap &> /dev/null; then
+        if nmap -p "$port" "$host" 2>&1 | grep -q "$port/tcp open"; then
+            success "nmap检测: 端口 $port 开放"
+            return 0
+        fi
+    fi
+    
+    error "所有方法检测: 端口 $port 关闭"
+    return 1
+}
+
+# HTTP服务检测
+check_http_service() {
+    local host=$1
+    local port=$2
+    
+    log "检测HTTP服务..."
+    
+    # 尝试HTTP
+    if curl -s -I --connect-timeout 5 "http://$host:$port/" &> /dev/null; then
+        success "HTTP服务正常 (http://$host:$port)"
+        return 0
+    fi
+    
+    # 尝试HTTPS
+    if curl -s -I --connect-timeout 5 "https://$host:$port/" &> /dev/null; then
+        success "HTTPS服务正常 (https://$host:$port)"
+        return 0
+    fi
+    
+    error "HTTP/HTTPS服务无法访问"
+    return 1
+}
+
+# 路由跟踪
+trace_route() {
+    local host=$1
+    
+    log "执行路由跟踪..."
+    
+    if command -v traceroute &> /dev/null; then
+        traceroute -w 1 -q 1 -m 15 "$host" | head -20
+    elif command -v tracepath &> /dev/null; then
+        tracepath "$host" | head -10
+    else
+        warning "未找到路由跟踪工具"
+    fi
+}
+
+# 批量端口扫描
+scan_common_ports() {
+    local host=$1
+    
+    log "扫描常用端口..."
+    local common_ports=(21 22 23 25 53 80 110 143 443 465 587 993 995 1433 1521 3306 3389 5432 5900 6379 27017)
+    
+    for port in "${common_ports[@]}"; do
+        if timeout 2 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+            success "端口 $port 开放"
+        fi
     done
 }
 
-# 使用说明
-usage() {
-    echo "多方案端口检测脚本"
-    echo "用法: $0 <IP地址/域名> <端口号> [超时时间]"
-    echo "示例:"
-    echo "  $0 google.com 80"
-    echo "  $0 192.168.1.1 22 10"
-    echo "  $0 example.com 443 3"
+# 显示网络信息
+show_network_info() {
+    log "系统网络信息:"
+    
+    echo "=== IP地址 ==="
+    ip addr show | grep -E "inet |inet6 " | grep -v "127.0.0.1" || true
+    
+    echo "=== 路由表 ==="
+    ip route show | head -10
+    
+    echo "=== 监听端口 ==="
+    ss -tulpn | head -20
 }
 
-# 参数检查
-if [ $# -lt 2 ]; then
-    usage
-    exit 1
-fi
+# 主函数
+main() {
+    echo -e "${PURPLE}"
+    echo "=========================================="
+    echo "          一键网络检测脚本"
+    echo "=========================================="
+    echo -e "${NC}"
+    
+    # 参数处理
+    local target_host=""
+    local target_port=""
+    
+    if [ $# -ge 1 ]; then
+        target_host=$1
+    fi
+    
+    if [ $# -ge 2 ]; then
+        target_port=$2
+    fi
+    
+    # 如果没有指定目标，使用交互式输入
+    if [ -z "$target_host" ]; then
+        info "请输入要检测的目标地址:"
+        read -r target_host
+    fi
+    
+    # 系统检测和依赖安装
+    detect_os
+    install_dependencies
+    
+    echo
+    log "开始网络检测..."
+    echo
+    
+    # 显示本地网络信息
+    show_network_info
+    echo
+    
+    # 基础网络检测
+    basic_network_check
+    echo
+    
+    # 如果指定了目标主机
+    if [ -n "$target_host" ]; then
+        # 路由跟踪
+        trace_route "$target_host"
+        echo
+        
+        # 批量端口扫描
+        scan_common_ports "$target_host"
+        echo
+        
+        # 如果指定了端口
+        if [ -n "$target_port" ]; then
+            check_port "$target_host" "$target_port" 5
+            echo
+            check_http_service "$target_host" "$target_port"
+            echo
+        fi
+        
+        # 交互式端口检测
+        info "是否进行自定义端口检测? (y/n)"
+        read -r choice
+        if [ "$choice" = "y" ] || [ "$choice" = "Y" ]; then
+            while true; do
+                info "请输入要检测的端口 (输入 'q' 退出):"
+                read -r custom_port
+                if [ "$custom_port" = "q" ]; then
+                    break
+                fi
+                if [[ "$custom_port" =~ ^[0-9]+$ ]]; then
+                    check_port "$target_host" "$custom_port" 5
+                    echo
+                else
+                    error "端口号必须是数字"
+                fi
+            done
+        fi
+    fi
+    
+    echo
+    success "网络检测完成!"
+    info "检测报告已生成，请查看上方结果"
+}
 
-# 运行主检测
-main_check
+# 脚本帮助
+show_help() {
+    echo "用法: $0 [目标地址] [端口]"
+    echo
+    echo "示例:"
+    echo "  $0                          # 交互式检测"
+    echo "  $0 google.com               # 检测指定域名"
+    echo "  $0 192.168.1.1 80           # 检测指定IP和端口"
+    echo "  $0 example.com 443          # 检测HTTPS服务"
+    echo
+    echo "功能:"
+    echo "  - 自动安装网络检测工具"
+    echo "  - 基础网络连通性检测"
+    echo "  - 端口扫描和服务检测"
+    echo "  - 路由跟踪和网络诊断"
+}
+
+# 参数处理
+case "${1:-}" in
+    -h|--help|help)
+        show_help
+        exit 0
+        ;;
+    *)
+        main "$@"
+        ;;
+esac
