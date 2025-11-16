@@ -90,5 +90,5 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/ssh)
 ```
 # sSSH密钥部署及安全加固脚本
 ```
-bash <(curl -sSLhttps://github.com/xzx3344521/dock/raw/refs/heads/main/SSH%E5%AF%86%E9%92%A5%E9%83%A8%E7%BD%B2%E5%8F%8A%E5%AE%89%E5%85%A8%E5%8A%A0%E5%9B%BA%E8%84%9A%E6%9C%AC)
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/SSH%E5%AF%86%E9%92%A5%E9%83%A8%E7%BD%B2%E5%8F%8A%E5%AE%89%E5%85%A8%E5%8A%A0%E5%9B%BA%E8%84%9A%E6%9C%AC)
 ```
