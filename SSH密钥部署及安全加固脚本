@@ -1,0 +1,260 @@
+#!/bin/bash
+
+# SSH密钥部署及安全加固脚本
+# 功能：
+# 1. 自动生成SSH密钥对（默认密码：88888888）
+# 2. 部署公钥到多台服务器
+# 3. 安全加固：禁用密码登录（仅在所有密钥部署验证成功后）
+# 4. 提供回滚机制防止锁定
+
+# 配置参数
+KEY_DIR="$HOME/.ssh"                   # 密钥存放目录
+KEY_NAME="auto_key"                    # 密钥名称
+KEY_PASSWORD="88888888"                # 固定密钥密码
+KEY_TYPE="ed25519"                     # 默认使用更安全的Ed25519算法
+SSH_PORT="22"                          # 默认SSH端口
+TEMP_BACKUP="/tmp/ssh_backup"          # 临时备份目录
+LOCKFILE="/tmp/ssh_secure.lock"        # 安全操作锁文件
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 检查并安装依赖
+install_deps() {
+    local deps=(ssh-keygen ssh sshpass expect)
+    local missing=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &>/dev/null; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${YELLOW}正在安装依赖: ${missing[*]}${NC}"
+        
+        if command -v apt-get &>/dev/null; then
+            apt-get update -qq && apt-get install -y -qq "${missing[@]}" >/dev/null || {
+                echo -e "${RED}依赖安装失败${NC}"; return 1
+            }
+        elif command -v yum &>/dev/null; then
+            yum install -y -q "${missing[@]}" >/dev/null || {
+                echo -e "${RED}依赖安装失败${NC}"; return 1
+            }
+        else
+            echo -e "${RED}不支持的包管理器，请手动安装: ${missing[*]}${NC}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# 生成SSH密钥
+generate_key() {
+    echo -e "${BLUE}正在生成${NC} ${YELLOW}${KEY_TYPE}${NC} ${BLUE}类型SSH密钥...${NC}"
+    
+    [ -d "$KEY_DIR" ] || mkdir -p "$KEY_DIR"
+    chmod 700 "$KEY_DIR"
+    
+    ssh-keygen -t "$KEY_TYPE" -C "auto-deploy-key" -N "$KEY_PASSWORD" -f "${KEY_DIR}/${KEY_NAME}" -q || {
+        echo -e "${RED}密钥生成失败${NC}"; return 1
+    }
+
+    chmod 600 "${KEY_DIR}/${KEY_NAME}"
+    chmod 644 "${KEY_DIR}/${KEY_NAME}.pub"
+    
+    echo -e "${GREEN}密钥生成成功:${NC}"
+    echo -e "私钥: ${KEY_DIR}/${KEY_NAME}"
+    echo -e "公钥: ${KEY_DIR}/${KEY_NAME}.pub"
+    return 0
+}
+
+# 测试密钥登录
+test_key_login() {
+    local server="$1"
+    local user="${2:-root}"
+    
+    echo -e "${BLUE}测试密钥登录 ${user}@${server}...${NC}"
+    
+    if ! ssh -i "${KEY_DIR}/${KEY_NAME}" -o PasswordAuthentication=no -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+        "${user}@${server}" "echo -n" >/dev/null 2>&1; then
+        echo -e "${RED}密钥登录测试失败 - ${user}@${server}${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}密钥登录测试成功 - ${user}@${server}${NC}"
+    return 0
+}
+
+# 部署公钥到服务器
+deploy_key() {
+    local server="$1"
+    local user="${2:-root}"
+    local port="${3:-22}"
+    
+    echo -e "${BLUE}正在部署到 ${user}@${server}:${port}...${NC}"
+    
+    # 备份原authorized_keys
+    sshpass -p "$KEY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+        "[ -f ~/.ssh/authorized_keys ] && cp ~/.ssh/authorized_keys ~/.ssh/authorized_keys.bak" 2>/dev/null
+    
+    # 部署新密钥
+    if ! sshpass -p "$KEY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+        "mkdir -p ~/.ssh && chmod 700 ~/.ssh && \
+         grep -q \"\$(cat ${KEY_DIR}/${KEY_NAME}.pub)\" ~/.ssh/authorized_keys 2>/dev/null || \
+         cat ${KEY_DIR}/${KEY_NAME}.pub >> ~/.ssh/authorized_keys && \
+         chmod 600 ~/.ssh/authorized_keys" 2>/dev/null; then
+        echo -e "${RED}公钥部署失败 - ${user}@${server}${NC}"
+        return 1
+    fi
+    
+    # 验证部署
+    if ! test_key_login "$server" "$user"; then
+        echo -e "${RED}部署验证失败 - ${user}@${server}${NC}"
+        # 尝试回滚
+        sshpass -p "$KEY_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+            "[ -f ~/.ssh/authorized_keys.bak ] && mv -f ~/.ssh/authorized_keys.bak ~/.ssh/authorized_keys" 2>/dev/null
+        return 1
+    fi
+    
+    echo -e "${GREEN}成功部署到 ${user}@${server}${NC}"
+    return 0
+}
+
+# 安全加固 - 禁用密码登录
+secure_server() {
+    local server="$1"
+    local user="${2:-root}"
+    local port="${3:-22}"
+    
+    # 创建锁文件防止重复操作
+    touch "$LOCKFILE"
+    echo -e "${YELLOW}正在安全加固 ${user}@${server}...${NC}"
+    
+    # 备份原sshd配置
+    ssh -i "${KEY_DIR}/${KEY_NAME}" -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+        "sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak" || {
+        echo -e "${RED}配置备份失败 - ${user}@${server}${NC}"; return 1
+    }
+    
+    # 修改配置禁用密码登录
+    ssh -i "${KEY_DIR}/${KEY_NAME}" -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+        "sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+         sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && \
+         sudo systemctl reload sshd" || {
+        echo -e "${RED}安全配置失败 - ${user}@${server}${NC}"
+        
+        # 尝试回滚
+        ssh -i "${KEY_DIR}/${KEY_NAME}" -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+            "sudo mv -f /etc/ssh/sshd_config.bak /etc/ssh/sshd_config && sudo systemctl reload sshd" 2>/dev/null
+        return 1
+    }
+    
+    # 二次验证
+    if ! test_key_login "$server" "$user"; then
+        echo -e "${RED}安全加固后验证失败 - 正在回滚${NC}"
+        ssh -i "${KEY_DIR}/${KEY_NAME}" -o StrictHostKeyChecking=no -p "$port" "${user}@${server}" \
+            "sudo mv -f /etc/ssh/sshd_config.bak /etc/ssh/sshd_config && sudo systemctl reload sshd" 2>/dev/null
+        return 1
+    fi
+    
+    echo -e "${GREEN}安全加固成功 - ${user}@${server}${NC}"
+    return 0
+}
+
+# 显示帮助
+show_help() {
+    echo -e "${BLUE}使用说明:${NC}"
+    echo "1. 仅生成密钥: $0"
+    echo "2. 生成并部署到服务器: $0 [用户名] 服务器1 [服务器2 ...] [端口]"
+    echo -e "\n${YELLOW}示例:${NC}"
+    echo "生成密钥: $0"
+    echo "部署到多台服务器: $0 root server1.example.com server2.example.com 22"
+}
+
+# 主函数
+main() {
+    # 检查root权限
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}请使用root用户运行此脚本${NC}"
+        exit 1
+    fi
+
+    # 安装依赖
+    install_deps || exit 1
+    
+    # 生成密钥
+    generate_key || exit 1
+    
+    # 如果没有提供服务器参数，则只生成密钥
+    if [ $# -eq 0 ]; then
+        echo -e "${GREEN}SSH密钥已生成，但没有指定部署服务器${NC}"
+        show_help
+        exit 0
+    fi
+    
+    # 解析参数
+    local user="root"
+    local servers=()
+    local port="22"
+    
+    # 第一个参数可能是用户名
+    if [[ "$1" != *.* ]] && [[ "$1" != *:* ]] && [[ "$1" != "root" ]]; then
+        user="$1"
+        shift
+    fi
+    
+    # 最后一个参数可能是端口号
+    if [[ "${@: -1}" =~ ^[0-9]+$ ]]; then
+        port="${@: -1}"
+        servers=("${@:1:$#-1}")
+    else
+        servers=("$@")
+    fi
+    
+    # 部署到所有服务器
+    local all_success=true
+    for server in "${servers[@]}"; do
+        deploy_key "$server" "$user" "$port" || {
+            all_success=false
+            echo -e "${RED}${server} 部署失败，跳过安全加固${NC}"
+            continue
+        }
+    done
+    
+    # 只有所有服务器都部署成功才进行安全加固
+    if $all_success; then
+        echo -e "${YELLOW}所有服务器部署成功，开始安全加固...${NC}"
+        for server in "${servers[@]}"; do
+            secure_server "$server" "$user" "$port" || {
+                echo -e "${RED}${server} 安全加固失败${NC}"
+                all_success=false
+            }
+        done
+    fi
+    
+    # 清理锁文件
+    rm -f "$LOCKFILE"
+    
+    # 最终状态报告
+    if $all_success; then
+        echo -e "\n${GREEN}所有操作成功完成!${NC}"
+        echo -e "${YELLOW}重要信息:${NC}"
+        echo -e "密钥位置: ${KEY_DIR}/${KEY_NAME}"
+        echo -e "密钥密码: ${KEY_PASSWORD}"
+        echo -e "已禁用密码登录的服务器: ${servers[*]}"
+        echo -e "\n${BLUE}您现在可以使用密钥登录这些服务器:${NC}"
+        echo "ssh -i ${KEY_DIR}/${KEY_NAME} ${user}@服务器地址 -p ${port}"
+    else
+        echo -e "\n${RED}部分操作失败，请检查上述错误信息${NC}"
+        echo -e "${YELLOW}注意: 未成功加固的服务器仍允许密码登录${NC}"
+        exit 1
+    fi
+}
+
+# 执行主函数
+main "$@"
