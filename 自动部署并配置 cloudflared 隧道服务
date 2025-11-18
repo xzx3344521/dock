@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # cloudflared Docker 容器化一键部署脚本
-# 功能：自动部署并配置 cloudflared 隧道服务，支持选择密钥和服务器位置
+# 功能：自动部署并配置 cloudflared 隧道服务
 
 set -e  # 遇到任何错误立即退出脚本
 
@@ -12,15 +12,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # 无颜色
 
-# 默认 Cloudflare Tunnel 令牌
-DEFAULT_CF_TUNNEL_TOKEN="eyJhIjoiYmI2OTg1ZGU4N2ZiMDEyYjNjNjI2YWExM2VkYTY3OTciLCJ0IjoiNGYyMjNhM2UtNWNjYy00ZmMwLWI1N2MtNjQzZGY5ZmI1ZWZmIiwicyI6Ik1qTmxOR1U0WmpndE5ERXlPQzAwTjJKaExUazNaVFl0WVRWaU5tUmtObVkxTkdSaSJ9"
+# 定义两个不同的密钥和服务器类型
+CF_TOKEN_1="eyJhIjoiYmI2OTg1ZGU4N2ZiMDEyYjNjNjI2YWExM2VkYTY3OTciLCJ0IjoiNGYyMjNhM2UtNWNjYy00ZmMwLWI1N2MtNjQzZGY5ZmI1ZWZmIiwicyI6Ik1qTmxOR1U0WmpndE5ERXlPQzAwTjJKaExUazNaVFl0WVRWaU5tUmtObVkxTkdSaSJ9"
+SERVER_1="国内服务器"
 
-# 用户提供的 Cloudflare Tunnel 令牌
-USER_CF_TUNNEL_TOKEN="eyJhIjoiYmI2OTg1ZGU4N2ZiMDEyYjNjNjI2YWExM2VkYTY3OTciLCJ0IjoiOWRhNTU2YmMtMWZhNC00Njg2LTg1YTQtZTczOTQ1YmEwMGNmIiwicyI6Ik5XWTNPV05tTkRjdFltVTBOQzAwTkRkaExXRm1ZVEF0T1daaE9XRTVaVFUyTWpRMSJ9"
-
-# 当前使用的令牌
-CF_TUNNEL_TOKEN=""
-SERVER_LOCATION=""
+CF_TOKEN_2="eyJhIjoiYmI2OTg1ZGU4N2ZiMDEyYjNjNjI2YWExM2VkYTY3OTciLCJ0IjoiOWRhNTU2YmMtMWZhNC00Njg2LTg1YTQtZTczOTQ1YmEwMGNmIiwicyI6Ik5XWTNPV05tTkRjdFltVTBOQzAwTkRkaExXRm1ZVEF0T1daaE9XRTVaVFUyTWpRMSJ9"
+SERVER_2="香港服务器"
 
 # 输出带颜色的信息函数
 log_info() {
@@ -130,8 +127,6 @@ deploy_cloudflared() {
     
     # 运行 cloudflared 容器
     log_info "启动 cloudflared 隧道服务..."
-    log_info "服务器位置: ${SERVER_LOCATION}"
-    
     docker run -d \
         --name ${container_name} \
         --restart=unless-stopped \
@@ -165,7 +160,6 @@ verify_deployment() {
                 echo ""
                 log_info "容器名称: ${container_name}"
                 log_info "运行状态: ${status}"
-                log_info "服务器位置: ${SERVER_LOCATION}"
                 log_info "数据目录: /data/cloudflared/"
                 log_info "配置目录: /data/cloudflared/config"
                 log_info "日志目录: /data/cloudflared/logs"
@@ -205,58 +199,34 @@ show_usage() {
     echo ""
 }
 
-# 选择使用哪个令牌
+# 选择密钥和服务器
 select_token() {
     echo ""
-    log_info "请选择要使用的 Cloudflare Tunnel Token:"
-    echo "1. 使用默认密钥"
-    echo "2. 使用用户提供的密钥"
+    log_step "请选择要使用的隧道配置:"
+    echo "1) 使用默认密钥 ($SERVER_1)"
+    echo "2) 使用备用密钥 ($SERVER_2)"
     echo ""
     
     while true; do
-        read -p "请输入选择 (1/2): " choice
+        read -p "请输入选择 (1 或 2): " choice
         case $choice in
             1)
-                CF_TUNNEL_TOKEN=$DEFAULT_CF_TUNNEL_TOKEN
-                log_info "已选择使用默认密钥"
+                CF_TUNNEL_TOKEN=$CF_TOKEN_1
+                SERVER_TYPE=$SERVER_1
                 break
                 ;;
             2)
-                CF_TUNNEL_TOKEN=$USER_CF_TUNNEL_TOKEN
-                log_info "已选择使用用户提供的密钥"
+                CF_TUNNEL_TOKEN=$CF_TOKEN_2
+                SERVER_TYPE=$SERVER_2
                 break
                 ;;
             *)
-                log_error "无效的选择，请输入 1 或 2"
+                echo "无效选择，请重新输入"
                 ;;
         esac
     done
-}
-
-# 选择服务器位置
-select_server_location() {
-    echo ""
-    log_info "请选择服务器位置:"
-    echo "1. 国内服务器"
-    echo "2. 香港服务器"
-    echo ""
     
-    while true; do
-        read -p "请输入选择 (1/2): " choice
-        case $choice in
-            1)
-                SERVER_LOCATION="国内服务器"
-                break
-                ;;
-            2)
-                SERVER_LOCATION="香港服务器"
-                break
-                ;;
-            *)
-                log_error "无效的选择，请输入 1 或 2"
-                ;;
-        esac
-    done
+    log_info "已选择: $SERVER_TYPE"
 }
 
 # 主执行函数
@@ -265,8 +235,9 @@ main() {
     log_info "🚀 开始部署 Cloudflare Tunnel Docker 容器..."
     log_info "=========================================="
     
+    # 让用户选择密钥
     select_token
-    select_server_location
+    
     validate_token
     check_docker
     prepare_directories
@@ -275,8 +246,7 @@ main() {
     
     log_info "=========================================="
     log_info "✅ Cloudflare Tunnel 部署完成！"
-    log_info "隧道已使用提供的 Token 进行认证"
-    log_info "服务器位置: ${SERVER_LOCATION}"
+    log_info "隧道已使用 $SERVER_TYPE 的 Token 进行认证"
     
     show_usage
 }
