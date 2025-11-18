@@ -1,0 +1,319 @@
+#!/bin/bash
+
+# OpenList Docker 一键部署脚本（带自动密码检测）
+# 版本：1.3 - 在原有成功脚本基础上添加密码自动处理
+
+set -e  # 任何命令失败则立即退出脚本
+
+# 全局变量
+CONTAINER_NAME="openlist"
+DATA_DIR="/data/openlist"
+IMAGE_NAME="openlistteam/openlist:latest"
+DEFAULT_PORT=5344
+PORT_MAPPING=""
+
+# 颜色输出函数
+red() { echo -e "\033[31m$1\033[0m"; }
+green() { echo -e "\033[32m$1\033[0m"; }
+yellow() { echo -e "\033[33m$1\033[0m"; }
+blue() { echo -e "\033[34m$1\033[0m"; }
+
+# 错误退出函数
+error_exit() {
+    red "❌ 错误：$1"
+    exit 1
+}
+
+# 检查 Docker 是否可用
+check_docker() {
+    blue "🔍 检查 Docker 环境..."
+    if ! command -v docker &> /dev/null; then
+        error_exit "未检测到 Docker，请先安装 Docker"
+    fi
+    
+    if ! docker info &> /dev/null; then
+        error_exit "Docker 服务未运行，请启动 Docker 服务"
+    fi
+    green "✅ Docker 环境检查通过"
+}
+
+# 准备数据目录
+prepare_directory() {
+    blue "📁 准备数据目录..."
+    
+    # 创建 /data 目录（如果不存在）
+    if [ ! -d "/data" ]; then
+        yellow "创建 /data 目录..."
+        sudo mkdir -p /data || error_exit "创建 /data 目录失败"
+        sudo chmod 755 /data || error_exit "设置 /data 权限失败"
+    fi
+    
+    # 创建 OpenList 数据目录
+    if [ ! -d "$DATA_DIR" ]; then
+        yellow "创建 OpenList 数据目录: $DATA_DIR"
+        sudo mkdir -p "$DATA_DIR" || error_exit "创建数据目录失败"
+    fi
+    
+    # 设置正确的目录权限
+    blue "🔧 设置目录权限..."
+    sudo chown -R 1000:1000 "$DATA_DIR" || error_exit "设置目录所有权失败"
+    sudo chmod -R 755 "$DATA_DIR" || error_exit "设置目录权限失败"
+    
+    # 验证权限设置
+    if [ -w "$DATA_DIR" ] && [ -x "$DATA_DIR" ]; then
+        green "✅ 目录权限验证通过"
+    else
+        error_exit "目录权限设置失败，请手动检查权限"
+    fi
+    
+    green "✅ 数据目录准备完成"
+}
+
+# 清理现有容器
+cleanup_existing_container() {
+    blue "🧹 检查现有容器..."
+    if docker ps -a --filter "name=$CONTAINER_NAME" --format "{{.Names}}" | grep -q "$CONTAINER_NAME"; then
+        yellow "发现已存在的 OpenList 容器，正在清理..."
+        docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+        docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+        green "✅ 旧容器清理完成"
+    else
+        green "✅ 无现有容器需要清理"
+    fi
+}
+
+# 检查端口占用
+check_port() {
+    local port=$1
+    blue "🔍 检查端口 $port 占用情况..."
+    
+    if command -v ss &> /dev/null; then
+        if ss -tuln | grep ":$port " > /dev/null; then
+            return 1
+        fi
+    else
+        if netstat -tuln | grep ":$port " > /dev/null; then
+            return 1
+        fi
+    fi
+    
+    green "✅ 端口 $port 可用"
+    return 0
+}
+
+# 获取可用端口
+get_available_port() {
+    local port=$DEFAULT_PORT
+    local max_port=6000
+    
+    while [ $port -le $max_port ]; do
+        if check_port $port; then
+            echo $port
+            return 0
+        fi
+        port=$((port + 1))
+    done
+    
+    error_exit "在 $DEFAULT_PORT-$max_port 范围内找不到可用端口"
+}
+
+# 拉取 OpenList 镜像
+pull_openlist_image() {
+    blue "📦 拉取 OpenList 镜像..."
+    if docker pull "$IMAGE_NAME"; then
+        green "✅ OpenList 镜像拉取完成"
+    else
+        error_exit "拉取 OpenList 镜像失败，请检查网络连接"
+    fi
+}
+
+# 部署 OpenList 容器（使用特权模式解决权限问题）
+deploy_openlist() {
+    blue "🚀 开始部署 OpenList 容器..."
+    
+    # 确定使用的端口
+    if check_port $DEFAULT_PORT; then
+        PORT_MAPPING="$DEFAULT_PORT:5244"
+        green "✅ 使用默认端口：$DEFAULT_PORT"
+    else
+        local available_port=$(get_available_port)
+        PORT_MAPPING="$available_port:5244"
+        yellow "📊 使用端口：$available_port (原端口 $DEFAULT_PORT 被占用)"
+    fi
+    
+    # 部署命令（使用特权模式解决权限问题）
+    blue "🐳 启动容器..."
+    if docker run -d \
+        --name "$CONTAINER_NAME" \
+        --restart=unless-stopped \
+        --privileged \
+        --user root \
+        -p "$PORT_MAPPING" \
+        -v "$DATA_DIR:/opt/openlist/data" \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -e PUID=0 \
+        -e PGID=0 \
+        -e UMASK=000 \
+        -e TZ=Asia/Shanghai \
+        "$IMAGE_NAME"; then
+        green "✅ OpenList 容器部署成功"
+    else
+        error_exit "OpenList 容器启动失败"
+    fi
+}
+
+# === 新增功能：密码检测和自动重置 ===
+# 生成随机密码
+generate_random_password() {
+    tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 12
+    echo
+}
+
+# 检测并获取密码
+detect_and_get_password() {
+    blue "🔍 检测密码生成情况..."
+    
+    local max_attempts=10
+    local attempt=1
+    local password=""
+    
+    while [ $attempt -le $max_attempts ]; do
+        yellow "尝试检测密码 ($attempt/$max_attempts)..."
+        sleep 3
+        
+        # 检查容器日志获取密码
+        local logs=$(docker logs "$CONTAINER_NAME" 2>&1 | tail -10)
+        
+        # 尝试提取密码
+        password=$(echo "$logs" | grep -o "initial password is: [[:alnum:]]*" | awk '{print $4}' | tail -1)
+        
+        if [ -n "$password" ]; then
+            green "✅ 检测到自动生成的密码"
+            echo "$password"
+            return 0
+        fi
+        
+        # 检查是否启动成功但没有新密码（使用现有配置）
+        if echo "$logs" | grep -q "HTTP server"; then
+            yellow "⚠️  使用现有配置，无新密码生成"
+            # 返回空字符串表示使用现有配置
+            echo ""
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    # 如果检测不到密码，生成随机密码并重置
+    yellow "⚠️  未检测到密码生成，执行自动重置..."
+    auto_reset_password
+}
+
+# 自动重置密码
+auto_reset_password() {
+    blue "🔄 自动重置密码..."
+    
+    # 停止容器
+    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    
+    # 删除配置文件以触发新密码生成
+    yellow "删除现有配置..."
+    sudo rm -f "$DATA_DIR/config.json" 2>/dev/null || true
+    sudo rm -f "$DATA_DIR"/*.db 2>/dev/null || true
+    
+    # 重启容器
+    yellow "重启容器生成新密码..."
+    docker start "$CONTAINER_NAME" 2>/dev/null || {
+        yellow "容器启动失败，重新部署..."
+        deploy_openlist
+    }
+    
+    # 等待并再次检测密码
+    sleep 8
+    detect_and_get_password
+}
+
+# 验证部署状态
+verify_deployment() {
+    blue "🔍 验证容器运行状态..."
+    
+    local max_attempts=15
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        yellow "⏳ 等待容器启动 ($attempt/$max_attempts)..."
+        sleep 3
+        
+        # 检查容器状态
+        if docker ps --filter "name=$CONTAINER_NAME" --filter "status=running" --format "{{.Names}}" | grep -q "$CONTAINER_NAME"; then
+            green "✅ 容器正在运行"
+            
+            # 检测并获取密码
+            PASSWORD=$(detect_and_get_password)
+            
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    red "❌ 容器启动超时"
+    blue "📋 容器日志："
+    docker logs "$CONTAINER_NAME" | tail -20
+    error_exit "容器启动失败，请检查上方日志"
+}
+
+# 显示部署成功信息
+show_success_info() {
+    local port=$(echo "$PORT_MAPPING" | cut -d':' -f1)
+    local ip_address=$(hostname -I | awk '{print $1}' | head -n1)
+    
+    echo ""
+    green "🎉 OpenList 部署成功！"
+    echo "=========================================="
+    blue "📋 访问信息："
+    echo "   🌐 访问地址：http://$ip_address:$port"
+    echo "   🏠 本地访问：http://localhost:$port"
+    echo "   📁 数据目录：$DATA_DIR"
+    echo ""
+    blue "🔐 登录信息："
+    echo "   用户名：admin"
+    
+    if [ -n "$PASSWORD" ]; then
+        echo "   密码：$PASSWORD"
+        yellow "💡 首次登录后请立即修改密码！"
+    else
+        echo "   密码：使用之前设置的密码"
+        echo "   🔄 如需重置：删除 $DATA_DIR/config.json 并重启容器"
+    fi
+    
+    echo ""
+    blue "⚡ 常用命令："
+    echo "   📜 查看日志：docker logs $CONTAINER_NAME"
+    echo "   🔄 重启容器：docker restart $CONTAINER_NAME"
+    echo "   ⏹️  停止容器：docker stop $CONTAINER_NAME"
+    echo "   🚀 启动容器：docker start $CONTAINER_NAME"
+}
+
+# 主执行流程
+main() {
+    echo "=========================================="
+    green "    OpenList Docker 一键部署脚本"
+    yellow "      （带自动密码检测功能）"
+    echo "=========================================="
+    
+    check_docker
+    prepare_directory
+    cleanup_existing_container
+    pull_openlist_image
+    deploy_openlist
+    verify_deployment
+    show_success_info
+    
+    echo ""
+    green "✅ 部署流程完成！"
+}
+
+# 执行主函数（捕获中断信号）
+trap 'echo; red "⚠️  操作被用户中断"; exit 1' INT
+main "$@"
