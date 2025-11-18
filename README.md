@@ -97,10 +97,10 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/SSH%E5%A
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/%E8%87%AA%E5%8A%A8%E9%83%A8%E7%BD%B2%E5%B9%B6%E9%85%8D%E7%BD%AE%20cloudflared%20%E9%9A%A7%E9%81%93%E6%9C%8D%E5%8A%A1
 )
 ```
-
-
-
-
+# 挂载多网盘容器
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/OpenList）
+```
 
 
 
