@@ -92,3 +92,28 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/ssh)
 ```
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/SSH%E5%AF%86%E9%92%A5%E9%83%A8%E7%BD%B2%E5%8F%8A%E5%AE%89%E5%85%A8%E5%8A%A0%E5%9B%BA%E8%84%9A%E6%9C%AC)
 ```
+# 自动部署并配置 cloudflared 隧道服务
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/%E8%87%AA%E5%8A%A8%E9%83%A8%E7%BD%B2%E5%B9%B6%E9%85%8D%E7%BD%AE%20cloudflared%20%E9%9A%A7%E9%81%93%E6%9C%8D%E5%8A%A1
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
