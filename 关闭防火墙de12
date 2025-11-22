@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# 综合防火墙禁用脚本
+# 综合防火墙禁用脚本 - 彻底开放所有端口
 
 set -e
 
-echo "=== 开始禁用所有防火墙 ==="
+echo "=== 开始彻底禁用所有防火墙，开放所有端口 ==="
 
 # 检查root权限
 if [ "$EUID" -ne 0 ]; then
@@ -31,8 +31,8 @@ stop_service "firewalld"
 stop_service "nftables"
 stop_service "iptables"
 
-# 清除 iptables 规则
-echo "清除 iptables 规则..."
+# 清除 iptables 规则并设置默认策略为 ACCEPT
+echo "清除 iptables 规则并开放所有连接..."
 iptables -F
 iptables -X
 iptables -t nat -F
@@ -43,7 +43,7 @@ iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 iptables -P OUTPUT ACCEPT
 
-# 清除 ip6tables 规则
+# 清除 ip6tables 规则并设置默认策略为 ACCEPT
 ip6tables -F
 ip6tables -X
 ip6tables -t nat -F
@@ -54,8 +54,8 @@ ip6tables -P INPUT ACCEPT
 ip6tables -P FORWARD ACCEPT
 ip6tables -P OUTPUT ACCEPT
 
-# 清除 nftables 规则
-echo "清除 nftables 规则..."
+# 清除 nftables 规则并加载允许所有流量的配置
+echo "清除 nftables 规则并开放所有连接..."
 nft flush ruleset 2>/dev/null || true
 
 # 创建允许所有的 nftables 配置
@@ -80,17 +80,44 @@ EOF
 nft -f /tmp/nftables-accept-all.conf
 cp /tmp/nftables-accept-all.conf /etc/nftables.conf
 
+# 防止其他防火墙服务干扰
+echo "禁用其他可能的防火墙模块和服务..."
+
+# 禁用 SELinux（临时）
+setenforce 0 2>/dev/null || true
+
+# 停止并禁用 AppArmor
+stop_service "apparmor"
+
+# 停止并禁用 Shorewall
+stop_service "shorewall"
+
+# 停止并禁用 IPCop（如有）
+stop_service "ipcop"
+
+# 停止并禁用 CSF (ConfigServer Security & Firewall)
+stop_service "csf"
+stop_service "lfd"
+
+# 清除可能的遗留规则（如 raw, security 表）
+iptables -t raw -F 2>/dev/null || true
+iptables -t security -F 2>/dev/null || true
+ip6tables -t raw -F 2>/dev/null || true
+ip6tables -t security -F 2>/dev/null || true
+
 # 显示最终状态
 echo ""
 echo "=== 防火墙状态 ==="
 echo "ufw: $(systemctl is-active ufw 2>/dev/null || echo 'inactive')"
 echo "firewalld: $(systemctl is-active firewalld 2>/dev/null || echo 'inactive')"
 echo "nftables: $(systemctl is-active nftables 2>/dev/null || echo 'inactive')"
+echo "iptables: $(systemctl is-active iptables 2>/dev/null || echo 'inactive')"
 echo ""
+
 echo "=== 当前策略 ==="
 echo "IPv4 INPUT: $(iptables -L INPUT -n | grep policy | awk '{print $4}')"
 echo "IPv6 INPUT: $(ip6tables -L INPUT -n | grep policy | awk '{print $4}')"
 
 echo ""
-echo "✅ 所有防火墙已禁用，系统现在允许所有连接！"
-echo "⚠️  警告：此配置存在安全风险，仅建议在测试环境中使用"
+echo "✅ 所有防火墙已彻底禁用，所有端口已开放，外部连接畅通无阻！"
+echo "🚨 警告：此配置极度危险，仅用于测试或封闭网络环境！"
