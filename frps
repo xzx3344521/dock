@@ -1,0 +1,152 @@
+#!/bin/bash
+
+# frps 服务端一键部署脚本
+# 功能：自动配置 frps.toml 并启动 Docker 容器
+
+set -eo pipefail
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# 检查 Docker 服务
+check_docker() {
+    if ! command -v docker &>/dev/null; then
+        echo -e "${RED}错误：Docker 未安装，请先安装 Docker${NC}"
+        exit 1
+    fi
+    if ! docker info &>/dev/null; then
+        echo -e "${RED}错误：Docker 服务未运行，请先启动 Docker 服务${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Docker 服务可用${NC}"
+}
+
+# 准备配置文件和目录
+prepare_config() {
+    local config_dir="/data/frps"
+    local config_file="$config_dir/frps.toml"
+
+    echo -e "${YELLOW}正在准备 frps 配置文件...${NC}"
+    mkdir -p "$config_dir"
+
+    cat > "$config_file" <<'EOF'
+# ======================
+# frp 服务端安全强化配置
+# ======================
+
+# 网络监听
+bindAddr = "0.0.0.0"
+bindPort = 7000
+#kcpBindPort = 7000       # 保持KCP支持（按需取消注释）
+quicBindPort = 7000       # 保持QUIC支持
+
+# 端口设置
+vhostHTTPPort = 8080        # HTTP代理端口
+vhostHTTPSPort = 8443      # HTTPS代理端口
+
+# 传输优化
+transport.maxPoolCount = 2000
+transport.tcpMux = true
+transport.tcpMuxKeepaliveInterval = 60
+transport.tcpKeepalive = 7200
+transport.tls.force = false  # 生产环境建议改为true
+
+# 控制面板
+webServer.addr = "0.0.0.0"
+webServer.port = 7500
+webServer.user = "admin"
+webServer.password = "FrpS3cure@2024"
+webServer.pprofEnable = false
+
+# 日志配置
+log.to = "/var/log/frps.log"
+log.level = "info"
+log.maxDays = 3
+log.disablePrintColor = false
+
+# 认证配置
+auth.method = "token"
+auth.token = "XH7#k9q$LzP2*4vN!R5tY8wC"
+
+# 端口控制
+allowPorts = [
+  { start = 10000, end = 60000 }
+]
+
+# 高级参数
+maxPortsPerClient = 8
+udpPacketSize = 1500
+natholeAnalysisDataReserveHours = 168
+EOF
+
+    echo -e "${GREEN}✓ 配置文件已生成: $config_file${NC}"
+    chmod 600 "$config_file"  # 设置配置文件权限
+}
+
+# 部署 Docker 容器
+deploy_container() {
+    local container_name="frps"
+    local config_dir="/data/frps"
+
+    # 停止并移除旧容器（如果存在）
+    if docker ps -a --format '{{.Names}}' | grep -q "^$container_name$"; then
+        echo -e "${YELLOW}发现已存在的容器，正在清理...${NC}"
+        docker stop "$container_name" >/dev/null
+        docker rm "$container_name" >/dev/null
+    fi
+
+    # 启动新容器
+    echo -e "${YELLOW}正在启动 frps 容器...${NC}"
+    docker run -d \
+        --name "$container_name" \
+        --restart unless-stopped \
+        --network host \
+        -v "$config_dir/frps.toml:/etc/frp/frps.toml" \
+        -v "$config_dir/logs:/var/log" \
+        snowdreamtech/frps
+
+    echo -e "${GREEN}✓ frps 容器已启动${NC}"
+}
+
+# 检查容器状态
+check_status() {
+    local container_name="frps"
+    local max_retries=5
+    local retry_interval=2
+
+    echo -e "\n${YELLOW}正在检查容器状态...${NC}"
+    for ((i=1; i<=max_retries; i++)); do
+        if docker ps --filter "name=$container_name" --filter "status=running" | grep -q "$container_name"; then
+            echo -e "${GREEN}✓ frps 运行正常${NC}"
+            
+            # 获取容器使用的端口
+            echo -e "\n======================"
+            echo -e "${YELLOW}服务已启动，使用以下信息访问：${NC}"
+            echo -e "控制面板: http://<服务器IP>:7500"
+            echo -e "用户名: admin"
+            echo -e "密码: FrpS3cure@2024"
+            echo -e "\n客户端连接令牌: XH7#k9q$LzP2*4vN!R5tY8wC"
+            echo -e "======================"
+            exit 0
+        fi
+        sleep "$retry_interval"
+    done
+
+    echo -e "${RED}错误：容器启动失败${NC}"
+    docker logs "$container_name"
+    exit 1
+}
+
+# 主函数
+main() {
+    echo -e "\n${GREEN}===== frps 服务端部署脚本 =====${NC}"
+    check_docker
+    prepare_config
+    deploy_container
+    check_status
+}
+
+main
