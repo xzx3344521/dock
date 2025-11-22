@@ -101,12 +101,11 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/%E8%87%A
 ```
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/OpenList）
 ```
+# frps安装脚本
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/frps)
 
-
-
-
-
-
+```
 
 
 
