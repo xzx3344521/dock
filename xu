@@ -3,7 +3,7 @@
 # x-ui 多架构自动安装脚本
 # 支持: amd64, 386, arm64, armv5, armv6, armv7, s390x
 # 默认配置: 端口 8443, 账号 3344, 密码 3344
-# 咸v咆哮制作 - 一键搞定所有架构！
+# 咸鱼咆哮制作 - 一键搞定所有架构！
 
 set -e  # 遇到错误立即退出
 
@@ -63,22 +63,22 @@ show_banner() {
     echo -e "║                                            ║"
     echo -e "║   ${GREEN}📦 支持所有主流CPU架构 ${RED}                ║"
     echo -e "║   ${BLUE}⚡ 自动检测 + 自动配置 ${RED}                  ║"
-    echo -e "║   ${PURPLE}🎯 咸v咆哮制作 - 专治各种不服！ ${RED}       ║"
+    echo -e "║   ${PURPLE}🎯 咸鱼咆哮制作 ${RED}                       ║"
     echo -e "║                                            ║"
     echo -e "${RED}╚════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
-# 显示咆哮信息
-show_roar() {
+# 显示制作信息
+show_creator() {
     echo
     echo -e "${RED}╔══════════════════════════════════════════════════╗"
     echo -e "║                                                      ║"
-    echo -e "║  ${YELLOW}🔥 咸v咆哮宣言：${RED}                                  ║"
+    echo -e "║  ${YELLOW}🔥 咸鱼咆哮宣言：${RED}                                  ║"
     echo -e "║                                                      ║"
-    echo -e "║  ${GREEN}「管你什么架构，老子一键搞定！」${RED}                 ║"
-    echo -e "║  ${CYAN}「AMD、Intel、ARM、IBM... 通通拿下！」${RED}            ║"
-    echo -e "║  ${PURPLE}「拒绝复杂操作，只要简单粗暴！」${RED}                 ║"
+    echo -e "║  ${GREEN}「多架构支持，智能适配！」${RED}                         ║"
+    echo -e "║  ${CYAN}「一键配置，省心省力！」${RED}                             ║"
+    echo -e "║  ${PURPLE}「有问题就反馈，持续改进！」${RED}                       ║"
     echo -e "║                                                      ║"
     echo -e "${RED}╚══════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -289,48 +289,115 @@ EOF
     info "✅ 系统服务配置完成"
 }
 
-# 自定义配置面板
-customize_panel() {
-    step "🎛️  开始自定义配置面板..."
+# 使用x-ui命令修改配置（修复版）
+modify_panel_config() {
+    step "🎛️  开始修改面板配置..."
     
-    # 停止服务以进行配置
-    info "🛑 停止 x-ui 服务进行配置..."
+    # 等待服务启动
+    info "⏳ 等待服务启动..."
+    systemctl start x-ui 2>/dev/null || true
+    sleep 8
+    
+    # 检查服务状态
+    if ! systemctl is-active --quiet x-ui; then
+        warn "⚠ 服务未运行，尝试启动..."
+        systemctl start x-ui
+        sleep 5
+    fi
+    
+    # 修改端口
+    info "🔧 修改面板端口为: $PANEL_PORT"
+    if command -v x-ui >/dev/null 2>&1; then
+        # 使用expect自动交互修改端口
+        if command -v expect >/dev/null 2>&1; then
+            expect << EOF
+spawn x-ui
+expect "Please enter your selection"
+send "9\r"
+expect "Enter port number"
+send "$PANEL_PORT\r"
+expect "Restart the panel"
+send "y\r"
+expect "Press enter to return"
+send "\r"
+expect eof
+EOF
+            info "✅ 端口修改完成"
+        else
+            warn "⚠ 未安装expect，无法自动修改端口"
+            info "💡 请手动运行 'x-ui' 选择 9 修改端口为 $PANEL_PORT"
+        fi
+        
+        sleep 3
+        
+        # 修改用户名和密码
+        info "👤 修改用户名和密码为: $PANEL_USERNAME/$PANEL_PASSWORD"
+        if command -v expect >/dev/null 2>&1; then
+            expect << EOF
+spawn x-ui
+expect "Please enter your selection"
+send "6\r"
+expect "Are you sure to reset"
+send "y\r"
+expect "Please set the login username"
+send "$PANEL_USERNAME\r"
+expect "Please set the login password"
+send "$PANEL_PASSWORD\r"
+expect "Do you want to disable currently configured two-factor authentication"
+send "y\r"
+expect "Restart the panel"
+send "y\r"
+expect "Press enter to return"
+send "\r"
+expect eof
+EOF
+            info "✅ 账号密码修改完成"
+        else
+            warn "⚠ 未安装expect，无法自动修改账号密码"
+            info "💡 请手动运行 'x-ui' 选择 6 修改账号密码"
+        fi
+    else
+        error "❌ x-ui 命令未找到，无法自动配置"
+        info "💡 请手动运行配置命令"
+    fi
+}
+
+# 直接修改数据库配置（备用方案）
+direct_db_config() {
+    step "🗃️  尝试直接修改数据库配置..."
+    
+    # 停止服务
     systemctl stop x-ui 2>/dev/null || true
-    
-    # 等待服务停止
     sleep 3
     
-    # 创建数据库目录
-    mkdir -p /etc/x-ui/
-    
-    # 初始化数据库（如果不存在）
-    if [ ! -f "/etc/x-ui/x-ui.db" ]; then
-        info "🗃️  初始化数据库..."
-        
-        # 启动服务以创建初始数据库
-        if systemctl start x-ui; then
-            sleep 5
-            systemctl stop x-ui
-            sleep 3
-        else
-            warn "⚠ 服务启动失败，尝试直接创建数据库结构"
-        fi
-    fi
-    
-    # 修改配置（如果数据库存在且可写）
+    # 检查数据库文件
     if [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-        cyan "🔧 设置面板端口: $PANEL_PORT"
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = '$PANEL_PORT' WHERE key = 'port';" 2>/dev/null || true
+        info "🔧 直接修改数据库配置..."
         
-        cyan "👤 设置面板账号: $PANEL_USERNAME"
-        cyan "🔑 设置面板密码: $PANEL_PASSWORD"
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username = '$PANEL_USERNAME', password = '$PANEL_PASSWORD' WHERE id = 1;" 2>/dev/null || true
+        # 修改端口
+        if sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = '$PANEL_PORT' WHERE key = 'port';"; then
+            info "✅ 端口修改为: $PANEL_PORT"
+        else
+            warn "⚠ 端口修改失败"
+        fi
         
+        # 修改用户名密码
+        if sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username = '$PANEL_USERNAME', password = '$PANEL_PASSWORD' WHERE id = 1;"; then
+            info "✅ 账号修改为: $PANEL_USERNAME"
+            info "✅ 密码修改为: $PANEL_PASSWORD"
+        else
+            warn "⚠ 账号密码修改失败"
+        fi
+        
+        # 禁用默认凭据警告
         sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = 'false' WHERE key = 'hasDefaultCredential';" 2>/dev/null || true
-        info "✅ 自定义配置完成"
     else
-        warn "⚠ 无法自动配置数据库，请在安装后手动修改配置"
+        warn "⚠ 无法直接修改数据库，将使用交互式配置"
     fi
+    
+    # 重启服务
+    systemctl start x-ui
+    sleep 5
 }
 
 # 配置防火墙
@@ -371,28 +438,23 @@ start_service() {
     systemctl daemon-reload
     systemctl enable x-ui
     
-    # 启动服务
-    if systemctl start x-ui; then
-        info "✅ x-ui 服务启动命令执行成功"
+    # 重启服务确保配置生效
+    if systemctl restart x-ui; then
+        info "✅ x-ui 服务重启成功"
     else
-        error "❌ x-ui 服务启动失败"
+        error "❌ x-ui 服务重启失败"
         return 1
     fi
     
     # 等待服务启动
-    sleep 5
+    sleep 8
     
     # 检查服务状态
     if systemctl is-active --quiet x-ui; then
         info "✅ x-ui 服务运行正常"
-        
-        # 显示服务状态
-        echo
-        systemctl status x-ui --no-pager -l
     else
         warn "⚠ x-ui 服务未运行，检查日志中..."
         systemctl status x-ui --no-pager -l
-        warn "💡 尝试手动启动: systemctl start x-ui"
     fi
 }
 
@@ -404,7 +466,7 @@ verify_installation() {
     if systemctl is-active --quiet x-ui; then
         info "✅ 服务运行正常"
     else
-        warn "⚠ 服务未运行，但安装已完成"
+        warn "⚠ 服务未运行"
         return 0
     fi
     
@@ -423,6 +485,12 @@ verify_installation() {
         fi
     fi
     
+    # 显示最终配置
+    info "📋 最终配置验证:"
+    if command -v x-ui >/dev/null 2>&1; then
+        echo "n" | x-ui | grep -A 10 "View Current Settings" || true
+    fi
+    
     info "✅ 验证完成"
 }
 
@@ -434,7 +502,7 @@ show_info() {
     echo
     echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
     echo -e "║                                                      ║"
-    echo -e "║    🎉 X-UI 多架构安装完成！咸v咆哮牛逼！            ║"
+    echo -e "║    🎉 X-UI 多架构安装完成！咸v咆哮制作！           ║"
     echo -e "║                                                      ║"
     echo -e "╚══════════════════════════════════════════════════╝${NC}"
     echo
@@ -443,9 +511,9 @@ show_info() {
     info "👤 用户名: $PANEL_USERNAME"
     info "🔑 密码: $PANEL_PASSWORD"
     echo
-    cyan "💡 面板状态: 已自动配置为指定端口和账号"
+    cyan "💡 配置状态: 已自动设置端口和账号密码"
     echo
-    warn "⚠️  重要安全提醒:"
+    warn "⚠️  重要提醒:"
     warn "1. 请立即访问面板验证登录"
     warn "2. 建议定期修改密码" 
     warn "3. 确保防火墙已正确配置"
@@ -487,10 +555,28 @@ show_arch_info() {
     echo
 }
 
+# 安装expect工具
+install_expect() {
+    if ! command -v expect >/dev/null 2>&1; then
+        info "📦 安装 expect 工具用于自动配置..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get install -y expect
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y expect
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y expect
+        elif command -v apk >/dev/null 2>&1; then
+            apk add expect
+        else
+            warn "⚠ 无法安装expect，将使用备用配置方案"
+        fi
+    fi
+}
+
 # 主函数
 main() {
     show_banner
-    show_roar
+    show_creator
     
     info "🚀 开始 x-ui 多架构自动安装..."
     show_arch_info
@@ -500,10 +586,12 @@ main() {
     detect_architecture
     build_download_url
     install_dependencies
+    install_expect
     download_xui
     extract_and_install
     setup_service
-    customize_panel
+    direct_db_config  # 先尝试直接修改数据库
+    modify_panel_config  # 再使用交互式配置确保生效
     setup_firewall
     start_service
     verify_installation
@@ -513,7 +601,7 @@ main() {
     echo -e "${RED}╔════════════════════════════════════════╗"
     echo -e "║                                            ║"
     echo -e "║   ${YELLOW}🎊 安装完成！咸v咆哮感谢使用！${RED}      ║"
-    echo -e "║   ${GREEN}💪 有問題就咆哮，老子帮你搞定！${RED}      ║"
+    echo -e "║   ${GREEN}🐟 不想上班不想上班！${RED}           ║"
     echo -e "║                                            ║"
     echo -e "${RED}╚════════════════════════════════════════╝${NC}"
     echo
