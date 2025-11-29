@@ -3,7 +3,7 @@
 # x-ui 多架构自动安装脚本
 # 支持: amd64, 386, arm64, armv5, armv6, armv7, s390x
 # 默认配置: 端口 8443, 账号 3344, 密码 3344
-# 咸鱼咆哮制作 - 一键搞定所有架构！
+# 咸V咆哮制作 - 一键搞定所有架构！
 
 set -e  # 遇到错误立即退出
 
@@ -63,7 +63,7 @@ show_banner() {
     echo -e "║                                            ║"
     echo -e "║   ${GREEN}📦 支持所有主流CPU架构 ${RED}                ║"
     echo -e "║   ${BLUE}⚡ 自动检测 + 自动配置 ${RED}                  ║"
-    echo -e "║   ${PURPLE}🎯 咸鱼咆哮制作 ${RED}                       ║"
+    echo -e "║   ${PURPLE}🎯 咸V咆哮制作 ${RED}                       ║"
     echo -e "║                                            ║"
     echo -e "${RED}╚════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -74,7 +74,7 @@ show_creator() {
     echo
     echo -e "${RED}╔══════════════════════════════════════════════════╗"
     echo -e "║                                                      ║"
-    echo -e "║  ${YELLOW}🔥 咸鱼咆哮宣言：${RED}                                  ║"
+    echo -e "║  ${YELLOW}🔥 咸V咆哮宣言：${RED}                                  ║"
     echo -e "║                                                      ║"
     echo -e "║  ${GREEN}「多架构支持，智能适配！」${RED}                         ║"
     echo -e "║  ${CYAN}「一键配置，省心省力！」${RED}                             ║"
