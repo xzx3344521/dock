@@ -1,0 +1,313 @@
+#!/bin/bash
+
+# x-ui 自动安装脚本（修复版）
+# 版本: 2.8.5
+# 架构: amd64 (x86_64)
+
+set -e  # 遇到错误立即退出
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# 打印彩色信息
+info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# 检查系统架构
+check_architecture() {
+    local arch=$(uname -m)
+    info "检测系统架构: $arch"
+    
+    if [ "$arch" != "x86_64" ]; then
+        warn "检测到系统架构为: $arch"
+        warn "你下载的是 amd64 (x86_64) 版本，可能不兼容当前系统"
+        read -p "是否继续安装? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            info "安装已取消"
+            exit 1
+        fi
+    fi
+}
+
+# 检查 root 权限
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        error "请使用 root 权限运行此脚本"
+        info "尝试使用: sudo bash $0"
+        exit 1
+    fi
+}
+
+# 安装依赖
+install_dependencies() {
+    info "检查并安装必要的依赖..."
+    
+    if command -v apt-get >/dev/null 2>&1; then
+        # Debian/Ubuntu
+        apt-get update
+        apt-get install -y wget tar curl
+    elif command -v yum >/dev/null 2>&1; then
+        # CentOS/RHEL
+        yum install -y wget tar curl
+    elif command -v dnf >/dev/null 2>&1; then
+        # Fedora
+        dnf install -y wget tar curl
+    else
+        warn "无法确定包管理器，跳过依赖安装"
+    fi
+}
+
+# 下载 x-ui
+download_xui() {
+    local download_url="https://github.vps7k7k.xyz/https://github.com/MHSanaei/3x-ui/releases/download/v2.8.5/x-ui-linux-amd64.tar.gz"
+    local filename="x-ui-linux-amd64.tar.gz"
+    
+    info "开始下载 x-ui..."
+    
+    # 检查是否已存在文件
+    if [ -f "$filename" ]; then
+        warn "发现已存在的文件 $filename"
+        read -p "是否重新下载? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -f "$filename"
+        else
+            info "使用已存在的文件"
+            return 0
+        fi
+    fi
+    
+    # 下载文件
+    if wget --progress=bar:force "$download_url" -O "$filename"; then
+        info "下载完成"
+    else
+        error "下载失败，请检查网络连接和URL"
+        exit 1
+    fi
+}
+
+# 解压并手动安装
+extract_and_install() {
+    local filename="x-ui-linux-amd64.tar.gz"
+    
+    info "解压文件..."
+    
+    if [ ! -f "$filename" ]; then
+        error "文件 $filename 不存在"
+        exit 1
+    fi
+    
+    # 清理旧文件
+    rm -rf x-ui-temp
+    mkdir -p x-ui-temp
+    
+    # 解压文件
+    tar zxvf "$filename" -C x-ui-temp
+    
+    # 进入解压目录
+    cd x-ui-temp
+    
+    # 查找 x-ui 目录
+    if [ -d "x-ui" ]; then
+        cd x-ui
+    fi
+    
+    info "开始手动安装 x-ui..."
+    
+    # 设置执行权限
+    chmod +x x-ui
+    if [ -f "x-ui.sh" ]; then
+        chmod +x x-ui.sh
+    fi
+    
+    # 检查是否是可执行文件
+    if [ ! -x "x-ui" ]; then
+        error "x-ui 文件不可执行"
+        exit 1
+    fi
+    
+    # 手动安装（避免重新下载）
+    info "执行手动安装，跳过自动下载..."
+    
+    # 停止可能存在的旧服务
+    systemctl stop x-ui 2>/dev/null || true
+    
+    # 复制文件到系统目录
+    mkdir -p /usr/local/x-ui/
+    cp -f x-ui /usr/local/x-ui/
+    cp -f x-ui.sh /usr/local/x-ui/
+    if [ -f "x-ui.service" ]; then
+        cp -f x-ui.service /etc/systemd/system/
+    fi
+    
+    # 复制 bin 目录
+    if [ -d "bin" ]; then
+        cp -rf bin /usr/local/x-ui/
+    fi
+    
+    # 设置权限
+    chmod +x /usr/local/x-ui/x-ui
+    chmod +x /usr/local/x-ui/x-ui.sh
+    chmod +x /usr/local/x-ui/bin/xray-linux-* 2>/dev/null || true
+    
+    # 创建符号链接
+    ln -sf /usr/local/x-ui/x-ui.sh /usr/bin/x-ui
+    
+    # 返回原目录
+    cd - > /dev/null
+}
+
+# 配置系统服务
+setup_service() {
+    info "配置系统服务..."
+    
+    # 如果服务文件不存在，创建它
+    if [ ! -f "/etc/systemd/system/x-ui.service" ]; then
+        cat > /etc/systemd/system/x-ui.service << 'EOF'
+[Unit]
+Description=x-ui Service
+Documentation=https://github.com/MHSanaei/3x-ui
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/x-ui/
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        info "创建了 systemd 服务文件"
+    fi
+    
+    systemctl daemon-reload
+    systemctl enable x-ui
+}
+
+# 配置防火墙
+setup_firewall() {
+    info "配置防火墙..."
+    
+    # 检查防火墙状态
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "active"; then
+        # ufw
+        ufw allow 54321/tcp comment "x-ui Panel"
+        ufw allow 5000/tcp comment "x-ui API"
+        ufw allow 10000-20000/tcp comment "x-ui Proxy Ports"
+        info "UFW 防火墙已配置"
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        # firewalld
+        firewall-cmd --permanent --add-port=54321/tcp
+        firewall-cmd --permanent --add-port=5000/tcp
+        firewall-cmd --permanent --add-port=10000-20000/tcp
+        firewall-cmd --reload
+        info "Firewalld 防火墙已配置"
+    elif command -v iptables >/dev/null 2>&1; then
+        # iptables
+        iptables -I INPUT -p tcp --dport 54321 -j ACCEPT
+        iptables -I INPUT -p tcp --dport 5000 -j ACCEPT
+        iptables -I INPUT -p tcp --dport 10000:20000 -j ACCEPT
+        info "iptables 规则已添加"
+        
+        # 尝试保存 iptables 规则
+        if command -v iptables-save >/dev/null 2>&1; then
+            iptables-save > /etc/iptables.rules 2>/dev/null || true
+        fi
+    else
+        warn "未检测到防火墙，跳过配置"
+    fi
+}
+
+# 启动服务
+start_service() {
+    info "启动 x-ui 服务..."
+    
+    systemctl daemon-reload
+    systemctl enable x-ui
+    
+    # 给服务一点时间启动
+    sleep 2
+    systemctl start x-ui
+    
+    # 等待服务启动
+    sleep 3
+    
+    # 检查服务状态
+    if systemctl is-active --quiet x-ui; then
+        info "x-ui 服务启动成功"
+        
+        # 显示服务状态
+        echo
+        systemctl status x-ui --no-pager -l
+    else
+        error "x-ui 服务启动失败"
+        systemctl status x-ui --no-pager -l
+        warn "尝试手动启动: systemctl start x-ui"
+    fi
+}
+
+# 显示安装信息
+show_info() {
+    echo
+    info "=================================================="
+    info "🎉 x-ui 安装完成！"
+    info "=================================================="
+    info "管理面板地址: http://你的服务器IP:54321"
+    info "默认用户名: admin"
+    info "默认密码: admin"
+    info ""
+    warn "⚠️  重要安全提醒:"
+    warn "1. 首次登录后请立即修改默认密码"
+    warn "2. 确保防火墙已正确配置"
+    warn "3. 建议使用强密码并定期更新"
+    info ""
+    info "常用命令:"
+    info "启动服务: systemctl start x-ui"
+    info "停止服务: systemctl stop x-ui"
+    info "重启服务: systemctl restart x-ui"
+    info "查看状态: systemctl status x-ui"
+    info "查看日志: journalctl -u x-ui -f"
+    info "=================================================="
+    echo
+}
+
+# 主函数
+main() {
+    info "开始 x-ui 自动安装过程..."
+    
+    # 执行安装步骤
+    check_root
+    check_architecture
+    install_dependencies
+    download_xui
+    extract_and_install
+    setup_service
+    setup_firewall
+    start_service
+    show_info
+    
+    info "安装脚本执行完毕"
+}
+
+# 显示警告信息
+echo
+warn "x-ui 安装脚本（修复版）"
+warn "此脚本将使用加速链接下载并手动安装，避免重复下载"
+echo
+read -p "是否继续安装? (y/N): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    info "安装已取消"
+    exit 0
+fi
+
+# 执行主函数
+main
