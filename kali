@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# Kali Linux 增强版中文配置脚本
-# 包含图形界面工具和更多配置选项
+# Kali Linux 国内源 + 中文环境一键配置脚本
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,85 +14,268 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 显示菜单
-show_menu() {
-    clear
-    echo -e "${GREEN}=================================${NC}"
-    echo -e "${GREEN}  Kali Linux 中文配置工具         ${NC}"
-    echo -e "${GREEN}=================================${NC}"
-    echo -e "${YELLOW}请选择配置选项：${NC}"
-    echo "1. 完整中文环境配置（推荐）"
-    echo "2. 仅安装中文字体"
-    echo "3. 仅安装中文输入法"
-    echo "4. 仅配置区域设置"
-    echo "5. 安装中文GUI工具"
-    echo "6. 修复常见中文问题"
-    echo "7. 查看当前语言设置"
-    echo "8. 退出"
-    echo -e "${BLUE}=================================${NC}"
+echo -e "${GREEN}=================================${NC}"
+echo -e "${GREEN}  Kali Linux 一键配置脚本          ${NC}"
+echo -e "${GREEN}=================================${NC}"
+echo ""
+
+# 备份原始源文件
+backup_sources() {
+    echo -e "${YELLOW}[1/12] 备份当前源文件...${NC}"
+    if [ -f "/etc/apt/sources.list" ]; then
+        cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%Y%m%d%H%M%S)
+        echo -e "${GREEN}源文件已备份${NC}"
+    fi
 }
 
-# 完整配置
-full_setup() {
-    echo -e "${YELLOW}[1/10] 更新软件源...${NC}"
+# 更新国内源
+update_sources() {
+    echo -e "${YELLOW}[2/12] 配置国内软件源（多源备用）...${NC}"
+    
+    # 清华源
+    cat > /tmp/sources_tsinghua.list << EOF
+# 清华大学 Kali 源
+deb https://mirrors.tuna.tsinghua.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://mirrors.tuna.tsinghua.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 阿里云源
+    cat > /tmp/sources_aliyun.list << EOF
+# 阿里云 Kali 源
+deb https://mirrors.aliyun.com/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://mirrors.aliyun.com/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 中科大源
+    cat > /tmp/sources_ustc.list << EOF
+# 中科大 Kali 源
+deb https://mirrors.ustc.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://mirrors.ustc.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 华为云源
+    cat > /tmp/sources_huawei.list << EOF
+# 华为云 Kali 源
+deb https://repo.huaweicloud.com/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://repo.huaweicloud.com/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 浙大源
+    cat > /tmp/sources_zju.list << EOF
+# 浙江大学 Kali 源
+deb https://mirrors.zju.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://mirrors.zju.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 南京大学源
+    cat > /tmp/sources_nju.list << EOF
+# 南京大学 Kali 源
+deb https://mirrors.nju.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+# deb-src https://mirrors.nju.edu.cn/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+
+    # 选择最快的源
+    echo -e "${BLUE}请选择要使用的软件源：${NC}"
+    echo "1. 清华大学源 (推荐)"
+    echo "2. 阿里云源"
+    echo "3. 中科大源"
+    echo "4. 华为云源"
+    echo "5. 自动测试选择最快源"
+    read -p "请输入选项 [1-5]: " source_choice
+
+    case $source_choice in
+        1)
+            cp /tmp/sources_tsinghua.list /etc/apt/sources.list
+            echo -e "${GREEN}已选择清华大学源${NC}"
+            ;;
+        2)
+            cp /tmp/sources_aliyun.list /etc/apt/sources.list
+            echo -e "${GREEN}已选择阿里云源${NC}"
+            ;;
+        3)
+            cp /tmp/sources_ustc.list /etc/apt/sources.list
+            echo -e "${GREEN}已选择中科大源${NC}"
+            ;;
+        4)
+            cp /tmp/sources_huawei.list /etc/apt/sources.list
+            echo -e "${GREEN}已选择华为云源${NC}"
+            ;;
+        5)
+            test_fastest_source
+            ;;
+        *)
+            cp /tmp/sources_tsinghua.list /etc/apt/sources.list
+            echo -e "${GREEN}已默认选择清华大学源${NC}"
+            ;;
+    esac
+
+    # 添加备用源到 sources.list.d
+    mkdir -p /etc/apt/sources.list.d
+    cp /tmp/sources_aliyun.list /etc/apt/sources.list.d/aliyun.list.bak
+    cp /tmp/sources_ustc.list /etc/apt/sources.list.d/ustc.list.bak
+    
+    # 添加 Kali 安全源
+    cat > /etc/apt/sources.list.d/kali-security.list << EOF
+# Kali 安全更新源
+deb https://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware
+EOF
+}
+
+# 测试最快源
+test_fastest_source() {
+    echo -e "${YELLOW}正在测试最快的软件源...${NC}"
+    
+    sources=(
+        "清华大学源 https://mirrors.tuna.tsinghua.edu.cn/kali"
+        "阿里云源 https://mirrors.aliyun.com/kali"
+        "中科大源 https://mirrors.ustc.edu.cn/kali"
+        "华为云源 https://repo.huaweicloud.com/kali"
+    )
+    
+    fastest_source=""
+    fastest_time=99999
+    
+    for source in "${sources[@]}"; do
+        name=$(echo $source | cut -d' ' -f1)
+        url=$(echo $source | cut -d' ' -f2)
+        
+        echo -n "测试 $name ... "
+        time=$(timeout 5 curl -o /dev/null -s -w "%{time_total}" $url 2>/dev/null || echo "999")
+        
+        if [ $(echo "$time < $fastest_time" | bc) -eq 1 ]; then
+            fastest_time=$time
+            fastest_source=$name
+        fi
+        echo "${time}秒"
+    done
+    
+    echo -e "${GREEN}最快源: $fastest_source (${fastest_time}秒)${NC}"
+    
+    case $fastest_source in
+        "清华大学源")
+            cp /tmp/sources_tsinghua.list /etc/apt/sources.list
+            ;;
+        "阿里云源")
+            cp /tmp/sources_aliyun.list /etc/apt/sources.list
+            ;;
+        "中科大源")
+            cp /tmp/sources_ustc.list /etc/apt/sources.list
+            ;;
+        "华为云源")
+            cp /tmp/sources_huawei.list /etc/apt/sources.list
+            ;;
+        *)
+            cp /tmp/sources_tsinghua.list /etc/apt/sources.list
+            ;;
+    esac
+}
+
+# 更新软件包
+update_packages() {
+    echo -e "${YELLOW}[3/12] 更新软件包列表...${NC}"
     apt update -y
     
-    echo -e "${YELLOW}[2/10] 安装中文字体包...${NC}"
+    echo -e "${YELLOW}[4/12] 升级已安装的软件包...${NC}"
+    apt upgrade -y --allow-downgrades
+    
+    echo -e "${YELLOW}[5/12] 安装常用工具...${NC}"
+    apt install -y curl wget git vim net-tools htop neofetch
+}
+
+# 安装中文字体
+install_chinese_fonts() {
+    echo -e "${YELLOW}[6/12] 安装中文字体...${NC}"
     apt install -y \
         fonts-wqy-microhei \
         fonts-wqy-zenhei \
-        xfonts-wqy \
+        fonts-noto-cjk \
+        fonts-droid-fallback \
         ttf-wqy-microhei \
         ttf-wqy-zenhei \
-        fonts-noto-cjk \
-        fonts-droid-fallback
+        xfonts-wqy
     
-    echo -e "${YELLOW}[3/10] 安装语言包...${NC}"
-    apt install -y \
-        language-pack-zh-hans \
-        language-pack-gnome-zh-hans \
-        kde-l10n-zhcn
-    
-    echo -e "${YELLOW}[4/10] 配置区域设置...${NC}"
-    sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
-    locale-gen
-    update-locale LANG=zh_CN.UTF-8
-    
-    echo -e "${YELLOW}[5/10] 安装输入法框架...${NC}"
-    # IBUS 方案
-    apt install -y \
-        ibus \
-        ibus-libpinyin \
-        ibus-pinyin \
-        ibus-gtk ibus-gtk3
-    
-    # Fcitx 方案（备用）
-    apt install -y \
-        fcitx \
-        fcitx-pinyin \
-        fcitx-googlepinyin \
-        fcitx-config-gtk \
-        fcitx-frontend-gtk2 \
-        fcitx-frontend-gtk3 \
-        fcitx-module-cloudpinyin
-    
-    echo -e "${YELLOW}[6/10] 安装中文软件包...${NC}"
-    apt install -y \
-        manpages-zh \
-        chromium-l10n \
-        libreoffice-l10n-zh-cn \
-        thunderbird-l10n-zh-cn
-    
-    echo -e "${YELLOW}[7/10] 安装中文桌面环境支持...${NC}"
-    if dpkg -l | grep -q "kali-desktop"; then
-        apt install -y \
-            kali-desktop-base \
-            kali-desktop-xfce \
-            kali-desktop-gnome
+    # 下载并安装微软雅黑字体（可选）
+    echo -e "${YELLOW}是否安装微软雅黑字体？ [y/N] ${NC}"
+    read -p "" install_msyh
+    if [[ $install_msyh =~ ^[Yy]$ ]]; then
+        wget -P /tmp https://github.com/xzx3344521/dock/raw/main/fonts/msyh.ttf
+        wget -P /tmp https://github.com/xzx3344521/dock/raw/main/fonts/msyhbd.ttf
+        mkdir -p /usr/share/fonts/truetype/microsoft
+        cp /tmp/msyh*.ttf /usr/share/fonts/truetype/microsoft/
+        fc-cache -fv
     fi
+}
+
+# 安装中文语言包
+install_language_pack() {
+    echo -e "${YELLOW}[7/12] 安装中文语言包...${NC}"
+    apt install -y \
+        locales \
+        locales-all \
+        language-pack-zh-hans \
+        language-pack-zh-hans-base \
+        language-pack-gnome-zh-hans
+}
+
+# 配置区域设置
+configure_locale() {
+    echo -e "${YELLOW}[8/12] 配置中文区域设置...${NC}"
     
-    echo -e "${YELLOW}[8/10] 配置环境变量...${NC}"
-    cat > /etc/profile.d/chinese.sh << EOF
+    # 生成中文区域
+    sed -i 's/^# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
+    sed -i 's/^# zh_CN.GBK GBK/zh_CN.GBK GBK/' /etc/locale.gen
+    locale-gen
+    
+    # 设置系统语言
+    update-locale LANG=zh_CN.UTF-8
+    update-locale LANGUAGE=zh_CN:zh
+}
+
+# 安装中文输入法
+install_input_method() {
+    echo -e "${YELLOW}[9/12] 安装中文输入法...${NC}"
+    
+    echo -e "${BLUE}请选择输入法：${NC}"
+    echo "1. IBus + 拼音 (推荐)"
+    echo "2. Fcitx + 拼音"
+    echo "3. 两者都安装"
+    read -p "请输入选项 [1-3]: " im_choice
+    
+    case $im_choice in
+        1)
+            apt install -y \
+                ibus \
+                ibus-libpinyin \
+                ibus-gtk ibus-gtk3 \
+                ibus-clutter
+            ;;
+        2)
+            apt install -y \
+                fcitx \
+                fcitx-pinyin \
+                fcitx-googlepinyin \
+                fcitx-config-gtk \
+                fcitx-frontend-gtk2 \
+                fcitx-frontend-gtk3 \
+                fcitx-module-cloudpinyin
+            ;;
+        3)
+            apt install -y \
+                ibus ibus-libpinyin \
+                fcitx fcitx-pinyin
+            ;;
+        *)
+            apt install -y ibus ibus-libpinyin
+            ;;
+    esac
+}
+
+# 配置环境变量
+configure_environment() {
+    echo -e "${YELLOW}[10/12] 配置环境变量...${NC}"
+    
+    # 系统级配置
+    cat > /etc/profile.d/chinese_env.sh << EOF
 export LANG=zh_CN.UTF-8
 export LANGUAGE=zh_CN:zh
 export LC_CTYPE="zh_CN.UTF-8"
@@ -109,147 +291,108 @@ export LC_TELEPHONE="zh_CN.UTF-8"
 export LC_MEASUREMENT="zh_CN.UTF-8"
 export LC_IDENTIFICATION="zh_CN.UTF-8"
 export LC_ALL=zh_CN.UTF-8
+
+# 输入法环境变量
+export GTK_IM_MODULE=ibus
+export QT_IM_MODULE=ibus
+export XMODIFIERS=@im=ibus
 EOF
     
-    echo -e "${YELLOW}[9/10] 配置用户设置...${NC}"
+    # 用户级配置
     if [ ! -z "$SUDO_USER" ]; then
         USER_HOME=$(getent passwd $SUDO_USER | cut -d: -f6)
         
+        echo "# 中文环境设置" >> "$USER_HOME/.bashrc"
+        echo "export LANG=zh_CN.UTF-8" >> "$USER_HOME/.bashrc"
+        echo "export LANGUAGE=zh_CN:zh" >> "$USER_HOME/.bashrc"
+        echo "export LC_ALL=zh_CN.UTF-8" >> "$USER_HOME/.bashrc"
+        echo "" >> "$USER_HOME/.bashrc"
+        echo "# 输入法设置" >> "$USER_HOME/.bashrc"
+        echo "export GTK_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
+        echo "export QT_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
+        echo "export XMODIFIERS=@im=ibus" >> "$USER_HOME/.bashrc"
+        
         # 创建输入法自动启动
         mkdir -p "$USER_HOME/.config/autostart"
-        cat > "$USER_HOME/.config/autostart/ibus.desktop" << EOF
+        cat > "$USER_HOME/.config/autostart/ibus-daemon.desktop" << 'EOF'
 [Desktop Entry]
 Type=Application
-Name=IBus
+Name=IBus Daemon
+Comment=IBus Input Method Framework
 Exec=ibus-daemon -drx
+OnlyShowIn=GNOME;XFCE;
+AutostartCondition=GSettings org.freedesktop.ibus.general preload-engines
 EOF
         
         chown -R $SUDO_USER:$SUDO_USER "$USER_HOME/.config"
     fi
+}
+
+# 安装中文软件
+install_chinese_software() {
+    echo -e "${YELLOW}[11/12] 安装中文软件包...${NC}"
     
-    echo -e "${YELLOW}[10/10] 清理缓存...${NC}"
+    apt install -y \
+        manpages-zh \
+        firefox-esr-l10n-zh-cn \
+        chromium-l10n \
+        thunderbird-l10n-zh-cn \
+        libreoffice-l10n-zh-cn \
+        libreoffice-help-zh-cn
+    
+    # 安装中文文档
+    apt install -y \
+        kali-docs-zh-cn \
+        kali-tools-doc-zh
+}
+
+# 清理和完成
+cleanup() {
+    echo -e "${YELLOW}[12/12] 清理和完成配置...${NC}"
+    
+    # 更新字体缓存
+    fc-cache -fv
+    
+    # 清理临时文件
+    rm -f /tmp/sources_*.list
+    rm -f /tmp/msyh*.ttf 2>/dev/null
+    
+    # 清理包缓存
     apt autoremove -y
     apt clean
     
-    echo -e "${GREEN}完整配置完成！${NC}"
-}
-
-# 仅安装字体
-fonts_only() {
-    apt update
-    apt install -y \
-        fonts-wqy-microhei \
-        fonts-wqy-zenhei \
-        fonts-noto-cjk \
-        fonts-droid-fallback
-    echo -e "${GREEN}中文字体安装完成！${NC}"
-}
-
-# 仅安装输入法
-input_method_only() {
-    apt update
-    apt install -y ibus ibus-libpinyin
-    echo -e "${GREEN}中文输入法安装完成！${NC}"
-    echo "请运行 'ibus-setup' 配置输入法"
-}
-
-# 配置区域设置
-locale_setup() {
-    apt install -y locales
-    dpkg-reconfigure locales
-    echo -e "${GREEN}区域设置完成！${NC}"
-}
-
-# 安装GUI工具
-gui_tools() {
-    apt update
-    apt install -y \
-        gedit \
-        gucharmap \
-        gnome-tweaks \
-        gnome-software \
-        synaptic
-    echo -e "${GREEN}GUI工具安装完成！${NC}"
-}
-
-# 修复常见问题
-fix_issues() {
-    echo -e "${YELLOW}修复常见中文问题...${NC}"
-    
-    # 修复字体显示问题
-    fc-cache -fv
-    
-    # 修复乱码问题
-    if [ -f "/etc/default/locale" ]; then
-        sed -i 's/LANG=.*/LANG="zh_CN.UTF-8"/' /etc/default/locale
-    fi
-    
-    # 修复输入法问题
-    if [ ! -z "$SUDO_USER" ]; then
-        USER_HOME=$(getent passwd $SUDO_USER | cut -d: -f6)
-        echo "export GTK_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
-        echo "export QT_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
-        echo "export XMODIFIERS=@im=ibus" >> "$USER_HOME/.bashrc"
-    fi
-    
-    echo -e "${GREEN}问题修复完成！${NC}"
-}
-
-# 显示当前设置
-show_current() {
-    echo -e "${YELLOW}当前语言设置：${NC}"
-    echo "LANG: $LANG"
-    echo "LANGUAGE: $LANGUAGE"
-    echo "LC_ALL: $LC_ALL"
+    echo -e "${GREEN}=================================${NC}"
+    echo -e "${GREEN}  配置完成！                    ${NC}"
+    echo -e "${GREEN}=================================${NC}"
     echo ""
-    echo -e "${YELLOW}已安装的语言包：${NC}"
-    locale -a | grep zh
+    echo -e "${YELLOW}重要提示：${NC}"
+    echo "1. 建议重启系统以应用所有更改"
+    echo "2. 输入法切换快捷键：Super+Space (Win+空格)"
+    echo "3. 如果需要配置输入法："
+    echo "   - IBus: 运行 ibus-setup"
+    echo "   - Fcitx: 运行 fcitx-config-gtk3"
     echo ""
-    echo -e "${YELLOW}已安装的中文字体：${NC}"
-    fc-list :lang=zh
+    echo -e "${BLUE}当前语言设置：${NC}"
+    echo "LANG=$LANG"
+    echo "LANGUAGE=$LANGUAGE"
+    echo "LC_ALL=$LC_ALL"
+    echo ""
+    echo -e "${GREEN}Enjoy your Chinese Kali Linux!${NC}"
 }
 
-# 主循环
-while true; do
-    show_menu
-    read -p "请输入选项 (1-8): " choice
-    
-    case $choice in
-        1)
-            full_setup
-            read -p "按回车键继续..."
-            ;;
-        2)
-            fonts_only
-            read -p "按回车键继续..."
-            ;;
-        3)
-            input_method_only
-            read -p "按回车键继续..."
-            ;;
-        4)
-            locale_setup
-            read -p "按回车键继续..."
-            ;;
-        5)
-            gui_tools
-            read -p "按回车键继续..."
-            ;;
-        6)
-            fix_issues
-            read -p "按回车键继续..."
-            ;;
-        7)
-            show_current
-            read -p "按回车键继续..."
-            ;;
-        8)
-            echo -e "${GREEN}再见！${NC}"
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}无效选项，请重新输入${NC}"
-            sleep 2
-            ;;
-    esac
-done
+# 主执行流程
+main() {
+    backup_sources
+    update_sources
+    update_packages
+    install_chinese_fonts
+    install_language_pack
+    configure_locale
+    install_input_method
+    configure_environment
+    install_chinese_software
+    cleanup
+}
+
+# 执行主函数
+main
