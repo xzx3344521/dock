@@ -3,7 +3,7 @@
 # x-ui 多架构自动安装脚本
 # 支持: amd64, 386, arm64, armv5, armv6, armv7, s390x
 # 默认配置: 端口 8443, 账号 3344, 密码 3344
-# 咸V咆哮制作 - 一键搞定所有架构！
+# 咸鱼咆哮制作 - 一键搞定所有架构！
 
 set -e  # 遇到错误立即退出
 
@@ -21,7 +21,7 @@ PANEL_PORT="8443"
 PANEL_USERNAME="3344"
 PANEL_PASSWORD="3344"
 
-# 架构映射表
+# 架构映射表 - 包含特殊文件名
 declare -A ARCH_MAP=(
     ["x86_64"]="amd64"
     ["i386"]="386"
@@ -35,8 +35,20 @@ declare -A ARCH_MAP=(
     ["s390x"]="s390x"
 )
 
+# 特殊文件名映射（用于arm64的特殊情况）
+declare -A FILENAME_MAP=(
+    ["amd64"]="x-ui-linux-amd64.tar.gz"
+    ["386"]="x-ui-linux-386.tar.gz"
+    ["arm64"]="x-ui-linux-arm64.tar.gz"  # 优先使用这个
+    ["arm64-alt"]="x-ui-linux-arm64%20(1).tar.gz"  # 备用文件名
+    ["armv5"]="x-ui-linux-armv5.tar.gz"
+    ["armv6"]="x-ui-linux-armv6.tar.gz"
+    ["armv7"]="x-ui-linux-armv7.tar.gz"
+    ["s390x"]="x-ui-linux-s390x.tar.gz"
+)
+
 # 下载URL基础
-BASE_URL="https://github.vps7k7k.xyz/https://github.com/MHSanaei/3x-ui/releases/download/v2.8.5"
+BASE_URL="https://g1.vps7k7k.xyz/xui"
 
 # 打印彩色信息
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -63,24 +75,9 @@ show_banner() {
     echo -e "║                                            ║"
     echo -e "║   ${GREEN}📦 支持所有主流CPU架构 ${RED}                ║"
     echo -e "║   ${BLUE}⚡ 自动检测 + 自动配置 ${RED}                  ║"
-    echo -e "║   ${PURPLE}🎯 咸V咆哮制作 ${RED}                       ║"
+    echo -e "║   ${PURPLE}🎯 咸鱼咆哮制作 ${RED}                       ║"
     echo -e "║                                            ║"
     echo -e "${RED}╚════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
-
-# 显示制作信息
-show_creator() {
-    echo
-    echo -e "${RED}╔══════════════════════════════════════════════════╗"
-    echo -e "║                                                      ║"
-    echo -e "║  ${YELLOW}🔥 咸V咆哮宣言：${RED}                                  ║"
-    echo -e "║                                                      ║"
-    echo -e "║  ${GREEN}「多架构支持，智能适配！」${RED}                         ║"
-    echo -e "║  ${CYAN}「一键配置，省心省力！」${RED}                             ║"
-    echo -e "║  ${PURPLE}「有问题就反馈，持续改进！」${RED}                       ║"
-    echo -e "║                                                      ║"
-    echo -e "${RED}╚══════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
@@ -102,14 +99,76 @@ detect_architecture() {
     fi
 }
 
-# 构建下载URL
+# 构建下载URL（智能选择最佳文件）
 build_download_url() {
-    local filename="x-ui-linux-${DETECTED_ARCH}.tar.gz"
-    DOWNLOAD_URL="${BASE_URL}/${filename}"
-    DOWNLOAD_FILENAME="$filename"
+    step "🔗 构建下载链接..."
     
-    info "📥 下载文件: $DOWNLOAD_FILENAME"
+    # 获取基础文件名
+    local base_filename="${FILENAME_MAP[$DETECTED_ARCH]}"
+    
+    if [ -z "$base_filename" ]; then
+        error "❌ 未找到对应架构的文件名"
+        exit 1
+    fi
+    
+    # 特殊处理arm64：尝试两个文件名
+    if [ "$DETECTED_ARCH" = "arm64" ]; then
+        info "🔄 ARM64架构检测到多个版本，智能选择..."
+        
+        # 主要文件
+        DOWNLOAD_FILENAME="x-ui-linux-arm64.tar.gz"
+        DOWNLOAD_URL="${BASE_URL}/${DOWNLOAD_FILENAME}"
+        
+        # 备用文件
+        ALT_FILENAME="x-ui-linux-arm64%20(1).tar.gz"
+        ALT_URL="${BASE_URL}/${ALT_FILENAME}"
+        
+        cyan "📄 主文件: $DOWNLOAD_FILENAME"
+        cyan "📄 备选: $ALT_FILENAME"
+        
+    else
+        DOWNLOAD_FILENAME="$base_filename"
+        DOWNLOAD_URL="${BASE_URL}/${DOWNLOAD_FILENAME}"
+        info "📥 下载文件: $DOWNLOAD_FILENAME"
+    fi
+    
     debug "🔗 下载URL: $DOWNLOAD_URL"
+}
+
+# 检查磁盘空间
+check_disk_space() {
+    step "💾 检查磁盘空间..."
+    
+    # 检查根分区可用空间
+    local available_kb=$(df / | awk 'NR==2 {print $4}' 2>/dev/null || echo "0")
+    local available_mb=$((available_kb / 1024))
+    
+    cyan "📊 当前可用磁盘空间: ${available_mb}MB"
+    
+    if [ $available_mb -lt 50 ]; then
+        warn "⚠ 磁盘空间紧张，尝试清理..."
+        
+        # 尝试清理临时文件
+        rm -rf /tmp/* 2>/dev/null || true
+        rm -rf /var/tmp/* 2>/dev/null || true
+        
+        # 重新检查
+        available_kb=$(df / | awk 'NR==2 {print $4}' 2>/dev/null || echo "0")
+        available_mb=$((available_kb / 1024))
+        cyan "📊 清理后可用空间: ${available_mb}MB"
+        
+        if [ $available_mb -lt 50 ]; then
+            error "❌ 磁盘空间不足！至少需要 50MB 可用空间"
+            read -p "⚠️  是否继续尝试? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                info "👋 安装已取消"
+                exit 1
+            fi
+        fi
+    else
+        info "✅ 磁盘空间充足"
+    fi
 }
 
 # 检查 root 权限
@@ -122,30 +181,51 @@ check_root() {
     info "✅ Root权限检查通过"
 }
 
-# 安装依赖
+# 安装依赖（优化版）
 install_dependencies() {
-    info "📦 检查并安装必要的依赖..."
+    info "📦 检查必要工具..."
+    
+    # 检查必要命令是否已存在
+    local tools_ok=true
+    
+    if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+        warn "⚠ 没有可用的下载工具 (wget/curl)"
+        tools_ok=false
+    fi
+    
+    if ! command -v tar >/dev/null 2>&1; then
+        warn "⚠ 缺少 tar 命令"
+        tools_ok=false
+    fi
+    
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "⚠ 缺少 systemctl 命令"
+    fi
+    
+    if $tools_ok; then
+        info "✅ 必要工具已就绪"
+        return 0
+    fi
+    
+    # 尝试安装缺少的工具
+    warn "🛠️  尝试安装缺少的工具..."
     
     if command -v apt-get >/dev/null 2>&1; then
         # Debian/Ubuntu
-        apt-get update
-        apt-get install -y wget tar curl sqlite3
+        apt-get update 2>/dev/null || true
+        apt-get install -y wget tar 2>/dev/null || true
     elif command -v yum >/dev/null 2>&1; then
         # CentOS/RHEL
-        yum install -y wget tar curl sqlite
+        yum install -y wget tar 2>/dev/null || true
     elif command -v dnf >/dev/null 2>&1; then
         # Fedora
-        dnf install -y wget tar curl sqlite
-    elif command -v apk >/dev/null 2>&1; then
-        # Alpine
-        apk add wget tar curl sqlite
-    else
-        warn "⚠ 无法确定包管理器，跳过依赖安装"
+        dnf install -y wget tar 2>/dev/null || true
     fi
-    info "✅ 依赖安装完成"
+    
+    info "✅ 依赖检查完成"
 }
 
-# 下载 x-ui
+# 下载 x-ui（智能版本选择）
 download_xui() {
     info "📥 开始下载 x-ui..."
     
@@ -162,15 +242,83 @@ download_xui() {
         fi
     fi
     
-    # 下载文件
-    info "⏬ 正在下载，请稍候..."
-    cyan "💾 文件: $DOWNLOAD_FILENAME"
-    
-    if wget --progress=bar:force "$DOWNLOAD_URL" -O "$DOWNLOAD_FILENAME"; then
-        info "✅ 下载完成！"
+    # 特殊处理ARM64：尝试多个文件
+    if [ "$DETECTED_ARCH" = "arm64" ]; then
+        download_arm64_smart
     else
-        error "❌ 下载失败！"
-        error "🔗 请检查URL: $DOWNLOAD_URL"
+        download_normal
+    fi
+}
+
+# 下载普通架构
+download_normal() {
+    cyan "💾 下载文件: $DOWNLOAD_FILENAME"
+    
+    # 尝试curl下载
+    if command -v curl >/dev/null 2>&1; then
+        info "⚡ 使用 curl 下载..."
+        if curl -L -o "$DOWNLOAD_FILENAME" "$DOWNLOAD_URL"; then
+            info "✅ 下载完成！"
+            return 0
+        fi
+    fi
+    
+    # 尝试wget下载
+    if command -v wget >/dev/null 2>&1; then
+        info "⚡ 使用 wget 下载..."
+        if wget --progress=bar:force "$DOWNLOAD_URL" -O "$DOWNLOAD_FILENAME"; then
+            info "✅ 下载完成！"
+            return 0
+        fi
+    fi
+    
+    error "❌ 下载失败！"
+    exit 1
+}
+
+# 智能下载ARM64版本
+download_arm64_smart() {
+    info "🤖 ARM64智能下载模式..."
+    
+    local downloaded=false
+    
+    # 尝试主文件
+    cyan "🔄 尝试主文件: $DOWNLOAD_FILENAME"
+    if command -v curl >/dev/null 2>&1; then
+        if curl -L -o "$DOWNLOAD_FILENAME" "$DOWNLOAD_URL"; then
+            info "✅ 主文件下载成功！"
+            downloaded=true
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget --progress=bar:force "$DOWNLOAD_URL" -O "$DOWNLOAD_FILENAME"; then
+            info "✅ 主文件下载成功！"
+            downloaded=true
+        fi
+    fi
+    
+    # 如果主文件失败，尝试备用文件
+    if [ "$downloaded" = false ]; then
+        warn "⚠ 主文件下载失败，尝试备选文件..."
+        DOWNLOAD_FILENAME="x-ui-linux-arm64 (1).tar.gz"
+        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-arm64%20(1).tar.gz"
+        
+        cyan "🔄 尝试备选文件: $DOWNLOAD_FILENAME"
+        
+        if command -v curl >/dev/null 2>&1; then
+            if curl -L -o "$DOWNLOAD_FILENAME" "$DOWNLOAD_URL"; then
+                info "✅ 备选文件下载成功！"
+                downloaded=true
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if wget --progress=bar:force "$DOWNLOAD_URL" -O "$DOWNLOAD_FILENAME"; then
+                info "✅ 备选文件下载成功！"
+                downloaded=true
+            fi
+        fi
+    fi
+    
+    if [ "$downloaded" = false ]; then
+        error "❌ ARM64版本下载失败，两个文件都不可用"
         exit 1
     fi
 }
@@ -184,15 +332,32 @@ extract_and_install() {
         exit 1
     fi
     
+    # 检查文件大小
+    local file_size=$(stat -c%s "$DOWNLOAD_FILENAME" 2>/dev/null || wc -c < "$DOWNLOAD_FILENAME")
+    local file_size_mb=$((file_size / 1024 / 1024))
+    cyan "📦 文件大小: ${file_size_mb}MB"
+    
+    if [ $file_size_mb -lt 10 ]; then
+        warn "⚠ 文件大小异常，可能下载失败"
+    fi
+    
     # 清理旧文件
     rm -rf x-ui-temp
     mkdir -p x-ui-temp
     
     # 解压文件
     cyan "🔓 正在解压 $DOWNLOAD_FILENAME..."
-    if ! tar zxvf "$DOWNLOAD_FILENAME" -C x-ui-temp; then
+    if tar zxvf "$DOWNLOAD_FILENAME" -C x-ui-temp; then
+        info "✅ 解压成功"
+    else
         error "❌ 解压失败，文件可能已损坏"
-        exit 1
+        # 尝试其他解压方式
+        warn "🔄 尝试其他解压方式..."
+        if gzip -dc "$DOWNLOAD_FILENAME" | tar xv -C x-ui-temp 2>/dev/null; then
+            info "✅ 备用解压方式成功"
+        else
+            exit 1
+        fi
     fi
     
     # 进入解压目录
@@ -201,14 +366,17 @@ extract_and_install() {
     # 查找 x-ui 目录
     if [ -d "x-ui" ]; then
         cd x-ui
+        info "📁 进入 x-ui 目录"
+    else
+        info "📁 当前目录包含:"
+        ls -la
     fi
     
-    info "🔧 开始手动安装 x-ui..."
+    info "🔧 开始安装 x-ui..."
     
     # 检查必要的文件
     if [ ! -f "x-ui" ]; then
         error "❌ 未找到 x-ui 可执行文件"
-        ls -la
         exit 1
     fi
     
@@ -217,9 +385,6 @@ extract_and_install() {
     if [ -f "x-ui.sh" ]; then
         chmod +x x-ui.sh
     fi
-    
-    # 手动安装
-    info "⚡ 执行手动安装..."
     
     # 停止可能存在的旧服务
     systemctl stop x-ui 2>/dev/null || true
@@ -289,145 +454,91 @@ EOF
     info "✅ 系统服务配置完成"
 }
 
-# 使用x-ui命令修改配置（修复版）
-modify_panel_config() {
-    step "🎛️  开始修改面板配置..."
+# 配置面板参数
+configure_panel() {
+    step "🎛️  配置面板参数..."
     
-    # 等待服务启动
-    info "⏳ 等待服务启动..."
-    systemctl start x-ui 2>/dev/null || true
-    sleep 8
-    
-    # 检查服务状态
-    if ! systemctl is-active --quiet x-ui; then
-        warn "⚠ 服务未运行，尝试启动..."
-        systemctl start x-ui
-        sleep 5
-    fi
-    
-    # 修改端口
-    info "🔧 修改面板端口为: $PANEL_PORT"
-    if command -v x-ui >/dev/null 2>&1; then
-        # 使用expect自动交互修改端口
-        if command -v expect >/dev/null 2>&1; then
-            expect << EOF
-spawn x-ui
-expect "Please enter your selection"
-send "9\r"
-expect "Enter port number"
-send "$PANEL_PORT\r"
-expect "Restart the panel"
-send "y\r"
-expect "Press enter to return"
-send "\r"
-expect eof
-EOF
-            info "✅ 端口修改完成"
-        else
-            warn "⚠ 未安装expect，无法自动修改端口"
-            info "💡 请手动运行 'x-ui' 选择 9 修改端口为 $PANEL_PORT"
-        fi
-        
-        sleep 3
-        
-        # 修改用户名和密码
-        info "👤 修改用户名和密码为: $PANEL_USERNAME/$PANEL_PASSWORD"
-        if command -v expect >/dev/null 2>&1; then
-            expect << EOF
-spawn x-ui
-expect "Please enter your selection"
-send "6\r"
-expect "Are you sure to reset"
-send "y\r"
-expect "Please set the login username"
-send "$PANEL_USERNAME\r"
-expect "Please set the login password"
-send "$PANEL_PASSWORD\r"
-expect "Do you want to disable currently configured two-factor authentication"
-send "y\r"
-expect "Restart the panel"
-send "y\r"
-expect "Press enter to return"
-send "\r"
-expect eof
-EOF
-            info "✅ 账号密码修改完成"
-        else
-            warn "⚠ 未安装expect，无法自动修改账号密码"
-            info "💡 请手动运行 'x-ui' 选择 6 修改账号密码"
-        fi
-    else
-        error "❌ x-ui 命令未找到，无法自动配置"
-        info "💡 请手动运行配置命令"
-    fi
-}
-
-# 直接修改数据库配置（备用方案）
-direct_db_config() {
-    step "🗃️  尝试直接修改数据库配置..."
-    
-    # 停止服务
+    # 停止服务以进行配置
+    info "🛑 停止 x-ui 服务进行配置..."
     systemctl stop x-ui 2>/dev/null || true
     sleep 3
     
-    # 检查数据库文件
-    if [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-        info "🔧 直接修改数据库配置..."
-        
-        # 修改端口
-        if sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = '$PANEL_PORT' WHERE key = 'port';"; then
-            info "✅ 端口修改为: $PANEL_PORT"
-        else
-            warn "⚠ 端口修改失败"
-        fi
-        
-        # 修改用户名密码
-        if sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username = '$PANEL_USERNAME', password = '$PANEL_PASSWORD' WHERE id = 1;"; then
-            info "✅ 账号修改为: $PANEL_USERNAME"
-            info "✅ 密码修改为: $PANEL_PASSWORD"
-        else
-            warn "⚠ 账号密码修改失败"
-        fi
-        
-        # 禁用默认凭据警告
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = 'false' WHERE key = 'hasDefaultCredential';" 2>/dev/null || true
-    else
-        warn "⚠ 无法直接修改数据库，将使用交互式配置"
+    # 启动服务创建初始数据库
+    info "🗃️  初始化数据库..."
+    if systemctl start x-ui; then
+        sleep 5
+        systemctl stop x-ui
+        sleep 3
     fi
     
-    # 重启服务
+    # 使用交互方式修改配置
+    modify_with_xui_command
+}
+
+# 使用x-ui命令修改配置
+modify_with_xui_command() {
+    # 确保x-ui命令可用
+    if [ ! -f "/usr/bin/x-ui" ]; then
+        ln -sf /usr/local/x-ui/x-ui /usr/bin/x-ui 2>/dev/null || true
+    fi
+    
+    # 启动服务
     systemctl start x-ui
     sleep 5
+    
+    if command -v x-ui >/dev/null 2>&1; then
+        info "🔄 修改面板端口为: $PANEL_PORT"
+        
+        # 修改端口
+        echo -e "9\n$PANEL_PORT\ny\n" | timeout 10 x-ui >/dev/null 2>&1 || true
+        sleep 2
+        
+        info "🔄 修改账号密码为: $PANEL_USERNAME/$PANEL_PASSWORD"
+        
+        # 修改账号密码
+        echo -e "6\ny\n$PANEL_USERNAME\n$PANEL_PASSWORD\ny\ny\n" | timeout 10 x-ui >/dev/null 2>&1 || true
+        sleep 2
+        
+        info "✅ 配置修改完成"
+    else
+        warn "⚠ 无法自动配置，请手动配置:"
+        info "💡 运行 'x-ui' 后选择:"
+        info "   1. 选择 9 修改端口为 $PANEL_PORT"
+        info "   2. 选择 6 修改账号为 $PANEL_USERNAME 密码为 $PANEL_PASSWORD"
+    fi
 }
 
 # 配置防火墙
 setup_firewall() {
     info "🔥 配置防火墙..."
     
-    # 检查防火墙状态
+    # 检查并配置端口
+    local port_open=false
+    
+    # 尝试ufw
     if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "active"; then
-        # ufw
-        ufw allow ${PANEL_PORT}/tcp comment "x-ui Panel"
-        ufw allow 10000-20000/tcp comment "x-ui Proxy Ports"
-        info "✅ UFW 防火墙已配置"
-    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-        # firewalld
+        ufw allow ${PANEL_PORT}/tcp
+        info "✅ UFW 已开放端口 $PANEL_PORT"
+        port_open=true
+    fi
+    
+    # 尝试firewalld
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp
-        firewall-cmd --permanent --add-port=10000-20000/tcp
         firewall-cmd --reload
-        info "✅ Firewalld 防火墙已配置"
-    elif command -v iptables >/dev/null 2>&1; then
-        # iptables
+        info "✅ Firewalld 已开放端口 $PANEL_PORT"
+        port_open=true
+    fi
+    
+    # 尝试iptables
+    if command -v iptables >/dev/null 2>&1; then
         iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT
-        iptables -I INPUT -p tcp --dport 10000:20000 -j ACCEPT
-        info "✅ iptables 规则已添加"
-        
-        # 尝试保存 iptables 规则
-        if command -v iptables-save >/dev/null 2>&1; then
-            iptables-save > /etc/iptables.rules 2>/dev/null || true
-        fi
-    else
-        warn "⚠ 未检测到防火墙，跳过配置"
+        info "✅ iptables 已开放端口 $PANEL_PORT"
+        port_open=true
+    fi
+    
+    if [ "$port_open" = false ]; then
+        warn "⚠ 未配置防火墙，请手动开放端口 $PANEL_PORT"
     fi
 }
 
@@ -438,22 +549,20 @@ start_service() {
     systemctl daemon-reload
     systemctl enable x-ui
     
-    # 重启服务确保配置生效
     if systemctl restart x-ui; then
-        info "✅ x-ui 服务重启成功"
+        info "✅ x-ui 服务启动成功"
     else
-        error "❌ x-ui 服务重启失败"
-        return 1
+        warn "⚠ 服务启动异常，尝试直接启动..."
+        systemctl start x-ui
     fi
     
-    # 等待服务启动
-    sleep 8
+    sleep 5
     
     # 检查服务状态
     if systemctl is-active --quiet x-ui; then
         info "✅ x-ui 服务运行正常"
     else
-        warn "⚠ x-ui 服务未运行，检查日志中..."
+        warn "⚠ x-ui 服务状态异常"
         systemctl status x-ui --no-pager -l
     fi
 }
@@ -465,30 +574,17 @@ verify_installation() {
     # 检查服务状态
     if systemctl is-active --quiet x-ui; then
         info "✅ 服务运行正常"
+        
+        # 检查端口
+        if command -v ss >/dev/null 2>&1; then
+            if ss -tunlp | grep -q ":${PANEL_PORT} "; then
+                info "✅ 端口 $PANEL_PORT 监听正常"
+            else
+                warn "⚠ 端口 $PANEL_PORT 未监听"
+            fi
+        fi
     else
         warn "⚠ 服务未运行"
-        return 0
-    fi
-    
-    # 检查端口监听
-    if command -v netstat >/dev/null 2>&1; then
-        if netstat -tunlp 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            info "✅ 端口 ${PANEL_PORT} 监听正常"
-        else
-            warn "⚠ 端口 ${PANEL_PORT} 未监听"
-        fi
-    elif command -v ss >/dev/null 2>&1; then
-        if ss -tunlp 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            info "✅ 端口 ${PANEL_PORT} 监听正常"
-        else
-            warn "⚠ 端口 ${PANEL_PORT} 未监听"
-        fi
-    fi
-    
-    # 显示最终配置
-    info "📋 最终配置验证:"
-    if command -v x-ui >/dev/null 2>&1; then
-        echo "n" | x-ui | grep -A 10 "View Current Settings" || true
     fi
     
     info "✅ 验证完成"
@@ -497,12 +593,12 @@ verify_installation() {
 # 显示安装信息
 show_info() {
     # 获取服务器IP
-    local server_ip=$(curl -s --connect-timeout 5 ipv4.icanhazip.com || hostname -I | awk '{print $1}' || echo "你的服务器IP")
+    local server_ip=$( (curl -s --connect-timeout 3 ipv4.icanhazip.com || hostname -I | awk '{print $1}' || echo "你的服务器IP") 2>/dev/null )
     
     echo
     echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
     echo -e "║                                                      ║"
-    echo -e "║    🎉 X-UI 多架构安装完成！咸v咆哮制作！           ║"
+    echo -e "║    🎉 X-UI 多架构安装完成！咸鱼咆哮制作！           ║"
     echo -e "║                                                      ║"
     echo -e "╚══════════════════════════════════════════════════╝${NC}"
     echo
@@ -511,20 +607,8 @@ show_info() {
     info "👤 用户名: $PANEL_USERNAME"
     info "🔑 密码: $PANEL_PASSWORD"
     echo
-    cyan "💡 配置状态: 已自动设置端口和账号密码"
-    echo
-    warn "⚠️  重要提醒:"
-    warn "1. 请立即访问面板验证登录"
-    warn "2. 建议定期修改密码" 
-    warn "3. 确保防火墙已正确配置"
-    echo
-    info "🔧 常用命令:"
-    info "   启动服务: systemctl start x-ui"
-    info "   停止服务: systemctl stop x-ui"
-    info "   重启服务: systemctl restart x-ui"
-    info "   查看状态: systemctl status x-ui"
-    info "   查看日志: journalctl -u x-ui -f"
-    info "   管理菜单: x-ui"
+    info "🔧 管理命令: x-ui"
+    info "📊 服务状态: systemctl status x-ui"
     echo
     
     # 显示访问URL
@@ -555,43 +639,32 @@ show_arch_info() {
     echo
 }
 
-# 安装expect工具
-install_expect() {
-    if ! command -v expect >/dev/null 2>&1; then
-        info "📦 安装 expect 工具用于自动配置..."
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get install -y expect
-        elif command -v yum >/dev/null 2>&1; then
-            yum install -y expect
-        elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y expect
-        elif command -v apk >/dev/null 2>&1; then
-            apk add expect
-        else
-            warn "⚠ 无法安装expect，将使用备用配置方案"
-        fi
-    fi
+# 显示欢迎信息
+show_welcome() {
+    show_banner
+    echo
+    cyan "🔧 默认配置: 端口 ${PANEL_PORT} | 账号 ${PANEL_USERNAME} | 密码 ${PANEL_PASSWORD}"
+    cyan "🌐 下载源: g1.vps7k7k.xyz"
+    echo
 }
 
 # 主函数
 main() {
-    show_banner
-    show_creator
+    show_welcome
     
     info "🚀 开始 x-ui 多架构自动安装..."
     show_arch_info
     
     # 执行安装步骤
     check_root
+    check_disk_space
     detect_architecture
     build_download_url
     install_dependencies
-    install_expect
     download_xui
     extract_and_install
     setup_service
-    direct_db_config  # 先尝试直接修改数据库
-    modify_panel_config  # 再使用交互式配置确保生效
+    configure_panel
     setup_firewall
     start_service
     verify_installation
@@ -600,19 +673,15 @@ main() {
     echo
     echo -e "${RED}╔════════════════════════════════════════╗"
     echo -e "║                                            ║"
-    echo -e "║   ${YELLOW}🎊 安装完成！咸v咆哮感谢使用！${RED}      ║"
-    echo -e "║   ${GREEN}🐟 不想上班不想上班！${RED}           ║"
+    echo -e "║   ${YELLOW}🎊 安装完成！咸鱼咆哮感谢使用！${RED}      ║"
+    echo -e "║   ${GREEN}🐟 有问题请反馈，持续改进！${RED}           ║"
     echo -e "║                                            ║"
     echo -e "${RED}╚════════════════════════════════════════╝${NC}"
     echo
 }
 
-# 显示欢迎信息
-show_banner
-echo
-cyan "🔧 默认配置: 端口 ${PANEL_PORT} | 账号 ${PANEL_USERNAME} | 密码 ${PANEL_PASSWORD}"
-echo
-
+# 询问是否开始
+show_welcome
 read -p "🔥 是否开始安装? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
