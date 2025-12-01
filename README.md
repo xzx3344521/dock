@@ -106,7 +106,10 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/OpenList
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/frps)
 
 ```
-
+# x-ui安装脚本
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/xu)
+`
 
 
 
