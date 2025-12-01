@@ -1,0 +1,255 @@
+#!/bin/bash
+
+# Kali Linux 增强版中文配置脚本
+# 包含图形界面工具和更多配置选项
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 检查是否为 root 用户
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}请使用 sudo 运行此脚本${NC}"
+    exit 1
+fi
+
+# 显示菜单
+show_menu() {
+    clear
+    echo -e "${GREEN}=================================${NC}"
+    echo -e "${GREEN}  Kali Linux 中文配置工具         ${NC}"
+    echo -e "${GREEN}=================================${NC}"
+    echo -e "${YELLOW}请选择配置选项：${NC}"
+    echo "1. 完整中文环境配置（推荐）"
+    echo "2. 仅安装中文字体"
+    echo "3. 仅安装中文输入法"
+    echo "4. 仅配置区域设置"
+    echo "5. 安装中文GUI工具"
+    echo "6. 修复常见中文问题"
+    echo "7. 查看当前语言设置"
+    echo "8. 退出"
+    echo -e "${BLUE}=================================${NC}"
+}
+
+# 完整配置
+full_setup() {
+    echo -e "${YELLOW}[1/10] 更新软件源...${NC}"
+    apt update -y
+    
+    echo -e "${YELLOW}[2/10] 安装中文字体包...${NC}"
+    apt install -y \
+        fonts-wqy-microhei \
+        fonts-wqy-zenhei \
+        xfonts-wqy \
+        ttf-wqy-microhei \
+        ttf-wqy-zenhei \
+        fonts-noto-cjk \
+        fonts-droid-fallback
+    
+    echo -e "${YELLOW}[3/10] 安装语言包...${NC}"
+    apt install -y \
+        language-pack-zh-hans \
+        language-pack-gnome-zh-hans \
+        kde-l10n-zhcn
+    
+    echo -e "${YELLOW}[4/10] 配置区域设置...${NC}"
+    sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
+    locale-gen
+    update-locale LANG=zh_CN.UTF-8
+    
+    echo -e "${YELLOW}[5/10] 安装输入法框架...${NC}"
+    # IBUS 方案
+    apt install -y \
+        ibus \
+        ibus-libpinyin \
+        ibus-pinyin \
+        ibus-gtk ibus-gtk3
+    
+    # Fcitx 方案（备用）
+    apt install -y \
+        fcitx \
+        fcitx-pinyin \
+        fcitx-googlepinyin \
+        fcitx-config-gtk \
+        fcitx-frontend-gtk2 \
+        fcitx-frontend-gtk3 \
+        fcitx-module-cloudpinyin
+    
+    echo -e "${YELLOW}[6/10] 安装中文软件包...${NC}"
+    apt install -y \
+        manpages-zh \
+        chromium-l10n \
+        libreoffice-l10n-zh-cn \
+        thunderbird-l10n-zh-cn
+    
+    echo -e "${YELLOW}[7/10] 安装中文桌面环境支持...${NC}"
+    if dpkg -l | grep -q "kali-desktop"; then
+        apt install -y \
+            kali-desktop-base \
+            kali-desktop-xfce \
+            kali-desktop-gnome
+    fi
+    
+    echo -e "${YELLOW}[8/10] 配置环境变量...${NC}"
+    cat > /etc/profile.d/chinese.sh << EOF
+export LANG=zh_CN.UTF-8
+export LANGUAGE=zh_CN:zh
+export LC_CTYPE="zh_CN.UTF-8"
+export LC_NUMERIC="zh_CN.UTF-8"
+export LC_TIME="zh_CN.UTF-8"
+export LC_COLLATE="zh_CN.UTF-8"
+export LC_MONETARY="zh_CN.UTF-8"
+export LC_MESSAGES="zh_CN.UTF-8"
+export LC_PAPER="zh_CN.UTF-8"
+export LC_NAME="zh_CN.UTF-8"
+export LC_ADDRESS="zh_CN.UTF-8"
+export LC_TELEPHONE="zh_CN.UTF-8"
+export LC_MEASUREMENT="zh_CN.UTF-8"
+export LC_IDENTIFICATION="zh_CN.UTF-8"
+export LC_ALL=zh_CN.UTF-8
+EOF
+    
+    echo -e "${YELLOW}[9/10] 配置用户设置...${NC}"
+    if [ ! -z "$SUDO_USER" ]; then
+        USER_HOME=$(getent passwd $SUDO_USER | cut -d: -f6)
+        
+        # 创建输入法自动启动
+        mkdir -p "$USER_HOME/.config/autostart"
+        cat > "$USER_HOME/.config/autostart/ibus.desktop" << EOF
+[Desktop Entry]
+Type=Application
+Name=IBus
+Exec=ibus-daemon -drx
+EOF
+        
+        chown -R $SUDO_USER:$SUDO_USER "$USER_HOME/.config"
+    fi
+    
+    echo -e "${YELLOW}[10/10] 清理缓存...${NC}"
+    apt autoremove -y
+    apt clean
+    
+    echo -e "${GREEN}完整配置完成！${NC}"
+}
+
+# 仅安装字体
+fonts_only() {
+    apt update
+    apt install -y \
+        fonts-wqy-microhei \
+        fonts-wqy-zenhei \
+        fonts-noto-cjk \
+        fonts-droid-fallback
+    echo -e "${GREEN}中文字体安装完成！${NC}"
+}
+
+# 仅安装输入法
+input_method_only() {
+    apt update
+    apt install -y ibus ibus-libpinyin
+    echo -e "${GREEN}中文输入法安装完成！${NC}"
+    echo "请运行 'ibus-setup' 配置输入法"
+}
+
+# 配置区域设置
+locale_setup() {
+    apt install -y locales
+    dpkg-reconfigure locales
+    echo -e "${GREEN}区域设置完成！${NC}"
+}
+
+# 安装GUI工具
+gui_tools() {
+    apt update
+    apt install -y \
+        gedit \
+        gucharmap \
+        gnome-tweaks \
+        gnome-software \
+        synaptic
+    echo -e "${GREEN}GUI工具安装完成！${NC}"
+}
+
+# 修复常见问题
+fix_issues() {
+    echo -e "${YELLOW}修复常见中文问题...${NC}"
+    
+    # 修复字体显示问题
+    fc-cache -fv
+    
+    # 修复乱码问题
+    if [ -f "/etc/default/locale" ]; then
+        sed -i 's/LANG=.*/LANG="zh_CN.UTF-8"/' /etc/default/locale
+    fi
+    
+    # 修复输入法问题
+    if [ ! -z "$SUDO_USER" ]; then
+        USER_HOME=$(getent passwd $SUDO_USER | cut -d: -f6)
+        echo "export GTK_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
+        echo "export QT_IM_MODULE=ibus" >> "$USER_HOME/.bashrc"
+        echo "export XMODIFIERS=@im=ibus" >> "$USER_HOME/.bashrc"
+    fi
+    
+    echo -e "${GREEN}问题修复完成！${NC}"
+}
+
+# 显示当前设置
+show_current() {
+    echo -e "${YELLOW}当前语言设置：${NC}"
+    echo "LANG: $LANG"
+    echo "LANGUAGE: $LANGUAGE"
+    echo "LC_ALL: $LC_ALL"
+    echo ""
+    echo -e "${YELLOW}已安装的语言包：${NC}"
+    locale -a | grep zh
+    echo ""
+    echo -e "${YELLOW}已安装的中文字体：${NC}"
+    fc-list :lang=zh
+}
+
+# 主循环
+while true; do
+    show_menu
+    read -p "请输入选项 (1-8): " choice
+    
+    case $choice in
+        1)
+            full_setup
+            read -p "按回车键继续..."
+            ;;
+        2)
+            fonts_only
+            read -p "按回车键继续..."
+            ;;
+        3)
+            input_method_only
+            read -p "按回车键继续..."
+            ;;
+        4)
+            locale_setup
+            read -p "按回车键继续..."
+            ;;
+        5)
+            gui_tools
+            read -p "按回车键继续..."
+            ;;
+        6)
+            fix_issues
+            read -p "按回车键继续..."
+            ;;
+        7)
+            show_current
+            read -p "按回车键继续..."
+            ;;
+        8)
+            echo -e "${GREEN}再见！${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}无效选项，请重新输入${NC}"
+            sleep 2
+            ;;
+    esac
+done
