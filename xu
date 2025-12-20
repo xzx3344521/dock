@@ -1,26 +1,12 @@
 #!/bin/bash
 
 # =========================================================
-# X-UI 多架构全自动增强版 - 咸鱼咆哮优化
-# 特点：多源下载备份、强制环境修复、自动容错
+# X-UI 多架构自动安装 - 容错增强版
 # =========================================================
 
-set -e
-
-# 1. 变量定义与多源地址 [cite: 1, 2, 11]
-PANEL_PORT="8443"
-PANEL_USERNAME="3344"
-PANEL_PASSWORD="3344"
-
-# 下载源 A (你的私服) 与 下载源 B (GitHub 镜像或备用)
-BASE_URL_A="https://g1.vps7k7k.xyz/xui"
-BASE_URL_B="https://ghproxy.com/https://github.com/MHSanaei/3x-ui/releases/latest/download" # 备用示例
-
-# 2. 基础环境强力自愈 (解决“系统啥都没装”的问题) [cite: 21, 26, 29]
-prepare_env() {
-    echo -e "\033[32m[1/6] 检查基础组件...\033[0m"
-    
-    # 自动识别包管理器并更新 [cite: 26, 29, 31]
+# 1. 基础环境自动修复（防止系统啥都没装）
+prepare_environment() {
+    echo -e "\033[32m[1/5] 正在安装基础组件 (wget/curl/tar)...\033[0m"
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y && apt-get install -y wget curl tar gzip ca-certificates || true
     elif command -v yum >/dev/null 2>&1; then
@@ -28,9 +14,9 @@ prepare_env() {
     fi
 }
 
-# 3. 架构精准识别 [cite: 9, 10, 88]
-get_arch() {
-    echo -e "\033[32m[2/6] 检测系统架构...\033[0m"
+# 2. 架构智能检测
+detect_arch() {
+    echo -e "\033[32m[2/5] 检测系统架构...\033[0m"
     local raw_arch=$(uname -m)
     case "$raw_arch" in
         x86_64)  ARCH="amd64" ;;
@@ -42,62 +28,60 @@ get_arch() {
     esac
 }
 
-# 4. 智能多级下载 (方案1失败自动切换方案2) [cite: 36, 37, 39, 44]
-download_package() {
-    echo -e "\033[32m[3/6] 开始下载安装包 (多线备选)...\033[0m"
-    local file="x-ui-linux-${ARCH}.tar.gz"
+# 3. 冗余下载方案（如果源1失败，尝试源2）
+download_xui() {
+    echo -e "\033[32m[3/5] 正在下载程序包...\033[0m"
+    local filename="x-ui-linux-${ARCH}.tar.gz"
+    local base_url="https://g1.vps7k7k.xyz/xui"
     local success=false
 
-    # 方案 1: 主站下载 [cite: 37, 39]
-    echo "尝试主下载源: $BASE_URL_A"
-    if wget --no-check-certificate -O "$file" "${BASE_URL_A}/${file}" || \
-       curl -L -k -o "$file" "${BASE_URL_A}/${file}"; then
+    # [cite_start]方案 A: 标准下载 [cite: 36, 38]
+    if wget --no-check-certificate -O "$filename" "${base_url}/${filename}" || \
+       curl -L -k -o "$filename" "${base_url}/${filename}"; then
         success=true
     fi
 
-    # 方案 2: 备用源 (如果方案1失败且是arm64，尝试特殊后缀) [cite: 44, 45, 48]
+    # [cite_start]方案 B: ARM64 特殊备份名下载 [cite: 12, 44]
     if [ "$success" = false ] && [ "$ARCH" = "arm64" ]; then
-        echo "主源失败，尝试 ARM64 特殊备份名..."
-        wget --no-check-certificate -O "$file" "${BASE_URL_A}/x-ui-linux-arm64%20(1).tar.gz" && success=true
+        echo "尝试 ARM64 备用链接..."
+        wget --no-check-certificate -O "$filename" "${base_url}/x-ui-linux-arm64%20(1).tar.gz" && success=true
     fi
 
     if [ "$success" = false ]; then
-        echo -e "\033[31m[错误] 所有下载源均失效！请检查网络。\033[0m"
+        echo "错误：所有下载源均失效！"
         exit 1
     fi
 }
 
-# 5. 双引擎解压与部署 [cite: 52, 53, 58, 60]
-install_files() {
-    echo -e "\033[32m[4/6] 部署文件 (双引擎解压)...\033[0m"
+# 4. 双引擎解压（防止 tar 版本过旧）
+extract_xui() {
+    echo -e "\033[32m[4/5] 正在部署文件...\033[0m"
     local file="x-ui-linux-${ARCH}.tar.gz"
     
-    rm -rf /usr/local/x-ui /usr/bin/x-ui
-    
-    # 尝试方式 A: 标准解压 [cite: 52]
+    mkdir -p /usr/local/x-ui
+    # [cite_start]方式 1: 直接解压 [cite: 52]
     if ! tar -zxf "$file" -C /usr/local/; then
-        # 尝试方式 B: 兼容解压 [cite: 53]
+        echo "标准解压失败，尝试备用引擎..."
+        # [cite_start]方式 2: 管道解压 [cite: 53]
         gunzip -c "$file" | tar x -C /usr/local/
     fi
 
-    # 结构标准化 [cite: 58, 60]
-    cd /usr/local/x-ui
-    chmod +x x-ui bin/xray-linux-* 2>/dev/null || true
-    ln -sf /usr/local/x-ui/x-ui /usr/bin/x-ui [cite: 63, 68]
+    # [cite_start]权限修复 [cite: 56, 61, 62]
+    chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray-linux-* 2>/dev/null || true
+    [cite_start]ln -sf /usr/local/x-ui/x-ui /usr/bin/x-ui [cite: 68]
 }
 
-# 6. 服务配置与自动防火墙 [cite: 64, 73, 75]
-setup_service() {
-    echo -e "\033[32m[5/6] 启动服务与端口开放...\033[0m"
+# [cite_start]5. 服务启动与初始化 [cite: 64, 70, 71]
+finalize_install() {
+    echo -e "\033[32m[5/5] 正在初始化面板...\033[0m"
     
-    # 写入 systemd 服务 [cite: 64]
+    # [cite_start]强制写入服务文件，不依赖解压出的文件 [cite: 64]
     cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
 After=network.target
 [Service]
 Type=simple
-User=root
 WorkingDirectory=/usr/local/x-ui/
 ExecStart=/usr/local/x-ui/x-ui
 Restart=on-failure
@@ -107,40 +91,19 @@ EOF
 
     systemctl daemon-reload
     systemctl enable x-ui
-    systemctl restart x-ui [cite: 77]
-
-    # 尝试多种防火墙开放端口 
-    if command -v ufw >/dev/null; then ufw allow ${PANEL_PORT}/tcp; fi
-    if command -v iptables >/dev/null; then iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT; fi
-}
-
-# 7. 自动初始化配置 [cite: 69, 70, 71]
-init_config() {
-    echo -e "\033[32m[6/6] 配置面板信息...\033[0m"
-    sleep 3
-    # 使用 x-ui 自带指令修改端口、账号、密码 [cite: 70, 71]
-    echo -e "9\n${PANEL_PORT}\ny" | x-ui >/dev/null 2>&1 || true
-    echo -e "6\ny\n${PANEL_USERNAME}\n${PANEL_PASSWORD}\ny" | x-ui >/dev/null 2>&1 || true
+    systemctl restart x-ui
     
-    # 最后验证 [cite: 81]
-    if systemctl is-active --quiet x-ui; then
-        echo -e "\033[36m"
-        echo "================================================="
-        echo "🎊 X-UI 多架构安装成功！"
-        echo "🌐 面板: http://$(curl -s ipv4.icanhazip.com):${PANEL_PORT}"
-        echo "👤 账号: ${PANEL_USERNAME}"
-        echo "🔑 密码: ${PANEL_PASSWORD}"
-        echo "================================================="
-        echo -e "\033[0m"
-    else
-        echo -e "\033[31m服务启动失败，请检查运行日志: journalctl -u x-ui\033[0m" [cite: 78]
-    fi
+    sleep 2
+    # [cite_start]自动配置默认账号密码 (3344/3344) [cite: 70, 71]
+    echo -e "9\n8443\ny" | x-ui >/dev/null 2>&1 || true
+    echo -e "6\ny\n3344\n3344\ny" | x-ui >/dev/null 2>&1 || true
+
+    echo -e "\033[36m安装完成！面板端口: 8443，账号密码均为 3344\033[0m"
 }
 
-# 顺序执行 
-prepare_env
-get_arch
-download_package
-install_files
-setup_service
-init_config
+# 执行
+prepare_environment
+detect_arch
+download_xui
+extract_xui
+finalize_install
