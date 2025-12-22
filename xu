@@ -1,526 +1,174 @@
 #!/bin/bash
-# 咸v咆哮制作
 
-# x-ui 多架构自动安装脚本
-# 支持: amd64, 386, arm64, armv5, armv6, armv7, s390x
-# 默认配置: 端口 8443, 账号 3344, 密码 3344
-# 咸v咆哮制作 - 一键搞定所有架构！
+# ==========================================
+# 标题：咸v咆哮制作 - X-UI 自动安装脚本
+# 功能：自动适配架构、下载私有源、配置端口8443、账号密码3344
+# ==========================================
 
-set -e  # 遇到错误立即退出
+# 字体颜色配置
+Red="\033[31m"
+Green="\033[32m"
+Yellow="\033[33m"
+Blue="\033[36m"
+Font="\033[0m"
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# 1. 第一步：显示定制大名
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Blue}#                                               #${Font}"
+echo -e "${Blue}#               咸v咆哮制作                     #${Font}"
+echo -e "${Blue}#                                               #${Font}"
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Green}正在初始化安装程序...${Font}"
+sleep 2
 
-# 自定义配置
-PANEL_PORT="8443"
-PANEL_USERNAME="3344"
-PANEL_PASSWORD="3344"
+# 检查是否为Root用户
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${Red}错误：本脚本必须以 root 身份运行！${Font}" 
+   exit 1
+fi
 
-# 架构映射
-declare -A ARCH_MAP=(
-    ["x86_64"]="amd64"
-    ["amd64"]="amd64"
-    ["i386"]="386"
-    ["i686"]="386"
-    ["aarch64"]="arm64"
-    ["armv8l"]="arm64"
-    ["armv7l"]="armv7"
-    ["armv6l"]="armv6"
-    ["armv5l"]="armv5"
-    ["s390x"]="s390x"
-)
+# 2. 第二步：更新系统基础软件架构
+echo -e "${Yellow}正在更新系统并安装基础组件 (curl, wget, tar)...${Font}"
+if [[ -f /etc/redhat-release ]]; then
+    yum update -y
+    yum install -y curl wget tar
+elif cat /etc/issue | grep -q -E -i "debian"; then
+    apt-get update -y
+    apt-get install -y curl wget tar
+elif cat /etc/issue | grep -q -E -i "ubuntu"; then
+    apt-get update -y
+    apt-get install -y curl wget tar
+else
+    echo -e "${Red}不支持的操作系统，请使用 Debian/Ubuntu/CentOS${Font}"
+    exit 1
+fi
 
-# GitHub Release URL
-BASE_URL="https://github.com/vaxilu/x-ui/releases/latest/download"
-
-# 变量
-DETECTED_ARCH=""
+# 3. 第三步：自动判断系统架构并选择下载链接
+echo -e "${Yellow}正在检测系统架构...${Font}"
+ARCH=$(uname -m)
 DOWNLOAD_URL=""
-DOWNLOAD_FILENAME=""
 
-# 日志函数
-info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; }
-step() { echo -e "${BLUE}[STEP]${NC} $1"; }
-debug() { echo -e "${PURPLE}[DEBUG]${NC} $1"; }
-cyan() { echo -e "${CYAN}$1${NC}"; }
+# 你的私有源地址配置
+BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
 
-# 显示大字标题
-show_banner() {
-    echo
-    echo -e "${CYAN}"
-    echo " ███████╗██╗  ██╗    ██╗   ██╗██╗"
-    echo " ╚══███╔╝╚██╗██╔╝    ██║   ██║██║"
-    echo "   ███╔╝  ╚███╔╝     ██║   ██║██║"
-    echo "  ███╔╝   ██╔██╗     ██║   ██║██║"
-    echo " ███████╗██╔╝ ██╗    ╚██████╔╝██║"
-    echo " ╚══════╝╚═╝  ╚═╝     ╚═════╝ ╚═╝"
-    echo
-    echo -e "${RED}╔════════════════════════════════════════╗"
-    echo -e "║                                            ║"
-    echo -e "║   ${YELLOW}🚀 超强多架构 X-UI 一键安装脚本 ${RED}       ║"
-    echo -e "║                                            ║"
-    echo -e "║   ${GREEN}📦 支持所有主流CPU架构 ${RED}                ║"
-    echo -e "║   ${BLUE}⚡ 自动检测 + 自动配置 ${RED}                  ║"
-    echo -e "║   ${PURPLE}🎯 咸v咆哮制作 - 专治各种不服！ ${RED}       ║"
-    echo -e "║                                            ║"
-    echo -e "${RED}╚════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
+case $ARCH in
+    x86_64)
+        echo -e "检测到架构: ${Green}AMD64${Font}"
+        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-amd64.tar.gz"
+        ;;
+    aarch64)
+        echo -e "检测到架构: ${Green}ARM64${Font}"
+        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-arm64.tar.gz"
+        ;;
+    i386|i686)
+        echo -e "检测到架构: ${Green}386 (x86)${Font}"
+        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-386.tar.gz"
+        ;;
+    armv5*)
+        echo -e "检测到架构: ${Green}ARMv5${Font}"
+        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-armv5.tar.gz"
+        ;;
+    *)
+        echo -e "${Red}错误：不支持的架构 $ARCH${Font}"
+        exit 1
+        ;;
+esac
 
-# 显示咆哮信息
-show_roar() {
-    echo
-    echo -e "${RED}╔══════════════════════════════════════════════════╗"
-    echo -e "║                                                      ║"
-    echo -e "║  ${YELLOW}🔥 咸v咆哮宣言：${RED}                                  ║"
-    echo -e "║                                                      ║"
-    echo -e "║  ${GREEN}「管你什么架构，老子一键搞定！」${RED}                 ║"
-    echo -e "║  ${CYAN}「AMD、Intel、ARM、IBM... 通通拿下！」${RED}            ║"
-    echo -e "║  ${PURPLE}「拒绝复杂操作，只要简单粗暴！」${RED}                 ║"
-    echo -e "║                                                      ║"
-    echo -e "${RED}╚══════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
+# 4. 第四步：下载并安装
+cd /usr/local/
+# 清理旧文件
+rm -rf /usr/local/x-ui
+rm -f /usr/local/x-ui-linux-*.tar.gz
 
-# 检测系统架构
-detect_architecture() {
-    local arch=$(uname -m)
-    step "🔍 正在检测系统架构..."
-    cyan "👉 当前架构: $arch"
+echo -e "${Yellow}开始下载安装包: ${DOWNLOAD_URL}${Font}"
 
-    # 映射到对应的下载架构
-    if [[ -n "${ARCH_MAP[$arch]}" ]]; then
-        DETECTED_ARCH="${ARCH_MAP[$arch]}"
-        info "🎯 架构识别: $arch → $DETECTED_ARCH"
-    else
-        error "❌ 不支持的架构: $arch"
-        echo
-        show_arch_info
+# 下载 (尝试 wget，失败则尝试 curl)
+wget -N --no-check-certificate -O x-ui-install.tar.gz "$DOWNLOAD_URL"
+if [[ $? -ne 0 ]]; then
+    echo -e "${Red}Wget下载失败，尝试使用Curl...${Font}"
+    curl -L -k -o x-ui-install.tar.gz "$DOWNLOAD_URL"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${Red}致命错误：无法从指定源下载安装包，请检查网络或链接有效性。${Font}"
         exit 1
     fi
-}
+fi
 
-# 构建下载URL
-build_download_url() {
-    local filename="x-ui-linux-${DETECTED_ARCH}.tar.gz"
-    DOWNLOAD_URL="${BASE_URL}/${filename}"
-    DOWNLOAD_FILENAME="$filename"
+echo -e "${Green}下载成功，正在解压安装...${Font}"
+tar zxvf x-ui-install.tar.gz
+rm x-ui-install.tar.gz
 
-    info "📥 下载文件: $DOWNLOAD_FILENAME"
-    debug "🔗 下载URL: $DOWNLOAD_URL"
-}
+# 确保二进制权限
+cd x-ui
+chmod +x x-ui bin/xray-linux-* 2>/dev/null
 
-# 检查 root 权限
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        error "❌ 请使用 root 权限运行此脚本！"
-        info "💡 尝试使用: ${CYAN}sudo bash $0${NC}"
-        exit 1
-    fi
-    info "✅ Root权限检查通过"
-}
+# 5. 第五步：自动修改端口、账号、密码
+echo -e "${Yellow}正在配置面板设置 (端口: 8443, 账号: 3344, 密码: 3344)...${Font}"
 
-# 安装依赖
-install_dependencies() {
-    info "📦 检查并安装必要的依赖..."
+# 停止可能存在的服务
+systemctl stop x-ui 2>/dev/null
 
-    if command -v apt-get >/dev/null 2>&1; then
-        # Debian/Ubuntu
-        apt-get update
-        apt-get install -y wget tar curl sqlite3
-    elif command -v yum >/dev/null 2>&1; then
-        # CentOS/RHEL
-        yum install -y wget tar curl sqlite
-    elif command -v dnf >/dev/null 2>&1; then
-        # Fedora
-        dnf install -y wget tar curl sqlite
-    elif command -v apk >/dev/null 2>&1; then
-        # Alpine
-        apk add wget tar curl sqlite
-    else
-        warn "⚠ 无法确定包管理器，跳过依赖安装"
-    fi
-    info "✅ 依赖安装完成"
-}
+# 使用 x-ui 内置命令修改设置
+# 注意：这里假设下载的 x-ui 版本支持 setting 命令，这是标准 x-ui 的功能
+./x-ui setting -port 8443 -username 3344 -password 3344
 
-# 下载 x-ui
-download_xui() {
-    info "📥 开始下载 x-ui..."
+if [[ $? -ne 0 ]]; then
+    echo -e "${Red}配置修改失败！可能安装包版本过旧或不兼容 setting 命令。${Font}"
+    # 备用方案：如果内置命令失败，通常需要操作sqlite数据库，但通常x-ui都支持命令
+else
+    echo -e "${Green}配置修改成功！${Font}"
+fi
 
-    # 检查是否已存在文件
-    if [ -f "$DOWNLOAD_FILENAME" ]; then
-        warn "📁 发现已存在的文件: $DOWNLOAD_FILENAME"
-        read -p "🔄 是否重新下载? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -f "$DOWNLOAD_FILENAME"
-        else
-            info "✅ 使用已存在的文件"
-            return 0
-        fi
-    fi
-
-    # 下载文件
-    info "⏬ 正在下载，请稍候..."
-    cyan "💾 文件: $DOWNLOAD_FILENAME"
-    
-    if wget --progress=bar:force "$DOWNLOAD_URL" -O "$DOWNLOAD_FILENAME"; then
-        info "✅ 下载完成！"
-    else
-        error "❌ 下载失败！"
-        error "🔗 请检查URL: $DOWNLOAD_URL"
-        exit 1
-    fi
-}
-
-# 解压并手动安装
-extract_and_install() {
-    info "📂 解压文件..."
-
-    if [ ! -f "$DOWNLOAD_FILENAME" ]; then
-        error "❌ 文件 $DOWNLOAD_FILENAME 不存在"
-        exit 1
-    fi
-
-    # 清理旧文件
-    rm -rf x-ui-temp 2>/dev/null || true
-    mkdir -p x-ui-temp
-
-    # 解压文件
-    cyan "🔓 正在解压 $DOWNLOAD_FILENAME..."
-    if ! tar zxvf "$DOWNLOAD_FILENAME" -C x-ui-temp; then
-        error "❌ 解压失败，文件可能已损坏"
-        exit 1
-    fi
-
-    # 进入解压目录
-    if [ -d "x-ui-temp/x-ui" ]; then
-        cd x-ui-temp/x-ui
-    else
-        cd x-ui-temp
-    fi
-
-    info "🔧 开始手动安装 x-ui..."
-
-    # 检查必要的文件
-    if [ ! -f "x-ui" ]; then
-        error "❌ 未找到 x-ui 可执行文件"
-        ls -la
-        exit 1
-    fi
-
-    # 检查 sqlite3 数据库文件
-    if [ ! -f "x-ui.db" ]; then
-        # 如果压缩包里没有数据库文件，我们会稍后创建
-        warn "⚠ 未找到数据库文件，将使用默认配置"
-    fi
-
-    # 手动安装
-    info "⚡ 执行手动安装..."
-
-    # 停止可能存在的旧服务
-    systemctl stop x-ui 2>/dev/null || true
-
-    # 创建目录
-    mkdir -p /etc/x-ui
-    mkdir -p /usr/local/x-ui
-
-    # 复制文件
-    cp -f x-ui /usr/local/x-ui/
-    chmod +x /usr/local/x-ui/x-ui
-
-    # 复制数据库文件（如果存在）
-    if [ -f "x-ui.db" ]; then
-        cp -f x-ui.db /etc/x-ui/
-    fi
-
-    # 创建软链接
-    ln -sf /usr/local/x-ui/x-ui /usr/local/bin/x-ui
-
-    # 返回原目录
-    cd - > /dev/null
-    info "✅ 文件安装完成"
-}
-
-# 配置系统服务
-setup_service() {
-    info "🔌 配置系统服务..."
-
-    # 如果服务文件不存在，创建它
-    if [ ! -f "/etc/systemd/system/x-ui.service" ]; then
-        cat > /etc/systemd/system/x-ui.service << EOF
+# 6. 配置系统服务 (Systemd)
+echo -e "${Yellow}配置 Systemd 服务...${Font}"
+cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
 After=network.target
-Wants=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/usr/local/x-ui
-ExecStart=/usr/local/x-ui/x-ui
+User=root
 Restart=on-failure
 RestartSec=5s
+ExecStart=/usr/local/x-ui/x-ui
 
 [Install]
 WantedBy=multi-user.target
 EOF
-        info "📄 创建了 systemd 服务文件"
-    fi
 
-    systemctl daemon-reload
-    systemctl enable x-ui
-    info "✅ 系统服务配置完成"
-}
+# 重载服务并启动
+systemctl daemon-reload
+systemctl enable x-ui
+systemctl restart x-ui
 
-# 自定义配置面板
-customize_panel() {
-    step "🎛️  开始自定义配置面板..."
-
-    # 停止服务以进行配置
-    info "🛑 停止 x-ui 服务进行配置..."
-    systemctl stop x-ui 2>/dev/null || true
-
-    # 等待服务停止
-    sleep 3
-
-    # 确保目录存在
-    mkdir -p /etc/x-ui
-
-    # 初始化数据库（如果不存在）
-    if [ ! -f "/etc/x-ui/x-ui.db" ]; then
-        info "🗃️  初始化数据库..."
-
-        # 启动服务以创建初始数据库
-        if systemctl start x-ui; then
-            sleep 5
-            systemctl stop x-ui
-            sleep 3
-        else
-            warn "⚠ 服务启动失败，尝试直接创建数据库结构"
-        fi
-    fi
-
-    # 修改配置（如果数据库存在且可写）
-    if [ -f "/etc/x-ui/x-ui.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-        cyan "🔧 设置面板端口: $PANEL_PORT"
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = '$PANEL_PORT' WHERE key = 'port';" 2>/dev/null || true
-
-        cyan "👤 设置面板账号: $PANEL_USERNAME"
-        cyan "🔑 设置面板密码: $PANEL_PASSWORD"
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE users SET username = '$PANEL_USERNAME', password = '$PANEL_PASSWORD' WHERE id = 1;" 2>/dev/null || true
-
-        sqlite3 /etc/x-ui/x-ui.db "UPDATE setting SET value = 'false' WHERE key = 'hasDefaultCredential';" 2>/dev/null || true
-        info "✅ 自定义配置完成"
-    else
-        warn "⚠ 无法自动配置数据库，请在安装后手动修改配置"
-    fi
-}
-
-# 配置防火墙
-setup_firewall() {
-    info "🔥 配置防火墙..."
-
-    # 检查防火墙状态
-    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "active"; then
-        # ufw
-        ufw allow ${PANEL_PORT}/tcp comment "x-ui Panel"
-        ufw allow 10000-20000/tcp comment "x-ui Proxy Ports"
-        info "✅ UFW 防火墙已配置"
-    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-        # firewalld
-        firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp
-        firewall-cmd --permanent --add-port=10000-20000/tcp
-        firewall-cmd --reload
-        info "✅ Firewalld 防火墙已配置"
-    elif command -v iptables >/dev/null 2>&1; then
-        # iptables
-        iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT
-        iptables -I INPUT -p tcp --dport 10000:20000 -j ACCEPT
-        info "✅ iptables 规则已添加"
-
-        # 尝试保存 iptables 规则
-        if command -v iptables-save >/dev/null 2>&1; then
-            iptables-save > /etc/iptables.rules 2>/dev/null || true
-        fi
-    else
-        warn "⚠ 未检测到防火墙，跳过配置"
-    fi
-}
-
-# 启动服务
-start_service() {
-    info "🚀 启动 x-ui 服务..."
-
-    systemctl daemon-reload
-    systemctl enable x-ui
-
-    # 启动服务
-    if systemctl start x-ui; then
-        info "✅ x-ui 服务启动命令执行成功"
-    else
-        error "❌ x-ui 服务启动失败"
-        return 1
-    fi
-
-    # 等待服务启动
-    sleep 3
-
-    # 检查服务状态
-    if systemctl is-active --quiet x-ui; then
-        info "✅ x-ui 服务运行正常"
-
-        # 显示服务状态
-        echo
-        systemctl status x-ui --no-pager -l
-    else
-        warn "⚠ x-ui 服务未运行，检查日志中..."
-        systemctl status x-ui --no-pager -l
-        warn "💡 尝试手动启动: systemctl start x-ui"
-    fi
-}
-
-# 验证安装
-verify_installation() {
-    step "🔍 验证安装..."
-
-    # 检查服务状态
-    if systemctl is-active --quiet x-ui; then
-        info "✅ 服务运行正常"
-    else
-        warn "⚠ 服务未运行，但安装已完成"
-        return 0
-    fi
-
-    # 检查端口监听
-    if command -v netstat >/dev/null 2>&1; then
-        if netstat -tunlp 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            info "✅ 端口 ${PANEL_PORT} 监听正常"
-        else
-            warn "⚠ 端口 ${PANEL_PORT} 未监听"
-        fi
-    elif command -v ss >/dev/null 2>&1; then
-        if ss -tunlp 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            info "✅ 端口 ${PANEL_PORT} 监听正常"
-        else
-            warn "⚠ 端口 ${PANEL_PORT} 未监听"
-        fi
-    fi
-
-    info "✅ 验证完成"
-}
-
-# 显示安装信息
-show_info() {
-    local server_ip=$(curl -s --connect-timeout 5 ipv4.icanhazip.com || hostname -I | awk '{print $1}' || echo "你的服务器IP")
-
-    echo
-    echo -e "${GREEN}╔══════════════════════════════════════════════════╗"
-    echo -e "║                                                      ║"
-    echo -e "║    🎉 X-UI 多架构安装完成！咸v咆哮牛逼！            ║"
-    echo -e "║                                                      ║"
-    echo -e "╚══════════════════════════════════════════════════╝${NC}"
-    echo
-    info "🖥️  系统架构: $(uname -m) → $DETECTED_ARCH"
-    info "🌐 管理面板: http://${server_ip}:${PANEL_PORT}"
-    info "👤 用户名: $PANEL_USERNAME"
-    info "🔑 密码: $PANEL_PASSWORD"
-    echo
-    cyan "💡 面板状态: 已自动配置为指定端口和账号"
-    echo
-    warn "⚠️  重要安全提醒:"
-    warn "1. 请立即访问面板验证登录"
-    warn "2. 建议定期修改密码"
-    warn "3. 确保防火墙已正确配置"
-    echo
-    info "🔧 常用命令:"
-    info "   启动服务: systemctl start x-ui"
-    info "   停止服务: systemctl stop x-ui"
-    info "   重启服务: systemctl restart x-ui"
-    info "   查看状态: systemctl status x-ui"
-    info "   查看日志: journalctl -u x-ui -f"
-    info "   管理菜单: x-ui"
-    echo
-
-    # 显示访问URL
-    echo -e "${CYAN}"
-    echo "╔══════════════════════════════════════════════════╗"
-    echo "║                 🚀 立即访问 🚀                 ║"
-    echo "║                                                  ║"
-    echo "║     http://${server_ip}:${PANEL_PORT}           ║"
-    echo "║                                                  ║"
-    echo "║           👤 账号: $PANEL_USERNAME               ║"
-    echo "║            🔑 密码: $PANEL_PASSWORD              ║"
-    echo "║                                                  ║"
-    echo "╚══════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
-
-# 显示架构信息
-show_arch_info() {
-    echo
-    info "🖥️  支持的架构列表:"
-    echo -e "  ${CYAN}x86_64${NC}  - 64位 Intel/AMD 处理器 ${GREEN}→ amd64${NC}"
-    echo -e "  ${CYAN}i386${NC}    - 32位 Intel/AMD 处理器 ${GREEN}→ 386${NC}" 
-    echo -e "  ${CYAN}aarch64${NC} - 64位 ARM 处理器 ${GREEN}→ arm64${NC}"
-    echo -e "  ${CYAN}armv7l${NC}  - 32位 ARM v7 ${GREEN}→ armv7${NC}"
-    echo -e "  ${CYAN}armv6l${NC}  - 32位 ARM v6 ${GREEN}→ armv6${NC}"
-    echo -e "  ${CYAN}armv5l${NC}  - 32位 ARM v5 ${GREEN}→ armv5${NC}"
-    echo -e "  ${CYAN}s390x${NC}   - IBM 大型机 ${GREEN}→ s390x${NC}"
-    echo
-}
-
-# 主函数
-main() {
-    show_banner
-    show_roar
-    
-    info "🚀 开始 x-ui 多架构自动安装..."
-    show_arch_info
-
-    # 执行安装步骤
-    check_root
-    detect_architecture
-    build_download_url
-    install_dependencies
-    download_xui
-    extract_and_install
-    setup_service
-    customize_panel
-    setup_firewall
-    start_service
-    verify_installation
-    show_info
-
-    echo
-    echo -e "${RED}╔════════════════════════════════════════╗"
-    echo -e "║                                            ║"
-    echo -e "║   ${YELLOW}🎊 安装完成！咸v咆哮感谢使用！${RED}      ║"
-    echo -e "║   ${GREEN}💪 有問題就咆哮，老子帮你搞定！${RED}      ║"
-    echo -e "║                                            ║"
-    echo -e "${RED}╚════════════════════════════════════════╝${NC}"
-    echo
-}
-
-# 显示欢迎信息
-show_banner
-echo
-cyan "🔧 默认配置: 端口 ${PANEL_PORT} | 账号 ${PANEL_USERNAME} | 密码 ${PANEL_PASSWORD}"
-echo
-
-read -p "🔥 是否开始安装? (y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    info "👋 安装已取消"
-    exit 0
+# 7. 防火墙放行 (尝试放行 8443)
+echo -e "${Yellow}尝试配置防火墙放行端口 8443...${Font}"
+if command -v ufw > /dev/null; then
+    ufw allow 8443/tcp
+    ufw reload
+elif command -v firewall-cmd > /dev/null; then
+    firewall-cmd --zone=public --add-port=8443/tcp --permanent
+    firewall-cmd --reload
+else
+    # iptables 备用
+    iptables -I INPUT -p tcp --dport 8443 -j ACCEPT 2>/dev/null
 fi
 
-# 执行主函数
-main
+# 8. 验证与完成显示
+sleep 2
+STATUS=$(systemctl is-active x-ui)
+if [[ "$STATUS" == "active" ]]; then
+    IP=$(curl -s4m8 ip.sb)
+    echo -e ""
+    echo -e "${Blue}#################################################${Font}"
+    echo -e "${Green}             X-UI 安装配置完成！                 ${Font}"
+    echo -e "${Blue}#################################################${Font}"
+    echo -e "脚本制作：${Yellow}咸v咆哮制作${Font}"
+    echo -e "运行状态：${Green}已启动${Font}"
+    echo -e "访问地址：${Green}http://$IP:8443${Font}"
+    echo -e "用户名  ：${Green}3344${Font}"
+    echo -e "密码    ：${Green}3344${Font}"
+    echo -e "${Blue}#################################################${Font}"
+else
+    echo -e "${Red}安装似乎完成了，但服务启动失败，请检查日志：journalctl -u x-ui${Font}"
+fi
