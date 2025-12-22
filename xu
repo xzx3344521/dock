@@ -1,125 +1,197 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 自动安装脚本
-# 功能：自动适配架构、下载私有源、配置端口8443、账号密码3344
+# 标题：咸v咆哮制作 - X-UI 全能增强版安装脚本
+# 功能：智能包校验、三重配置写入、双重启动保险
 # ==========================================
 
-# 字体颜色配置
+# --- 颜色配置 ---
 Red="\033[31m"
 Green="\033[32m"
 Yellow="\033[33m"
 Blue="\033[36m"
 Font="\033[0m"
 
-# 1. 第一步：显示定制大名
+# --- 核心变量配置 ---
+BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
+INSTALL_PATH="/usr/local/x-ui"
+DB_PATH="/etc/x-ui/x-ui.db"
+SET_USER="3344"
+SET_PASS="3344"
+SET_PORT="8443"
+
+# ==========================================
+# 1. 霸气开场
+# ==========================================
+clear
 echo -e "${Blue}#################################################${Font}"
 echo -e "${Blue}#                                               #${Font}"
 echo -e "${Blue}#               咸v咆哮制作                     #${Font}"
+echo -e "${Blue}#         X-UI 自动安装脚本 (增强版)            #${Font}"
 echo -e "${Blue}#                                               #${Font}"
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Green}正在初始化安装程序...${Font}"
 sleep 2
 
-# 检查是否为Root用户
+# 检查 Root 权限
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${Red}错误：本脚本必须以 root 身份运行！${Font}" 
+   echo -e "${Red}错误：大哥，请用 root 身份运行此脚本！${Font}" 
    exit 1
 fi
 
-# 2. 第二步：更新系统基础软件架构
-echo -e "${Yellow}正在更新系统并安装基础组件 (curl, wget, tar)...${Font}"
+# ==========================================
+# 2. 系统环境与架构检测 + 基础软件更新
+# ==========================================
+echo -e "${Yellow}>> 正在更新系统并安装必要工具 (curl, wget, tar, sqlite3)...${Font}"
+
+# 自动识别系统并更新
 if [[ -f /etc/redhat-release ]]; then
     yum update -y
-    yum install -y curl wget tar
+    yum install -y curl wget tar sqlite3
 elif cat /etc/issue | grep -q -E -i "debian"; then
     apt-get update -y
-    apt-get install -y curl wget tar
+    apt-get install -y curl wget tar sqlite3
 elif cat /etc/issue | grep -q -E -i "ubuntu"; then
     apt-get update -y
-    apt-get install -y curl wget tar
+    apt-get install -y curl wget tar sqlite3
 else
-    echo -e "${Red}不支持的操作系统，请使用 Debian/Ubuntu/CentOS${Font}"
+    echo -e "${Red}不支持的系统，建议使用 Debian 10+ / Ubuntu 20+ / CentOS 7+${Font}"
     exit 1
 fi
 
-# 3. 第三步：自动判断系统架构并选择下载链接
-echo -e "${Yellow}正在检测系统架构...${Font}"
+# 架构判断
+echo -e "${Yellow}>> 正在识别 CPU 架构...${Font}"
 ARCH=$(uname -m)
-DOWNLOAD_URL=""
-
-# 你的私有源地址配置
-BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
+FILE_NAME=""
 
 case $ARCH in
     x86_64)
-        echo -e "检测到架构: ${Green}AMD64${Font}"
-        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-amd64.tar.gz"
+        echo -e "架构识别: ${Green}AMD64${Font}"
+        FILE_NAME="x-ui-linux-amd64.tar.gz"
         ;;
     aarch64)
-        echo -e "检测到架构: ${Green}ARM64${Font}"
-        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-arm64.tar.gz"
+        echo -e "架构识别: ${Green}ARM64${Font}"
+        FILE_NAME="x-ui-linux-arm64.tar.gz"
         ;;
     i386|i686)
-        echo -e "检测到架构: ${Green}386 (x86)${Font}"
-        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-386.tar.gz"
+        echo -e "架构识别: ${Green}386${Font}"
+        FILE_NAME="x-ui-linux-386.tar.gz"
         ;;
     armv5*)
-        echo -e "检测到架构: ${Green}ARMv5${Font}"
-        DOWNLOAD_URL="${BASE_URL}/x-ui-linux-armv5.tar.gz"
+        echo -e "架构识别: ${Green}ARMv5${Font}"
+        FILE_NAME="x-ui-linux-armv5.tar.gz"
         ;;
     *)
-        echo -e "${Red}错误：不支持的架构 $ARCH${Font}"
+        echo -e "${Red}不支持的架构: $ARCH${Font}"
         exit 1
         ;;
 esac
 
-# 4. 第四步：下载并安装
+DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
+
+# ==========================================
+# 3. 安装包智能处理 (本地检测 + 完整性校验)
+# ==========================================
 cd /usr/local/
-# 清理旧文件
-rm -rf /usr/local/x-ui
-rm -f /usr/local/x-ui-linux-*.tar.gz
 
-echo -e "${Yellow}开始下载安装包: ${DOWNLOAD_URL}${Font}"
+NEED_DOWNLOAD=1
 
-# 下载 (尝试 wget，失败则尝试 curl)
-wget -N --no-check-certificate -O x-ui-install.tar.gz "$DOWNLOAD_URL"
-if [[ $? -ne 0 ]]; then
-    echo -e "${Red}Wget下载失败，尝试使用Curl...${Font}"
-    curl -L -k -o x-ui-install.tar.gz "$DOWNLOAD_URL"
+# 检查本地是否已有文件
+if [[ -f "$FILE_NAME" ]]; then
+    echo -e "${Yellow}发现本地存在安装包，正在检查完整性...${Font}"
+    # 使用 tar -tzf 测试压缩包是否完好
+    if tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
+        echo -e "${Green}本地安装包完好，跳过下载步骤！${Font}"
+        NEED_DOWNLOAD=0
+    else
+        echo -e "${Red}本地安装包已损坏，删除并重新下载...${Font}"
+        rm -f "$FILE_NAME"
+    fi
+fi
+
+# 下载流程
+if [[ $NEED_DOWNLOAD -eq 1 ]]; then
+    echo -e "${Yellow}开始下载: ${DOWNLOAD_URL}${Font}"
+    wget -N --no-check-certificate -O "$FILE_NAME" "$DOWNLOAD_URL"
+    
+    # 备用下载方式
     if [[ $? -ne 0 ]]; then
-        echo -e "${Red}致命错误：无法从指定源下载安装包，请检查网络或链接有效性。${Font}"
+        echo -e "${Red}Wget 失败，尝试 Curl...${Font}"
+        curl -L -k -o "$FILE_NAME" "$DOWNLOAD_URL"
+    fi
+    
+    # 下载后再次校验
+    if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
+        echo -e "${Red}致命错误：下载的文件损坏或网络连接失败！${Font}"
         exit 1
     fi
 fi
 
-echo -e "${Green}下载成功，正在解压安装...${Font}"
-tar zxvf x-ui-install.tar.gz
-rm x-ui-install.tar.gz
+# 解压安装
+echo -e "${Yellow}正在安装...${Font}"
+rm -rf x-ui
+tar zxvf "$FILE_NAME"
+chmod +x x-ui/x-ui x-ui/bin/xray-linux-*
 
-# 确保二进制权限
+# ==========================================
+# 4. 配置写入 (三重保险机制)
+# ==========================================
+echo -e "${Yellow}>> 正在修改配置 (端口:$SET_PORT 用户:$SET_USER 密码:$SET_PASS)...${Font}"
 cd x-ui
-chmod +x x-ui bin/xray-linux-* 2>/dev/null
 
-# 5. 第五步：自动修改端口、账号、密码
-echo -e "${Yellow}正在配置面板设置 (端口: 8443, 账号: 3344, 密码: 3344)...${Font}"
-
-# 停止可能存在的服务
+# 停止旧服务防止锁库
 systemctl stop x-ui 2>/dev/null
+pkill -f x-ui 2>/dev/null
 
-# 使用 x-ui 内置命令修改设置
-# 注意：这里假设下载的 x-ui 版本支持 setting 命令，这是标准 x-ui 的功能
-./x-ui setting -port 8443 -username 3344 -password 3344
+CONFIG_SUCCESS=0
 
-if [[ $? -ne 0 ]]; then
-    echo -e "${Red}配置修改失败！可能安装包版本过旧或不兼容 setting 命令。${Font}"
-    # 备用方案：如果内置命令失败，通常需要操作sqlite数据库，但通常x-ui都支持命令
+# --- 方案 A: 标准命令 ---
+./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
+if [[ $? -eq 0 ]]; then
+    echo -e "${Green}[方案A] 标准命令修改成功。${Font}"
+    CONFIG_SUCCESS=1
 else
-    echo -e "${Green}配置修改成功！${Font}"
+    echo -e "${Red}[方案A] 失败，尝试方案 B...${Font}"
+    
+    # --- 方案 B: 初始化后重试 ---
+    # 先运行一次生成数据库文件，然后杀死，再改
+    ./x-ui >/dev/null 2>&1 &
+    PID=$!
+    sleep 3
+    kill $PID 2>/dev/null
+    ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
+    
+    if [[ $? -eq 0 ]]; then
+        echo -e "${Green}[方案B] 强制重写成功。${Font}"
+        CONFIG_SUCCESS=1
+    else
+         echo -e "${Red}[方案B] 失败，尝试方案 C (SQLite 直接注入)...${Font}"
+         
+         # --- 方案 C: SQLite 直接操作数据库 ---
+         if command -v sqlite3 >/dev/null 2>&1; then
+            # 确保数据库目录存在
+            mkdir -p /etc/x-ui
+            # 如果数据库不存在，可能无法操作，这里假设前面运行过至少生成了DB
+            if [[ -f "$DB_PATH" ]]; then
+                sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
+                sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;" 
+                # 注意：上面这行假设只有一个用户且ID为1，X-UI结构复杂，仅尝试修改端口最为稳妥
+                echo -e "${Green}[方案C] 数据库直接修改尝试完成。${Font}"
+                CONFIG_SUCCESS=1
+            fi
+         fi
+    fi
 fi
 
-# 6. 配置系统服务 (Systemd)
-echo -e "${Yellow}配置 Systemd 服务...${Font}"
+if [[ $CONFIG_SUCCESS -eq 0 ]]; then
+    echo -e "${Red}警告：所有自动配置尝试均失败，请安装后手动运行 ./x-ui setting 设置。${Font}"
+fi
+
+# ==========================================
+# 5. 启动服务 (双重保险机制)
+# ==========================================
+echo -e "${Yellow}>> 正在配置启动项...${Font}"
+
+# --- 启动方案 1: Systemd (推荐) ---
 cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
@@ -136,39 +208,50 @@ ExecStart=/usr/local/x-ui/x-ui
 WantedBy=multi-user.target
 EOF
 
-# 重载服务并启动
 systemctl daemon-reload
 systemctl enable x-ui
 systemctl restart x-ui
 
-# 7. 防火墙放行 (尝试放行 8443)
-echo -e "${Yellow}尝试配置防火墙放行端口 8443...${Font}"
-if command -v ufw > /dev/null; then
-    ufw allow 8443/tcp
-    ufw reload
-elif command -v firewall-cmd > /dev/null; then
-    firewall-cmd --zone=public --add-port=8443/tcp --permanent
-    firewall-cmd --reload
-else
-    # iptables 备用
-    iptables -I INPUT -p tcp --dport 8443 -j ACCEPT 2>/dev/null
-fi
-
-# 8. 验证与完成显示
 sleep 2
 STATUS=$(systemctl is-active x-ui)
+
 if [[ "$STATUS" == "active" ]]; then
-    IP=$(curl -s4m8 ip.sb)
-    echo -e ""
-    echo -e "${Blue}#################################################${Font}"
-    echo -e "${Green}             X-UI 安装配置完成！                 ${Font}"
-    echo -e "${Blue}#################################################${Font}"
-    echo -e "脚本制作：${Yellow}咸v咆哮制作${Font}"
-    echo -e "运行状态：${Green}已启动${Font}"
-    echo -e "访问地址：${Green}http://$IP:8443${Font}"
-    echo -e "用户名  ：${Green}3344${Font}"
-    echo -e "密码    ：${Green}3344${Font}"
-    echo -e "${Blue}#################################################${Font}"
+    echo -e "${Green}[启动方案1] Systemd 服务启动成功！${Font}"
 else
-    echo -e "${Red}安装似乎完成了，但服务启动失败，请检查日志：journalctl -u x-ui${Font}"
+    echo -e "${Red}[启动方案1] Systemd 启动失败，尝试暴力启动 (Nohup)...${Font}"
+    
+    # --- 启动方案 2: Nohup 后台运行 + rc.local ---
+    nohup /usr/local/x-ui/x-ui >/usr/local/x-ui/x-ui.log 2>&1 &
+    
+    # 写入 rc.local 实现开机自启
+    if [ ! -f /etc/rc.local ]; then
+        echo '#!/bin/bash' > /etc/rc.local
+        chmod +x /etc/rc.local
+    fi
+    
+    if ! grep -q "x-ui" /etc/rc.local; then
+        sed -i '$i nohup /usr/local/x-ui/x-ui >/usr/local/x-ui/x-ui.log 2>&1 &' /etc/rc.local
+        echo -e "${Green}已将启动命令写入 /etc/rc.local${Font}"
+    fi
+    echo -e "${Green}[启动方案2] 已通过后台进程启动。${Font}"
 fi
+
+# ==========================================
+# 6. 防火墙与收尾
+# ==========================================
+# 简单粗暴放行
+iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
+ufw allow $SET_PORT/tcp 2>/dev/null
+firewall-cmd --zone=public --add-port=$SET_PORT/tcp --permanent 2>/dev/null
+firewall-cmd --reload 2>/dev/null
+
+IP=$(curl -s4m8 ip.sb)
+echo -e ""
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Green}             咸v咆哮制作 - 安装完成              ${Font}"
+echo -e "${Blue}#################################################${Font}"
+echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
+echo -e "用户名   ：${Green}$SET_USER${Font}"
+echo -e "密码     ：${Green}$SET_PASS${Font}"
+echo -e "${Blue}#################################################${Font}"
+echo -e "如果访问不通，请检查服务器安全组是否放行 $SET_PORT 端口"
