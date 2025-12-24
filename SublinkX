@@ -1,39 +1,86 @@
 #!/bin/bash
 
-# Sublink 多版本部署脚本
-# 路径已锁定为 /data/sublinkx
+# ==========================================
+# SublinkX/E 部署脚本 (带自动备份恢复功能)
+# 路径锁定: /data/sublinkx
+# ==========================================
+
 set -e
 
-# ================= 配置区域 =================
-# 这里统一了所有文件的存储位置
+# 定义路径和备份地址
 PROJECT_DIR="/data/sublinkx"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
-# ===========================================
+BACKUP_URL="https://pub-b69a7194f4ea42fba6aa990c49bded91.r2.dev/data/sublinkx.zip"
+
+# 检查并安装必要工具 (wget, unzip)
+echo "正在检查系统环境..."
+if ! command -v unzip &> /dev/null; then
+    echo "未找到 unzip，正在安装..."
+    if [ -f /etc/debian_version ]; then
+        apt-get update && apt-get install -y unzip wget
+    elif [ -f /etc/redhat-release ]; then
+        yum install -y unzip wget
+    fi
+fi
 
 echo "=================================================="
 echo "请选择要部署的版本 / Select Version:"
-echo "1. SublinkX (原版 - jaaksi/sublinkx)"
-echo "2. SublinkE (新版 - eun1e/sublinke)"
+echo "1. SublinkX (原版 - jaaksi/sublinkx) - 仅全新部署"
+echo "2. SublinkE (新版 - eun1e/sublinke) - 部署并恢复数据"
 echo "=================================================="
 read -p "请输入数字 [1-2]: " choice
 
-# 创建基础目录 (如果 /data 不存在也会自动创建)
-echo "正在创建统一数据目录: $PROJECT_DIR ..."
-mkdir -p "$PROJECT_DIR"/{db,template,logs}
-
-# 如果是选项2 (eun1e)，额外创建 plugins 目录
-if [ "$choice" == "2" ]; then
-    mkdir -p "$PROJECT_DIR"/plugins
-fi
-
-# 如果之前有旧的 compose 文件，先尝试停止服务，避免冲突
+# 1. 停止旧服务
 if [ -f "$COMPOSE_FILE" ]; then
-    echo "检测到旧配置，尝试停止旧容器..."
+    echo "检测到旧配置，正在停止旧容器..."
     cd "$PROJECT_DIR"
     docker compose down 2>/dev/null || true
 fi
 
-# 根据选择生成 Docker Compose 文件
+# 2. 准备目录
+echo "正在准备目录: $PROJECT_DIR ..."
+mkdir -p "$PROJECT_DIR"
+
+# 3. 如果选择 2，执行备份恢复逻辑
+if [ "$choice" == "2" ]; then
+    echo "--------------------------------------------------"
+    echo "🔄 正在下载并恢复备份数据..."
+    echo "下载地址: $BACKUP_URL"
+    
+    # 下载到临时目录
+    wget -O /tmp/sublinkx_backup.zip "$BACKUP_URL"
+    
+    echo "正在解压数据..."
+    # 解压到临时文件夹以检查结构
+    rm -rf /tmp/sublink_restore_temp
+    mkdir -p /tmp/sublink_restore_temp
+    unzip -o /tmp/sublinkx_backup.zip -d /tmp/sublink_restore_temp
+    
+    # 智能移动数据 (防止压缩包内包含/不包含根文件夹的情况)
+    # 如果解压后有一个名为 sublinkx 的文件夹，则移动其内容；否则移动所有内容
+    if [ -d "/tmp/sublink_restore_temp/sublinkx" ]; then
+        echo "检测到目录嵌套，正在移动内部数据..."
+        cp -rf /tmp/sublink_restore_temp/sublinkx/* "$PROJECT_DIR/"
+    else
+        echo "检测到直接结构，正在移动数据..."
+        cp -rf /tmp/sublink_restore_temp/* "$PROJECT_DIR/"
+    fi
+    
+    # 清理临时文件
+    rm -f /tmp/sublinkx_backup.zip
+    rm -rf /tmp/sublink_restore_temp
+    
+    # 确保 plugins 目录存在 (以防备份里没有)
+    mkdir -p "$PROJECT_DIR"/plugins
+    
+    echo "✅ 数据恢复完成！"
+    echo "--------------------------------------------------"
+else
+    # 选项 1 的常规目录创建
+    mkdir -p "$PROJECT_DIR"/{db,template,logs}
+fi
+
+# 4. 生成 Docker Compose 文件
 if [ "$choice" == "1" ]; then
     echo "正在生成 SublinkX (jaaksi) 配置文件..."
     cat > "$COMPOSE_FILE" << 'EOF'
@@ -61,7 +108,6 @@ EOF
 
 elif [ "$choice" == "2" ]; then
     echo "正在生成 SublinkE (eun1e) 配置文件..."
-    # 对应你要求的 docker run 命令转换，并统一映射到当前目录
     cat > "$COMPOSE_FILE" << 'EOF'
 version: '3.8'
 services:
@@ -85,45 +131,33 @@ networks:
   sublinkx-network:
     driver: bridge
 EOF
-
 else
     echo "输入错误，脚本退出。"
     exit 1
 fi
 
-echo "配置文件已创建: $COMPOSE_FILE"
-
-# 部署服务
+# 5. 启动服务
 cd "$PROJECT_DIR"
-echo "启动服务..."
+echo "正在启动容器..."
 docker compose up -d
 
-# 检查服务状态
-echo "等待服务启动..."
+# 6. 检查状态
+echo "等待服务初始化..."
 sleep 5
-
-# 获取服务器IP
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 echo "=================================================="
 if docker compose ps | grep -q "Up"; then
     echo "✅ 部署成功！"
-    if [ "$choice" == "1" ]; then
-        echo "当前版本: SublinkX (jaaksi)"
+    if [ "$choice" == "2" ]; then
+        echo "模式: SublinkE (已恢复备份)"
     else
-        echo "当前版本: SublinkE (eun1e)"
+        echo "模式: SublinkX (全新安装)"
     fi
     echo "访问地址: http://${SERVER_IP}:8000"
-    echo "--------------------------------------------------"
-    echo "📂 数据存储位置: $PROJECT_DIR"
-    echo "   (备份时打包此目录即可)"
-    echo "--------------------------------------------------"
-    echo "常用命令:"
-    echo "进入目录: cd /data/sublinkx"
-    echo "停止服务: docker compose down"
-    echo "重启服务: docker compose restart"
-    echo "查看日志: docker compose logs -f"
+    echo "数据位置: $PROJECT_DIR"
+    echo "=================================================="
 else
-    echo "❌ 启动失败，请检查日志: docker compose logs"
+    echo "❌ 启动失败，请运行以下命令查看日志:"
+    echo "cd $PROJECT_DIR && docker compose logs"
 fi
-echo "=================================================="
