@@ -1,21 +1,43 @@
 #!/bin/bash
 
-# SublinkX 部署脚本
+# Sublink 多版本部署脚本
+# 路径已锁定为 /data/sublinkx
 set -e
 
-PROJECT_DIR="/opt/sublinkx"
+# ================= 配置区域 =================
+# 这里统一了所有文件的存储位置
+PROJECT_DIR="/data/sublinkx"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
+# ===========================================
 
-echo "开始部署 SublinkX..."
+echo "=================================================="
+echo "请选择要部署的版本 / Select Version:"
+echo "1. SublinkX (原版 - jaaksi/sublinkx)"
+echo "2. SublinkE (新版 - eun1e/sublinke)"
+echo "=================================================="
+read -p "请输入数字 [1-2]: " choice
 
-# 创建目录
-echo "创建必要的目录..."
+# 创建基础目录 (如果 /data 不存在也会自动创建)
+echo "正在创建统一数据目录: $PROJECT_DIR ..."
 mkdir -p "$PROJECT_DIR"/{db,template,logs}
 
-# 创建 Docker Compose 文件
-cat > "$COMPOSE_FILE" << 'EOF'
-version: '3.8'
+# 如果是选项2 (eun1e)，额外创建 plugins 目录
+if [ "$choice" == "2" ]; then
+    mkdir -p "$PROJECT_DIR"/plugins
+fi
 
+# 如果之前有旧的 compose 文件，先尝试停止服务，避免冲突
+if [ -f "$COMPOSE_FILE" ]; then
+    echo "检测到旧配置，尝试停止旧容器..."
+    cd "$PROJECT_DIR"
+    docker compose down 2>/dev/null || true
+fi
+
+# 根据选择生成 Docker Compose 文件
+if [ "$choice" == "1" ]; then
+    echo "正在生成 SublinkX (jaaksi) 配置文件..."
+    cat > "$COMPOSE_FILE" << 'EOF'
+version: '3.8'
 services:
   sublinkx:
     image: jaaksi/sublinkx:latest
@@ -23,9 +45,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /data/sublinkx/db:/app/db
-      - /data/sublinkx/template:/app/template
-      - /data/sublinkx/logs:/app/logs
+      - ./db:/app/db
+      - ./template:/app/template
+      - ./logs:/app/logs
     environment:
       - TZ=Asia/Shanghai
     restart: unless-stopped
@@ -37,35 +59,71 @@ networks:
     driver: bridge
 EOF
 
-echo "Docker Compose 文件已创建: $COMPOSE_FILE"
+elif [ "$choice" == "2" ]; then
+    echo "正在生成 SublinkE (eun1e) 配置文件..."
+    # 对应你要求的 docker run 命令转换，并统一映射到当前目录
+    cat > "$COMPOSE_FILE" << 'EOF'
+version: '3.8'
+services:
+  sublinke:
+    image: eun1e/sublinke
+    container_name: sublinke
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./db:/app/db
+      - ./template:/app/template
+      - ./logs:/app/logs
+      - ./plugins:/app/plugins
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    networks:
+      - sublinkx-network
+
+networks:
+  sublinkx-network:
+    driver: bridge
+EOF
+
+else
+    echo "输入错误，脚本退出。"
+    exit 1
+fi
+
+echo "配置文件已创建: $COMPOSE_FILE"
 
 # 部署服务
 cd "$PROJECT_DIR"
-echo "启动 SublinkX 服务..."
+echo "启动服务..."
 docker compose up -d
 
 # 检查服务状态
 echo "等待服务启动..."
-sleep 10
+sleep 5
 
-if docker ps | grep -q sublinkx; then
-    SERVER_IP=$(hostname -I | awk '{print $1}')
-    echo "=================================================="
-    echo "✅ SublinkX 部署成功！"
+# 获取服务器IP
+SERVER_IP=$(hostname -I | awk '{print $1}')
+
+echo "=================================================="
+if docker compose ps | grep -q "Up"; then
+    echo "✅ 部署成功！"
+    if [ "$choice" == "1" ]; then
+        echo "当前版本: SublinkX (jaaksi)"
+    else
+        echo "当前版本: SublinkE (eun1e)"
+    fi
     echo "访问地址: http://${SERVER_IP}:8000"
-    echo "项目目录: $PROJECT_DIR"
-    echo "数据目录: $PROJECT_DIR/db"
-    echo "模板目录: $PROJECT_DIR/template"
-    echo "日志目录: $PROJECT_DIR/logs"
-    echo "=================================================="
-    echo ""
+    echo "--------------------------------------------------"
+    echo "📂 数据存储位置: $PROJECT_DIR"
+    echo "   (备份时打包此目录即可)"
+    echo "--------------------------------------------------"
     echo "常用命令:"
-    echo "查看日志: docker logs -f sublinkx"
+    echo "进入目录: cd /data/sublinkx"
     echo "停止服务: docker compose down"
     echo "重启服务: docker compose restart"
-    echo "初始账号: admin"
-    echo "初始密码:: 123456"
+    echo "查看日志: docker compose logs -f"
 else
-    echo "❌ SublinkX 启动失败，请检查日志: docker logs sublinkx"
-    exit 1
+    echo "❌ 启动失败，请检查日志: docker compose logs"
 fi
+echo "=================================================="
