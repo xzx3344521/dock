@@ -1,0 +1,194 @@
+#!/bin/bash
+# 宝塔完全清理脚本 - 释放最大空间
+
+echo "==============================="
+echo "宝塔完全清理脚本"
+echo "正在清理，请稍候..."
+echo "==============================="
+
+# 1. 停止宝塔服务
+echo "1. 停止宝塔服务..."
+/etc/init.d/bt stop 2>/dev/null
+systemctl stop bt 2>/dev/null
+pkill -9 bt 2>/dev/null
+pkill -9 panel 2>/dev/null
+
+# 2. 卸载宝塔面板
+echo "2. 卸载宝塔面板..."
+curl -sSO http://download.bt.cn/install/bt-uninstall.sh
+bash bt-uninstall.sh >> /dev/null 2>&1
+rm -f bt-uninstall.sh
+
+# 3. 删除所有宝塔目录
+echo "3. 删除宝塔目录..."
+rm -rf /www/server
+rm -rf /www/backup
+rm -rf /www/wwwlogs
+rm -rf /www/wwwroot
+rm -rf /www/Recycle_bin
+rm -rf /tmp/.bt_shell
+
+# 4. 删除宝塔系统文件
+echo "4. 删除系统文件..."
+rm -f /etc/init.d/bt
+rm -f /usr/bin/bt
+rm -f /usr/local/bin/bt
+rm -rf /etc/systemd/system/bt.service
+rm -rf /usr/lib/systemd/system/bt.service
+rm -f /etc/cron.d/bt
+rm -f /root/.bash_profile
+rm -f /root/.bashrc
+
+# 5. 清理安装包和缓存
+echo "5. 清理安装包缓存..."
+# Debian/Ubuntu
+if [ -f /etc/debian_version ]; then
+    apt autoremove --purge -y >> /dev/null 2>&1
+    apt clean >> /dev/null 2>&1
+    apt autoclean >> /dev/null 2>&1
+    rm -rf /var/lib/apt/lists/*
+fi
+
+# CentOS/RHEL
+if [ -f /etc/redhat-release ]; then
+    yum autoremove -y >> /dev/null 2>&1
+    yum clean all >> /dev/null 2>&1
+    rm -rf /var/cache/yum
+fi
+
+# 6. 删除所有源码编译文件
+echo "6. 删除源码文件..."
+find / -name "*.o" -delete 2>/dev/null
+find / -name "*.a" -delete 2>/dev/null
+find / -name "*.so" -delete 2>/dev/null
+find / -name "Makefile" -delete 2>/dev/null
+find / -name "configure" -delete 2>/dev/null
+find / -name "config.log" -delete 2>/dev/null
+find / -name "config.status" -delete 2>/dev/null
+rm -rf /usr/local/src/*
+
+# 7. 清理日志文件
+echo "7. 清理日志文件..."
+rm -rf /var/log/bt*
+rm -rf /var/log/nginx
+rm -rf /var/log/apache2
+rm -rf /var/log/httpd
+rm -rf /var/log/mysql
+rm -rf /var/log/mariadb
+rm -rf /tmp/panel*
+rm -rf /tmp/bt*
+journalctl --vacuum-time=1d >> /dev/null 2>&1
+
+# 8. 清理临时文件
+echo "8. 清理临时文件..."
+rm -rf /tmp/*
+rm -rf /var/tmp/*
+rm -rf /root/.cache
+rm -rf /root/.npm
+rm -rf /root/.composer
+rm -rf /root/.pip
+
+# 9. 清理Python缓存
+echo "9. 清理Python缓存..."
+find / -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
+find / -name "*.pyc" -delete 2>/dev/null
+find / -name "*.pyo" -delete 2>/dev/null
+find / -name ".pytest_cache" -type d -exec rm -rf {} + 2>/dev/null
+
+# 10. 清理PHP缓存
+echo "10. 清理PHP缓存..."
+rm -rf /tmp/php_sessions/*
+rm -rf /var/lib/php/sessions/*
+rm -rf /root/.php_history
+
+# 11. 清理Node.js缓存
+echo "11. 清理Node.js缓存..."
+rm -rf /root/.npm/_cacache
+rm -rf /usr/lib/node_modules
+rm -rf /usr/local/lib/node_modules
+
+# 12. 清理Docker（如果存在）
+echo "12. 清理Docker..."
+docker system prune -af --volumes 2>/dev/null
+rm -rf /var/lib/docker/tmp
+
+# 13. 清理内核旧文件
+echo "13. 清理旧内核..."
+if [ -f /etc/debian_version ]; then
+    apt purge $(dpkg -l | awk '/^rc/ {print $2}') -y 2>/dev/null
+fi
+
+# 14. 清理系统journal日志
+echo "14. 清理系统日志..."
+journalctl --rotate
+journalctl --vacuum-time=1d
+journalctl --vacuum-size=100M
+rm -rf /var/log/journal/*
+
+# 15. 清理软件包管理缓存
+echo "15. 清理包管理缓存..."
+# 清理所有包管理器缓存
+for cmd in apt-get yum dnf pacman zypper; do
+    if command -v $cmd >/dev/null 2>&1; then
+        case $cmd in
+            apt-get) apt-get clean ;;
+            yum) yum clean all ;;
+            dnf) dnf clean all ;;
+            pacman) pacman -Sc --noconfirm ;;
+            zypper) zypper clean ;;
+        esac
+    fi
+done
+
+# 16. 清理缩略图缓存
+echo "16. 清理缩略图缓存..."
+rm -rf /root/.thumbnails
+rm -rf /home/*/.thumbnails 2>/dev/null
+rm -rf /root/.cache/thumbnails
+
+# 17. 清理邮件队列
+echo "17. 清理邮件队列..."
+rm -rf /var/mail/*
+rm -rf /var/spool/mail/*
+rm -rf /var/spool/postfix/*
+
+# 18. 清理崩溃报告
+echo "18. 清理崩溃报告..."
+rm -rf /var/crash/*
+rm -rf /var/spool/abrt/*
+
+# 19. 清理旧配置文件
+echo "19. 清理旧配置文件..."
+find /etc -name "*.bak" -delete
+find /etc -name "*.old" -delete
+find /etc -name "*~" -delete
+find /root -name "*.bak" -delete
+
+# 20. 最后清理和检查
+echo "20. 最终清理..."
+sync
+echo 3 > /proc/sys/vm/drop_caches
+
+# 显示清理结果
+echo ""
+echo "==============================="
+echo "清理完成！释放的空间统计："
+echo "==============================="
+df -h /
+
+# 检查宝塔是否完全删除
+echo ""
+echo "宝塔残留检查："
+if [ ! -d "/www/server" ] && [ ! -f "/usr/bin/bt" ]; then
+    echo "✓ 宝塔已完全删除"
+else
+    echo "✗ 发现宝塔残留文件"
+    find / -name "*bt*" -o -name "*panel*" 2>/dev/null | grep -v "proc"
+fi
+
+echo ""
+echo "当前磁盘使用情况："
+df -h
+echo ""
+echo "前10大目录："
+du -sh /* 2>/dev/null | sort -hr | head -10
