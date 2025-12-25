@@ -1,9 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极优化版 (V3.2)
-# 修正：1. 恢复全架构支持 (amd64/arm64/armv5/386)
-#       2. 修复密码显示已改但实际未生效的问题
+# 标题：咸v咆哮制作 - X-UI 终极全能版 (V4.0)
+# 功能：全架构、抗网络波动、防锁死、时间校准、多防火墙适配
 # ==========================================
 
 # --- 颜色配置 ---
@@ -13,7 +12,7 @@ Yellow="\033[33m"
 Blue="\033[36m"
 Font="\033[0m"
 
-# --- 核心变量 ---
+# --- 核心配置 ---
 BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
 INSTALL_PATH="/usr/local/x-ui"
 BIN_LINK="/usr/bin/x-ui"
@@ -27,35 +26,57 @@ SET_PORT="8443"
 # ==========================================
 clear
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#         X-UI 自动安装脚本 (多架构修复版)      #${Font}"
+echo -e "${Blue}#     X-UI 自动安装脚本 (V4.0 全能防御版)       #${Font}"
+echo -e "${Blue}#     兼容: IPv4/v6 | 多架构 | 智能防报错       #${Font}"
 echo -e "${Blue}#################################################${Font}"
+sleep 1
 
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${Red}错误：请使用 root 身份运行！${Font}" 
+   echo -e "${Red}错误：必须使用 root 身份运行！${Font}" 
    exit 1
 fi
 
 # ==========================================
-# 2. 环境准备
+# 2. 系统环境大清洗 (防报错核心)
 # ==========================================
-echo -e "${Yellow}>> 正在更新系统并安装必要工具...${Font}"
+echo -e "${Yellow}>> [1/6] 正在执行系统环境预处理...${Font}"
+
+# 2.1 暴力解锁 APT (解决 "Could not get lock" 问题)
+# 检测是否有 apt/dpkg 进程在运行，直接杀掉
+if pgrep -x "apt" >/dev/null || pgrep -x "apt-get" >/dev/null || pgrep -x "dpkg" >/dev/null; then
+    echo -e "${Yellow}发现后台有安装进程，正在强制终止...${Font}"
+    killall apt apt-get dpkg >/dev/null 2>&1
+    sleep 2
+fi
+rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
+
+# 2.2 修复 DPKG 状态
+dpkg --configure -a >/dev/null 2>&1
+
+# 2.3 安装核心依赖 (增加 ca-certificates 防止SSL报错, ntpdate 防止时间不同步)
+echo -e "${Yellow}>> [2/6] 安装必要组件 (Curl, Wget, SQLite, Time)...${Font}"
 if [[ -f /etc/redhat-release ]]; then
-    yum update -y && yum install -y curl wget tar sqlite3
+    yum update -y && yum install -y curl wget tar sqlite3 ca-certificates
 elif cat /etc/issue | grep -q -E -i "debian|ubuntu"; then
-    apt-get update -y && apt-get install -y curl wget tar sqlite3
+    apt-get update -y && apt-get install -y curl wget tar sqlite3 ca-certificates
 else
-    echo -e "${Red}系统不支持，请更换 Debian/Ubuntu/CentOS${Font}"
+    echo -e "${Red}错误：不支持的系统版本${Font}"
     exit 1
 fi
 
+# 2.4 关键：校准系统时间 (防止客户端连接失败)
+echo -e "${Yellow}>> [3/6] 正在校准服务器时间...${Font}"
+ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+date -s "$(curl -sI g.cn | grep Date | cut -d' ' -f3-6)Z" >/dev/null 2>&1
+echo -e "${Green}当前服务器时间: $(date)${Font}"
+
 # ==========================================
-# 3. 架构识别与下载 (已完全恢复原版逻辑)
+# 3. 架构识别与抗干扰下载
 # ==========================================
-echo -e "${Yellow}>> 正在识别架构...${Font}"
+echo -e "${Yellow}>> [4/6] 识别架构并下载...${Font}"
 ARCH=$(uname -m)
 FILE_NAME=""
 
-# 恢复了对 i386 和 armv5 的支持 
 case $ARCH in
     x86_64) FILE_NAME="x-ui-linux-amd64.tar.gz" ;;
     aarch64) FILE_NAME="x-ui-linux-arm64.tar.gz" ;;
@@ -67,88 +88,70 @@ esac
 DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
 cd /usr/local/
 
-# 智能包检测
-NEED_DOWNLOAD=1
-if [[ -f "$FILE_NAME" ]]; then
-    if tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-        echo -e "${Green}本地包完整，跳过下载！${Font}"
-        NEED_DOWNLOAD=0
-    else
-        echo -e "${Red}本地包损坏，重新下载...${Font}"
-        rm -f "$FILE_NAME"
-    fi
+# 删除旧文件
+rm -f "$FILE_NAME"
+
+# 下载策略：强制 IPv4 + 超时重试 (解决卡死问题)
+echo -e "${Yellow}正在下载 (强制 IPv4 通道)...${Font}"
+# 尝试 wget
+wget -4 --no-check-certificate --timeout=20 --tries=3 -O "$FILE_NAME" "$DOWNLOAD_URL"
+
+# 如果 wget 失败，尝试 curl
+if [ ! -f "$FILE_NAME" ] || [ ! -s "$FILE_NAME" ]; then
+    echo -e "${Yellow}Wget 下载失败，切换 Curl 救急...${Font}"
+    curl -4 -L -k --connect-timeout 20 --retry 3 -o "$FILE_NAME" "$DOWNLOAD_URL"
 fi
 
-if [[ $NEED_DOWNLOAD -eq 1 ]]; then
-    echo -e "${Yellow}下载: $DOWNLOAD_URL${Font}"
-    wget -N --no-check-certificate -O "$FILE_NAME" "$DOWNLOAD_URL"
-    if [[ $? -ne 0 ]]; then
-        curl -L -k -o "$FILE_NAME" "$DOWNLOAD_URL"
-    fi
-    if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-        echo -e "${Red}下载失败或文件损坏！${Font}"; exit 1
-    fi
+# 最终完整性检查
+if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
+    echo -e "${Red}严重错误：下载失败或文件损坏！请检查网络连接或源地址。${Font}"
+    exit 1
 fi
 
 # ==========================================
-# 4. 安装与关键修复 (解决密码无法写入问题)
+# 4. 安装与数据库强写
 # ==========================================
-echo -e "${Yellow}>> 正在安装并修复路径...${Font}"
+echo -e "${Yellow}>> [5/6] 安装与数据库配置...${Font}"
 
-# 【关键优化】强力清理旧进程，防止数据库被锁
+# 停止旧服务并强杀进程
 systemctl stop x-ui >/dev/null 2>&1
-pkill -9 x-ui >/dev/null 2>&1
-sleep 1
-
+killall x-ui >/dev/null 2>&1
 rm -rf x-ui
 tar zxvf "$FILE_NAME" >/dev/null
 cd x-ui
-
 chmod +x x-ui x-ui.sh bin/xray-linux-*
-rm -f "$BIN_LINK"
-ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"  # 使用 -sf 强制覆盖链接
+ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
 
-# ==========================================
-# 5. 配置写入 (针对端口、账号、路径)
-# ==========================================
-echo -e "${Yellow}>> 正在配置账号与数据库...${Font}"
-
-# 确保数据库目录存在
+# 准备数据库目录
 mkdir -p /etc/x-ui/
 
-# 方案A：先尝试标准命令生成初始DB
+# 第一次初始化生成 DB
 ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
 
-# 方案B：数据库强制修正 (解决那个随机路径 + 密码改不掉的问题)
+# 数据库强写逻辑
 if command -v sqlite3 >/dev/null 2>&1; then
-    # 确保数据库文件存在
-    if [ ! -f "$DB_PATH" ]; then
-        cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH" >/dev/null 2>&1
-    fi
+    # 确保 DB 存在
+    [ ! -f "$DB_PATH" ] && cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH"
     
-    echo -e "${Yellow}尝试使用 SQLite 强制清理 Web路径...${Font}"
-    
-    # 强制修正 webBasePath 和 端口
+    # 执行修改
     sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
     sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
-    
-    # 【重点修复】强制重写用户名密码
     sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
-
-    # 【校验逻辑】检查密码是否真的改成了 3344
-    CURRENT_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
-    if [[ "$CURRENT_PASS" != "$SET_PASS" ]]; then
-        echo -e "${Red}警告：SQLite 写入未生效，尝试使用备用接口重置...${Font}"
-        ./x-ui setting -username $SET_USER -password $SET_PASS
+    
+    # 验证
+    CHECK_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
+    if [ "$CHECK_PASS" == "$SET_PASS" ]; then
+        echo -e "${Green}账号密码数据库校验通过！${Font}"
     else
-        echo -e "${Green}数据库校验通过：密码修改成功！${Font}"
+        echo -e "${Red}警告：SQLite写入未生效，使用备用命令重置...${Font}"
+        ./x-ui setting -username $SET_USER -password $SET_PASS
     fi
 fi
 
 # ==========================================
-# 6. 启动服务 (修复 Systemd 路径问题)
+# 5. 服务启动与防火墙全放行
 # ==========================================
-echo -e "${Yellow}>> 配置服务...${Font}"
+echo -e "${Yellow}>> [6/6] 配置服务与防火墙...${Font}"
 
 cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
@@ -172,232 +175,37 @@ systemctl enable x-ui
 systemctl restart x-ui
 sleep 2
 
-# 双重保险：如果没有运行，则使用 nohup
-if ! systemctl is-active x-ui >/dev/null 2>&1; then
-    echo -e "${Red}Systemd 启动异常，切换后台运行模式...${Font}"
-    nohup ./x-ui >/dev/null 2>&1 &
-    # 写入 rc.local
-    if [ ! -f /etc/rc.local ]; then echo '#!/bin/bash' > /etc/rc.local; chmod +x /etc/rc.local; fi
-    grep -q "x-ui" /etc/rc.local || sed -i '$i nohup /usr/local/x-ui/x-ui >/dev/null 2>&1 &' /etc/rc.local
-else
-    echo -e "${Green}Systemd 服务启动成功！${Font}"
+# 智能防火墙放行 (兼容 ufw, firewalld, iptables)
+echo -e "${Yellow}正在适配防火墙端口 $SET_PORT...${Font}"
+if command -v ufw >/dev/null 2>&1; then
+    ufw allow $SET_PORT/tcp >/dev/null 2>&1
+fi
+if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --zone=public --add-port=$SET_PORT/tcp --permanent >/dev/null 2>&1
+    firewall-cmd --reload >/dev/null 2>&1
+fi
+# iptables 作为兜底
+iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
+
+# ==========================================
+# 6. 最终检测
+# ==========================================
+IP=$(curl -s4m8 ip.sb)
+if [[ -z "$IP" ]]; then
+    IP=$(curl -s6m8 ip.sb) # 如果 ipv4 没取到，尝试取 ipv6
 fi
 
-# ==========================================
-# 7. 完成
-# ==========================================
-# 放行端口
-iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
-ufw allow $SET_PORT/tcp 2>/dev/null
-
-IP=$(curl -s4m8 ip.sb)
 echo -e ""
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Green}             咸v咆哮制作 - 安装完成 (V3.2)       ${Font}"
+echo -e "${Green}        咸v咆哮制作 - 安装完成 (V4.0)            ${Font}"
 echo -e "${Blue}#################################################${Font}"
 echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
 echo -e "用户名   ：${Green}$SET_USER${Font}"
 echo -e "密码     ：${Green}$SET_PASS${Font}"
 echo -e "${Blue}#################################################${Font}"
-echo -e "输入 ${Green}x-ui${Font} 可调出管理菜单"#!/bin/bash
 
-# ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极优化版 (V3.2)
-# 修正：1. 恢复全架构支持 (amd64/arm64/armv5/386)
-#       2. 修复密码显示已改但实际未生效的问题
-# ==========================================
-
-# --- 颜色配置 ---
-Red="\033[31m"
-Green="\033[32m"
-Yellow="\033[33m"
-Blue="\033[36m"
-Font="\033[0m"
-
-# --- 核心变量 ---
-BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
-INSTALL_PATH="/usr/local/x-ui"
-BIN_LINK="/usr/bin/x-ui"
-DB_PATH="/etc/x-ui/x-ui.db"
-SET_USER="3344"
-SET_PASS="3344"
-SET_PORT="8443"
-
-# ==========================================
-# 1. 霸气开场
-# ==========================================
-clear
-echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#         X-UI 自动安装脚本 (多架构修复版)      #${Font}"
-echo -e "${Blue}#################################################${Font}"
-
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${Red}错误：请使用 root 身份运行！${Font}" 
-   exit 1
-fi
-
-# ==========================================
-# 2. 环境准备
-# ==========================================
-echo -e "${Yellow}>> 正在更新系统并安装必要工具...${Font}"
-if [[ -f /etc/redhat-release ]]; then
-    yum update -y && yum install -y curl wget tar sqlite3
-elif cat /etc/issue | grep -q -E -i "debian|ubuntu"; then
-    apt-get update -y && apt-get install -y curl wget tar sqlite3
-else
-    echo -e "${Red}系统不支持，请更换 Debian/Ubuntu/CentOS${Font}"
-    exit 1
-fi
-
-# ==========================================
-# 3. 架构识别与下载 (已完全恢复原版逻辑)
-# ==========================================
-echo -e "${Yellow}>> 正在识别架构...${Font}"
-ARCH=$(uname -m)
-FILE_NAME=""
-
-# 恢复了对 i386 和 armv5 的支持 
-case $ARCH in
-    x86_64) FILE_NAME="x-ui-linux-amd64.tar.gz" ;;
-    aarch64) FILE_NAME="x-ui-linux-arm64.tar.gz" ;;
-    i386|i686) FILE_NAME="x-ui-linux-386.tar.gz" ;;
-    armv5*) FILE_NAME="x-ui-linux-armv5.tar.gz" ;;
-    *) echo -e "${Red}不支持的架构: $ARCH${Font}"; exit 1 ;;
-esac
-
-DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
-cd /usr/local/
-
-# 智能包检测
-NEED_DOWNLOAD=1
-if [[ -f "$FILE_NAME" ]]; then
-    if tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-        echo -e "${Green}本地包完整，跳过下载！${Font}"
-        NEED_DOWNLOAD=0
-    else
-        echo -e "${Red}本地包损坏，重新下载...${Font}"
-        rm -f "$FILE_NAME"
-    fi
-fi
-
-if [[ $NEED_DOWNLOAD -eq 1 ]]; then
-    echo -e "${Yellow}下载: $DOWNLOAD_URL${Font}"
-    wget -N --no-check-certificate -O "$FILE_NAME" "$DOWNLOAD_URL"
-    if [[ $? -ne 0 ]]; then
-        curl -L -k -o "$FILE_NAME" "$DOWNLOAD_URL"
-    fi
-    if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-        echo -e "${Red}下载失败或文件损坏！${Font}"; exit 1
-    fi
-fi
-
-# ==========================================
-# 4. 安装与关键修复 (解决密码无法写入问题)
-# ==========================================
-echo -e "${Yellow}>> 正在安装并修复路径...${Font}"
-
-# 【关键优化】强力清理旧进程，防止数据库被锁
-systemctl stop x-ui >/dev/null 2>&1
-pkill -9 x-ui >/dev/null 2>&1
-sleep 1
-
-rm -rf x-ui
-tar zxvf "$FILE_NAME" >/dev/null
-cd x-ui
-
-chmod +x x-ui x-ui.sh bin/xray-linux-*
-rm -f "$BIN_LINK"
-ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"  # 使用 -sf 强制覆盖链接
-
-# ==========================================
-# 5. 配置写入 (针对端口、账号、路径)
-# ==========================================
-echo -e "${Yellow}>> 正在配置账号与数据库...${Font}"
-
-# 确保数据库目录存在
-mkdir -p /etc/x-ui/
-
-# 方案A：先尝试标准命令生成初始DB
-./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
-
-# 方案B：数据库强制修正 (解决那个随机路径 + 密码改不掉的问题)
-if command -v sqlite3 >/dev/null 2>&1; then
-    # 确保数据库文件存在
-    if [ ! -f "$DB_PATH" ]; then
-        cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH" >/dev/null 2>&1
-    fi
-    
-    echo -e "${Yellow}尝试使用 SQLite 强制清理 Web路径...${Font}"
-    
-    # 强制修正 webBasePath 和 端口
-    sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
-    sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
-    
-    # 【重点修复】强制重写用户名密码
-    sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
-
-    # 【校验逻辑】检查密码是否真的改成了 3344
-    CURRENT_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
-    if [[ "$CURRENT_PASS" != "$SET_PASS" ]]; then
-        echo -e "${Red}警告：SQLite 写入未生效，尝试使用备用接口重置...${Font}"
-        ./x-ui setting -username $SET_USER -password $SET_PASS
-    else
-        echo -e "${Green}数据库校验通过：密码修改成功！${Font}"
-    fi
-fi
-
-# ==========================================
-# 6. 启动服务 (修复 Systemd 路径问题)
-# ==========================================
-echo -e "${Yellow}>> 配置服务...${Font}"
-
-cat > /etc/systemd/system/x-ui.service <<EOF
-[Unit]
-Description=x-ui Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$INSTALL_PATH
-ExecStart=$INSTALL_PATH/x-ui
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable x-ui
-systemctl restart x-ui
-sleep 2
-
-# 双重保险：如果没有运行，则使用 nohup
+# 检查服务状态
 if ! systemctl is-active x-ui >/dev/null 2>&1; then
-    echo -e "${Red}Systemd 启动异常，切换后台运行模式...${Font}"
+    echo -e "${Red}注意：Systemd 启动似乎失败，正在尝试后台运行模式...${Font}"
     nohup ./x-ui >/dev/null 2>&1 &
-    # 写入 rc.local
-    if [ ! -f /etc/rc.local ]; then echo '#!/bin/bash' > /etc/rc.local; chmod +x /etc/rc.local; fi
-    grep -q "x-ui" /etc/rc.local || sed -i '$i nohup /usr/local/x-ui/x-ui >/dev/null 2>&1 &' /etc/rc.local
-else
-    echo -e "${Green}Systemd 服务启动成功！${Font}"
 fi
-
-# ==========================================
-# 7. 完成
-# ==========================================
-# 放行端口
-iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
-ufw allow $SET_PORT/tcp 2>/dev/null
-
-IP=$(curl -s4m8 ip.sb)
-echo -e ""
-echo -e "${Blue}#################################################${Font}"
-echo -e "${Green}             咸v咆哮制作 - 安装完成 (V3.2)       ${Font}"
-echo -e "${Blue}#################################################${Font}"
-echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
-echo -e "用户名   ：${Green}$SET_USER${Font}"
-echo -e "密码     ：${Green}$SET_PASS${Font}"
-echo -e "${Blue}#################################################${Font}"
-echo -e "输入 ${Green}x-ui${Font} 可调出管理菜单"
