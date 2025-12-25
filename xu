@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极完整版 (V3)
-# 功能：智能架构、多重保活、修复软链接、强制根路径
+# 标题：咸v咆哮制作 - X-UI 终极优化版 (V3.2)
+# 修正：1. 恢复全架构支持 (amd64/arm64/armv5/386)
+#       2. 修复密码显示已改但实际未生效的问题
 # ==========================================
 
 # --- 颜色配置 ---
@@ -22,16 +23,12 @@ SET_PASS="3344"
 SET_PORT="8443"
 
 # ==========================================
-# 1. 霸气开场 (勿忘初衷)
+# 1. 霸气开场
 # ==========================================
 clear
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#                                               #${Font}"
-echo -e "${Blue}#               咸v咆哮制作                     #${Font}"
-echo -e "${Blue}#         X-UI 自动安装脚本 (终极版)            #${Font}"
-echo -e "${Blue}#                                               #${Font}"
+echo -e "${Blue}#         X-UI 自动安装脚本 (多架构修复版)      #${Font}"
 echo -e "${Blue}#################################################${Font}"
-sleep 2
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${Red}错误：请使用 root 身份运行！${Font}" 
@@ -52,12 +49,13 @@ else
 fi
 
 # ==========================================
-# 3. 架构识别与下载
+# 3. 架构识别与下载 (已完全恢复原版逻辑)
 # ==========================================
 echo -e "${Yellow}>> 正在识别架构...${Font}"
 ARCH=$(uname -m)
 FILE_NAME=""
 
+# 恢复了对 i386 和 armv5 的支持 
 case $ARCH in
     x86_64) FILE_NAME="x-ui-linux-amd64.tar.gz" ;;
     aarch64) FILE_NAME="x-ui-linux-arm64.tar.gz" ;;
@@ -93,52 +91,58 @@ if [[ $NEED_DOWNLOAD -eq 1 ]]; then
 fi
 
 # ==========================================
-# 4. 安装与关键修复 (此处修复了命令找不到的问题)
+# 4. 安装与关键修复 (解决密码无法写入问题)
 # ==========================================
 echo -e "${Yellow}>> 正在安装并修复路径...${Font}"
+
+# 【关键优化】强力清理旧进程，防止数据库被锁
+systemctl stop x-ui >/dev/null 2>&1
+pkill -9 x-ui >/dev/null 2>&1
+sleep 1
+
 rm -rf x-ui
 tar zxvf "$FILE_NAME" >/dev/null
 cd x-ui
 
 chmod +x x-ui x-ui.sh bin/xray-linux-*
-
-# 核心修复：建立软链接，确保终端可以直接输入 x-ui
 rm -f "$BIN_LINK"
-ln -s "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
-chmod +x "$BIN_LINK"
-
-if [[ -L "$BIN_LINK" ]]; then
-    echo -e "${Green}命令链接建立成功！${Font}"
-else
-    echo -e "${Red}命令链接建立失败，尝试强制复制...${Font}"
-    cp "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
-fi
+ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"  # 使用 -sf 强制覆盖链接
 
 # ==========================================
 # 5. 配置写入 (针对端口、账号、路径)
 # ==========================================
-echo -e "${Yellow}>> 正在配置...${Font}"
-# 停止旧进程
-systemctl stop x-ui 2>/dev/null
-pkill -f x-ui 2>/dev/null
+echo -e "${Yellow}>> 正在配置账号与数据库...${Font}"
 
-# 方案A：标准命令
+# 确保数据库目录存在
+mkdir -p /etc/x-ui/
+
+# 方案A：先尝试标准命令生成初始DB
 ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
 
-# 方案B：数据库强制修正 (解决那个随机路径的问题)
+# 方案B：数据库强制修正 (解决那个随机路径 + 密码改不掉的问题)
 if command -v sqlite3 >/dev/null 2>&1; then
-    # 确保数据库存在，先运行一下生成DB
+    # 确保数据库文件存在
     if [ ! -f "$DB_PATH" ]; then
-        ./x-ui >/dev/null 2>&1 &
-        sleep 3
-        pkill -f x-ui
+        cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH" >/dev/null 2>&1
     fi
     
     echo -e "${Yellow}尝试使用 SQLite 强制清理 Web路径...${Font}"
-    # 强制把 webBasePath 清空，这样你就可以直接用 IP:8443 访问
+    
+    # 强制修正 webBasePath 和 端口
     sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
     sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
+    
+    # 【重点修复】强制重写用户名密码
     sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
+
+    # 【校验逻辑】检查密码是否真的改成了 3344
+    CURRENT_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
+    if [[ "$CURRENT_PASS" != "$SET_PASS" ]]; then
+        echo -e "${Red}警告：SQLite 写入未生效，尝试使用备用接口重置...${Font}"
+        ./x-ui setting -username $SET_USER -password $SET_PASS
+    else
+        echo -e "${Green}数据库校验通过：密码修改成功！${Font}"
+    fi
 fi
 
 # ==========================================
@@ -189,7 +193,208 @@ ufw allow $SET_PORT/tcp 2>/dev/null
 IP=$(curl -s4m8 ip.sb)
 echo -e ""
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Green}             咸v咆哮制作 - 安装完成 (V3)         ${Font}"
+echo -e "${Green}             咸v咆哮制作 - 安装完成 (V3.2)       ${Font}"
+echo -e "${Blue}#################################################${Font}"
+echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
+echo -e "用户名   ：${Green}$SET_USER${Font}"
+echo -e "密码     ：${Green}$SET_PASS${Font}"
+echo -e "${Blue}#################################################${Font}"
+echo -e "输入 ${Green}x-ui${Font} 可调出管理菜单"#!/bin/bash
+
+# ==========================================
+# 标题：咸v咆哮制作 - X-UI 终极优化版 (V3.2)
+# 修正：1. 恢复全架构支持 (amd64/arm64/armv5/386)
+#       2. 修复密码显示已改但实际未生效的问题
+# ==========================================
+
+# --- 颜色配置 ---
+Red="\033[31m"
+Green="\033[32m"
+Yellow="\033[33m"
+Blue="\033[36m"
+Font="\033[0m"
+
+# --- 核心变量 ---
+BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
+INSTALL_PATH="/usr/local/x-ui"
+BIN_LINK="/usr/bin/x-ui"
+DB_PATH="/etc/x-ui/x-ui.db"
+SET_USER="3344"
+SET_PASS="3344"
+SET_PORT="8443"
+
+# ==========================================
+# 1. 霸气开场
+# ==========================================
+clear
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Blue}#         X-UI 自动安装脚本 (多架构修复版)      #${Font}"
+echo -e "${Blue}#################################################${Font}"
+
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${Red}错误：请使用 root 身份运行！${Font}" 
+   exit 1
+fi
+
+# ==========================================
+# 2. 环境准备
+# ==========================================
+echo -e "${Yellow}>> 正在更新系统并安装必要工具...${Font}"
+if [[ -f /etc/redhat-release ]]; then
+    yum update -y && yum install -y curl wget tar sqlite3
+elif cat /etc/issue | grep -q -E -i "debian|ubuntu"; then
+    apt-get update -y && apt-get install -y curl wget tar sqlite3
+else
+    echo -e "${Red}系统不支持，请更换 Debian/Ubuntu/CentOS${Font}"
+    exit 1
+fi
+
+# ==========================================
+# 3. 架构识别与下载 (已完全恢复原版逻辑)
+# ==========================================
+echo -e "${Yellow}>> 正在识别架构...${Font}"
+ARCH=$(uname -m)
+FILE_NAME=""
+
+# 恢复了对 i386 和 armv5 的支持 
+case $ARCH in
+    x86_64) FILE_NAME="x-ui-linux-amd64.tar.gz" ;;
+    aarch64) FILE_NAME="x-ui-linux-arm64.tar.gz" ;;
+    i386|i686) FILE_NAME="x-ui-linux-386.tar.gz" ;;
+    armv5*) FILE_NAME="x-ui-linux-armv5.tar.gz" ;;
+    *) echo -e "${Red}不支持的架构: $ARCH${Font}"; exit 1 ;;
+esac
+
+DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
+cd /usr/local/
+
+# 智能包检测
+NEED_DOWNLOAD=1
+if [[ -f "$FILE_NAME" ]]; then
+    if tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
+        echo -e "${Green}本地包完整，跳过下载！${Font}"
+        NEED_DOWNLOAD=0
+    else
+        echo -e "${Red}本地包损坏，重新下载...${Font}"
+        rm -f "$FILE_NAME"
+    fi
+fi
+
+if [[ $NEED_DOWNLOAD -eq 1 ]]; then
+    echo -e "${Yellow}下载: $DOWNLOAD_URL${Font}"
+    wget -N --no-check-certificate -O "$FILE_NAME" "$DOWNLOAD_URL"
+    if [[ $? -ne 0 ]]; then
+        curl -L -k -o "$FILE_NAME" "$DOWNLOAD_URL"
+    fi
+    if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
+        echo -e "${Red}下载失败或文件损坏！${Font}"; exit 1
+    fi
+fi
+
+# ==========================================
+# 4. 安装与关键修复 (解决密码无法写入问题)
+# ==========================================
+echo -e "${Yellow}>> 正在安装并修复路径...${Font}"
+
+# 【关键优化】强力清理旧进程，防止数据库被锁
+systemctl stop x-ui >/dev/null 2>&1
+pkill -9 x-ui >/dev/null 2>&1
+sleep 1
+
+rm -rf x-ui
+tar zxvf "$FILE_NAME" >/dev/null
+cd x-ui
+
+chmod +x x-ui x-ui.sh bin/xray-linux-*
+rm -f "$BIN_LINK"
+ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"  # 使用 -sf 强制覆盖链接
+
+# ==========================================
+# 5. 配置写入 (针对端口、账号、路径)
+# ==========================================
+echo -e "${Yellow}>> 正在配置账号与数据库...${Font}"
+
+# 确保数据库目录存在
+mkdir -p /etc/x-ui/
+
+# 方案A：先尝试标准命令生成初始DB
+./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
+
+# 方案B：数据库强制修正 (解决那个随机路径 + 密码改不掉的问题)
+if command -v sqlite3 >/dev/null 2>&1; then
+    # 确保数据库文件存在
+    if [ ! -f "$DB_PATH" ]; then
+        cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH" >/dev/null 2>&1
+    fi
+    
+    echo -e "${Yellow}尝试使用 SQLite 强制清理 Web路径...${Font}"
+    
+    # 强制修正 webBasePath 和 端口
+    sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
+    sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
+    
+    # 【重点修复】强制重写用户名密码
+    sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
+
+    # 【校验逻辑】检查密码是否真的改成了 3344
+    CURRENT_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
+    if [[ "$CURRENT_PASS" != "$SET_PASS" ]]; then
+        echo -e "${Red}警告：SQLite 写入未生效，尝试使用备用接口重置...${Font}"
+        ./x-ui setting -username $SET_USER -password $SET_PASS
+    else
+        echo -e "${Green}数据库校验通过：密码修改成功！${Font}"
+    fi
+fi
+
+# ==========================================
+# 6. 启动服务 (修复 Systemd 路径问题)
+# ==========================================
+echo -e "${Yellow}>> 配置服务...${Font}"
+
+cat > /etc/systemd/system/x-ui.service <<EOF
+[Unit]
+Description=x-ui Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_PATH
+ExecStart=$INSTALL_PATH/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable x-ui
+systemctl restart x-ui
+sleep 2
+
+# 双重保险：如果没有运行，则使用 nohup
+if ! systemctl is-active x-ui >/dev/null 2>&1; then
+    echo -e "${Red}Systemd 启动异常，切换后台运行模式...${Font}"
+    nohup ./x-ui >/dev/null 2>&1 &
+    # 写入 rc.local
+    if [ ! -f /etc/rc.local ]; then echo '#!/bin/bash' > /etc/rc.local; chmod +x /etc/rc.local; fi
+    grep -q "x-ui" /etc/rc.local || sed -i '$i nohup /usr/local/x-ui/x-ui >/dev/null 2>&1 &' /etc/rc.local
+else
+    echo -e "${Green}Systemd 服务启动成功！${Font}"
+fi
+
+# ==========================================
+# 7. 完成
+# ==========================================
+# 放行端口
+iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
+ufw allow $SET_PORT/tcp 2>/dev/null
+
+IP=$(curl -s4m8 ip.sb)
+echo -e ""
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Green}             咸v咆哮制作 - 安装完成 (V3.2)       ${Font}"
 echo -e "${Blue}#################################################${Font}"
 echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
 echo -e "用户名   ：${Green}$SET_USER${Font}"
