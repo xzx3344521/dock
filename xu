@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极全能版 (V4.0)
-# 功能：全架构、抗网络波动、防锁死、时间校准、多防火墙适配
+# 标题：咸v咆哮制作 - X-UI 终极全能版 (V5.1)
+# 修正：1. 完美支持 IPv6 Only 机器 (自动识别双栈)
+#       2. 补全 CentOS/RedHat 系统换源逻辑
 # ==========================================
 
 # --- 颜色配置 ---
@@ -22,61 +23,119 @@ SET_PASS="3344"
 SET_PORT="8443"
 
 # ==========================================
-# 1. 霸气开场
+# 0. 网络环境智能检测 (勿忘初衷：全环境兼容)
+# ==========================================
+check_network() {
+    echo -e "${Yellow}>> [0/6] 正在检测网络环境...${Font}"
+    HAS_IPV4=0
+    HAS_IPV6=0
+    
+    # 检测 IPv4
+    if curl -s4m3 https://www.google.com/generate_204 >/dev/null 2>&1 || curl -s4m3 https://www.baidu.com >/dev/null 2>&1; then
+        HAS_IPV4=1
+    fi
+    # 检测 IPv6
+    if curl -s6m3 https://www.google.com/generate_204 >/dev/null 2>&1; then
+        HAS_IPV6=1
+    fi
+
+    # 制定下载策略
+    if [[ $HAS_IPV4 -eq 1 ]]; then
+        echo -e "${Green}检测到 IPv4 网络，将优先使用 IPv4 通道 (更稳)${Font}"
+        NET_OPT="-4"
+    elif [[ $HAS_IPV6 -eq 1 ]]; then
+        echo -e "${Green}检测到纯 IPv6 网络，将自动切换至 IPv6 通道${Font}"
+        NET_OPT="-6"
+    else
+        echo -e "${Red}错误：未检测到任何可用网络！${Font}"
+        exit 1
+    fi
+}
+
+# ==========================================
+# 1. 换源菜单 (覆盖 Debian/Ubuntu/CentOS)
 # ==========================================
 clear
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#     X-UI 自动安装脚本 (V4.0 全能防御版)       #${Font}"
-echo -e "${Blue}#     兼容: IPv4/v6 | 多架构 | 智能防报错       #${Font}"
+echo -e "${Blue}#     X-UI 自动安装脚本 (V5.1 双栈修复版)       #${Font}"
 echo -e "${Blue}#################################################${Font}"
-sleep 1
 
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${Red}错误：必须使用 root 身份运行！${Font}" 
-   exit 1
+check_network
+
+echo -e "${Yellow}请选择服务器所在地 (优化系统源下载速度)：${Font}"
+echo -e "-------------------------------------------------"
+echo -e "1. ${Green}中国大陆${Font} (阿里云内网/公网源)"
+echo -e "2. ${Green}香港/海外${Font} (Cloudflare/官方源)"
+echo -e "3. ${Yellow}不换源${Font} (保持默认)"
+echo -e "-------------------------------------------------"
+read -p "请输入数字 [1-3] (默认2): " SOURCE_CHOICE
+[[ -z "$SOURCE_CHOICE" ]] && SOURCE_CHOICE="2"
+
+# 识别系统类型
+PM="apt"
+if [[ -f /etc/redhat-release ]]; then PM="yum"; fi
+
+if [ "$SOURCE_CHOICE" != "3" ]; then
+    echo -e "${Yellow}>> 正在优化系统软件源...${Font}"
+    
+    # --- Debian/Ubuntu 换源逻辑 ---
+    if [ "$PM" == "apt" ]; then
+        if [ -f /etc/os-release ]; then . /etc/os-release; CODENAME=$VERSION_CODENAME; else CODENAME="bookworm"; fi
+        cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%s)
+        
+        if [ "$SOURCE_CHOICE" == "1" ]; then # 阿里云
+             DOMAIN="mirrors.aliyun.com"
+        else # Cloudflare (海外通用)
+             DOMAIN="debian.cloudflare.mirrors.com"
+        fi
+        
+        cat > /etc/apt/sources.list <<EOF
+deb https://$DOMAIN/debian/ $CODENAME main non-free non-free-firmware contrib
+deb-src https://$DOMAIN/debian/ $CODENAME main non-free non-free-firmware contrib
+deb https://$DOMAIN/debian-security/ $CODENAME-security main
+deb https://$DOMAIN/debian/ $CODENAME-updates main non-free non-free-firmware contrib
+EOF
+    
+    # --- CentOS 换源逻辑 (补全初衷) ---
+    elif [ "$PM" == "yum" ]; then
+        mkdir -p /etc/yum.repos.d/bak
+        mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/bak/ 2>/dev/null
+        
+        if [ "$SOURCE_CHOICE" == "1" ]; then # 阿里云
+             curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo
+        else # 官方/其他
+             curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.edge.kernel.org/centos/7/os/x86_64/
+        fi
+        yum makecache >/dev/null 2>&1
+    fi
 fi
 
 # ==========================================
-# 2. 系统环境大清洗 (防报错核心)
+# 2. 系统环境处理 (防锁死)
 # ==========================================
-echo -e "${Yellow}>> [1/6] 正在执行系统环境预处理...${Font}"
-
-# 2.1 暴力解锁 APT (解决 "Could not get lock" 问题)
-# 检测是否有 apt/dpkg 进程在运行，直接杀掉
-if pgrep -x "apt" >/dev/null || pgrep -x "apt-get" >/dev/null || pgrep -x "dpkg" >/dev/null; then
-    echo -e "${Yellow}发现后台有安装进程，正在强制终止...${Font}"
-    killall apt apt-get dpkg >/dev/null 2>&1
-    sleep 2
-fi
-rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock*
-
-# 2.2 修复 DPKG 状态
-dpkg --configure -a >/dev/null 2>&1
-
-# 2.3 安装核心依赖 (增加 ca-certificates 防止SSL报错, ntpdate 防止时间不同步)
-echo -e "${Yellow}>> [2/6] 安装必要组件 (Curl, Wget, SQLite, Time)...${Font}"
-if [[ -f /etc/redhat-release ]]; then
-    yum update -y && yum install -y curl wget tar sqlite3 ca-certificates
-elif cat /etc/issue | grep -q -E -i "debian|ubuntu"; then
-    apt-get update -y && apt-get install -y curl wget tar sqlite3 ca-certificates
+echo -e "${Yellow}>> [1/6] 清理系统锁与残留进程...${Font}"
+if [ "$PM" == "apt" ]; then
+    pgrep -x "apt" && killall apt apt-get dpkg >/dev/null 2>&1
+    rm -rf /var/lib/apt/lists/lock /var/lib/dpkg/lock*
+    dpkg --configure -a >/dev/null 2>&1
+    echo -e "${Yellow}>> [2/6] 安装依赖...${Font}"
+    apt-get update -o Acquire::http::Timeout="20" || echo -e "${Red}源更新超时，跳过...${Font}"
+    apt-get install -y curl wget tar sqlite3 ca-certificates ntpdate
 else
-    echo -e "${Red}错误：不支持的系统版本${Font}"
-    exit 1
+    echo -e "${Yellow}>> [2/6] 安装依赖 (CentOS)...${Font}"
+    yum install -y curl wget tar sqlite3 ntpdate
 fi
 
-# 2.4 关键：校准系统时间 (防止客户端连接失败)
-echo -e "${Yellow}>> [3/6] 正在校准服务器时间...${Font}"
+# ==========================================
+# 3. 时间与架构
+# ==========================================
+echo -e "${Yellow}>> [3/6] 校准时间...${Font}"
 ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-date -s "$(curl -sI g.cn | grep Date | cut -d' ' -f3-6)Z" >/dev/null 2>&1
-echo -e "${Green}当前服务器时间: $(date)${Font}"
+ntpdate pool.ntp.org >/dev/null 2>&1 || date -s "$(curl -sI g.cn | grep Date | cut -d' ' -f3-6)Z"
 
-# ==========================================
-# 3. 架构识别与抗干扰下载
-# ==========================================
-echo -e "${Yellow}>> [4/6] 识别架构并下载...${Font}"
+echo -e "${Yellow}>> [4/6] 识别架构...${Font}"
 ARCH=$(uname -m)
 FILE_NAME=""
-
 case $ARCH in
     x86_64) FILE_NAME="x-ui-linux-amd64.tar.gz" ;;
     aarch64) FILE_NAME="x-ui-linux-arm64.tar.gz" ;;
@@ -85,35 +144,30 @@ case $ARCH in
     *) echo -e "${Red}不支持的架构: $ARCH${Font}"; exit 1 ;;
 esac
 
-DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
+# ==========================================
+# 4. 智能下载 (使用前面检测的 NET_OPT)
+# ==========================================
+echo -e "${Yellow}>> [4/6] 下载安装包...${Font}"
 cd /usr/local/
-
-# 删除旧文件
 rm -f "$FILE_NAME"
+DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
 
-# 下载策略：强制 IPv4 + 超时重试 (解决卡死问题)
-echo -e "${Yellow}正在下载 (强制 IPv4 通道)...${Font}"
-# 尝试 wget
-wget -4 --no-check-certificate --timeout=20 --tries=3 -O "$FILE_NAME" "$DOWNLOAD_URL"
-
-# 如果 wget 失败，尝试 curl
-if [ ! -f "$FILE_NAME" ] || [ ! -s "$FILE_NAME" ]; then
-    echo -e "${Yellow}Wget 下载失败，切换 Curl 救急...${Font}"
-    curl -4 -L -k --connect-timeout 20 --retry 3 -o "$FILE_NAME" "$DOWNLOAD_URL"
+# 使用 $NET_OPT 变量 (-4 或 -6)
+wget $NET_OPT --no-check-certificate --timeout=20 --tries=3 -O "$FILE_NAME" "$DOWNLOAD_URL"
+if [ ! -s "$FILE_NAME" ]; then
+    echo -e "${Yellow}Wget 下载失败，切换 Curl...${Font}"
+    curl $NET_OPT -L -k --connect-timeout 20 --retry 3 -o "$FILE_NAME" "$DOWNLOAD_URL"
 fi
 
-# 最终完整性检查
 if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-    echo -e "${Red}严重错误：下载失败或文件损坏！请检查网络连接或源地址。${Font}"
+    echo -e "${Red}严重错误：下载失败，请检查网络或源地址！${Font}"
     exit 1
 fi
 
 # ==========================================
-# 4. 安装与数据库强写
+# 5. 安装与数据库配置
 # ==========================================
 echo -e "${Yellow}>> [5/6] 安装与数据库配置...${Font}"
-
-# 停止旧服务并强杀进程
 systemctl stop x-ui >/dev/null 2>&1
 killall x-ui >/dev/null 2>&1
 rm -rf x-ui
@@ -122,37 +176,26 @@ cd x-ui
 chmod +x x-ui x-ui.sh bin/xray-linux-*
 ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
 
-# 准备数据库目录
 mkdir -p /etc/x-ui/
-
-# 第一次初始化生成 DB
 ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
 
-# 数据库强写逻辑
 if command -v sqlite3 >/dev/null 2>&1; then
-    # 确保 DB 存在
     [ ! -f "$DB_PATH" ] && cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH"
-    
-    # 执行修改
     sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
     sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
     sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
     
-    # 验证
-    CHECK_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
-    if [ "$CHECK_PASS" == "$SET_PASS" ]; then
-        echo -e "${Green}账号密码数据库校验通过！${Font}"
-    else
-        echo -e "${Red}警告：SQLite写入未生效，使用备用命令重置...${Font}"
+    if [ "$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")" != "$SET_PASS" ]; then
         ./x-ui setting -username $SET_USER -password $SET_PASS
+    else
+        echo -e "${Green}数据库写入成功！${Font}"
     fi
 fi
 
 # ==========================================
-# 5. 服务启动与防火墙全放行
+# 6. 启动与放行
 # ==========================================
-echo -e "${Yellow}>> [6/6] 配置服务与防火墙...${Font}"
-
+echo -e "${Yellow}>> [6/6] 启动服务...${Font}"
 cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
@@ -175,37 +218,22 @@ systemctl enable x-ui
 systemctl restart x-ui
 sleep 2
 
-# 智能防火墙放行 (兼容 ufw, firewalld, iptables)
-echo -e "${Yellow}正在适配防火墙端口 $SET_PORT...${Font}"
-if command -v ufw >/dev/null 2>&1; then
-    ufw allow $SET_PORT/tcp >/dev/null 2>&1
-fi
-if command -v firewall-cmd >/dev/null 2>&1; then
+# 多种防火墙兼容
+if command -v ufw >/dev/null 2>&1; then ufw allow $SET_PORT/tcp >/dev/null 2>&1; fi
+if command -v firewall-cmd >/dev/null 2>&1; then 
     firewall-cmd --zone=public --add-port=$SET_PORT/tcp --permanent >/dev/null 2>&1
     firewall-cmd --reload >/dev/null 2>&1
 fi
-# iptables 作为兜底
 iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
 
-# ==========================================
-# 6. 最终检测
-# ==========================================
-IP=$(curl -s4m8 ip.sb)
-if [[ -z "$IP" ]]; then
-    IP=$(curl -s6m8 ip.sb) # 如果 ipv4 没取到，尝试取 ipv6
-fi
+# 最终信息展示 (双栈兼容)
+IP=$(curl -s4m5 ip.sb)
+[ -z "$IP" ] && IP=$(curl -s6m5 ip.sb)
 
-echo -e ""
-echo -e "${Blue}#################################################${Font}"
-echo -e "${Green}        咸v咆哮制作 - 安装完成 (V4.0)            ${Font}"
+echo -e "\n${Blue}#################################################${Font}"
+echo -e "${Green}      咸v咆哮制作 - 安装完成 (V5.1 双栈版)       ${Font}"
 echo -e "${Blue}#################################################${Font}"
 echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
 echo -e "用户名   ：${Green}$SET_USER${Font}"
 echo -e "密码     ：${Green}$SET_PASS${Font}"
 echo -e "${Blue}#################################################${Font}"
-
-# 检查服务状态
-if ! systemctl is-active x-ui >/dev/null 2>&1; then
-    echo -e "${Red}注意：Systemd 启动似乎失败，正在尝试后台运行模式...${Font}"
-    nohup ./x-ui >/dev/null 2>&1 &
-fi
