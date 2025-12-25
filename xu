@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极全能版 (V5.1)
-# 修正：1. 完美支持 IPv6 Only 机器 (自动识别双栈)
-#       2. 补全 CentOS/RedHat 系统换源逻辑
+# 标题：咸v咆哮制作 - X-UI 终极全能版 (V5.2)
+# 更新：新增“一键恢复配置”模式 (支持双源容灾下载)
+# 基底：V5.1 (双栈网络/多架构/防锁死/CentOS支持)
 # ==========================================
 
 # --- 颜色配置 ---
@@ -15,6 +15,10 @@ Font="\033[0m"
 
 # --- 核心配置 ---
 BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
+# 备份数据库下载地址 (主/备)
+DB_URL_1="https://g1.vps7k7k.xyz/xui/x-ui%E6%A0%87%E5%87%86.db"
+DB_URL_2="https://pub-b69a7194f4ea42fba6aa990c49bded91.r2.dev/xui/x-ui%E6%A0%87%E5%87%86.db"
+
 INSTALL_PATH="/usr/local/x-ui"
 BIN_LINK="/usr/bin/x-ui"
 DB_PATH="/etc/x-ui/x-ui.db"
@@ -23,7 +27,23 @@ SET_PASS="3344"
 SET_PORT="8443"
 
 # ==========================================
-# 0. 网络环境智能检测 (勿忘初衷：全环境兼容)
+# 1. 模式选择 (新增功能)
+# ==========================================
+clear
+echo -e "${Blue}#################################################${Font}"
+echo -e "${Blue}#     X-UI 自动安装脚本 (V5.2 备份恢复版)       #${Font}"
+echo -e "${Blue}#################################################${Font}"
+
+echo -e "${Yellow}请选择安装模式：${Font}"
+echo -e "-------------------------------------------------"
+echo -e "1. ${Green}标准安装${Font} (全新安装，默认空配置)"
+echo -e "2. ${Green}恢复安装${Font} (安装并自动下载恢复预设的节点配置)"
+echo -e "-------------------------------------------------"
+read -p "请输入数字 [1-2] (默认1): " INSTALL_MODE
+[[ -z "$INSTALL_MODE" ]] && INSTALL_MODE="1"
+
+# ==========================================
+# 2. 网络环境智能检测 (V5.1核心 防御逻辑)
 # ==========================================
 check_network() {
     echo -e "${Yellow}>> [0/6] 正在检测网络环境...${Font}"
@@ -51,17 +71,11 @@ check_network() {
         exit 1
     fi
 }
-
-# ==========================================
-# 1. 换源菜单 (覆盖 Debian/Ubuntu/CentOS)
-# ==========================================
-clear
-echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#     X-UI 自动安装脚本 (V5.1 双栈修复版)       #${Font}"
-echo -e "${Blue}#################################################${Font}"
-
 check_network
 
+# ==========================================
+# 3. 换源菜单 (保留 V5.1 全系统兼容)
+# ==========================================
 echo -e "${Yellow}请选择服务器所在地 (优化系统源下载速度)：${Font}"
 echo -e "-------------------------------------------------"
 echo -e "1. ${Green}中国大陆${Font} (阿里云内网/公网源)"
@@ -71,21 +85,20 @@ echo -e "-------------------------------------------------"
 read -p "请输入数字 [1-3] (默认2): " SOURCE_CHOICE
 [[ -z "$SOURCE_CHOICE" ]] && SOURCE_CHOICE="2"
 
-# 识别系统类型
+# 识别系统类型 (apt 或 yum)
 PM="apt"
 if [[ -f /etc/redhat-release ]]; then PM="yum"; fi
 
 if [ "$SOURCE_CHOICE" != "3" ]; then
     echo -e "${Yellow}>> 正在优化系统软件源...${Font}"
     
-    # --- Debian/Ubuntu 换源逻辑 ---
     if [ "$PM" == "apt" ]; then
         if [ -f /etc/os-release ]; then . /etc/os-release; CODENAME=$VERSION_CODENAME; else CODENAME="bookworm"; fi
         cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%s)
         
         if [ "$SOURCE_CHOICE" == "1" ]; then # 阿里云
              DOMAIN="mirrors.aliyun.com"
-        else # Cloudflare (海外通用)
+        else # Cloudflare
              DOMAIN="debian.cloudflare.mirrors.com"
         fi
         
@@ -96,14 +109,12 @@ deb https://$DOMAIN/debian-security/ $CODENAME-security main
 deb https://$DOMAIN/debian/ $CODENAME-updates main non-free non-free-firmware contrib
 EOF
     
-    # --- CentOS 换源逻辑 (补全初衷) ---
     elif [ "$PM" == "yum" ]; then
         mkdir -p /etc/yum.repos.d/bak
         mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/bak/ 2>/dev/null
-        
-        if [ "$SOURCE_CHOICE" == "1" ]; then # 阿里云
+        if [ "$SOURCE_CHOICE" == "1" ]; then
              curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo
-        else # 官方/其他
+        else
              curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.edge.kernel.org/centos/7/os/x86_64/
         fi
         yum makecache >/dev/null 2>&1
@@ -111,7 +122,7 @@ EOF
 fi
 
 # ==========================================
-# 2. 系统环境处理 (防锁死)
+# 4. 系统环境处理 (防锁死)
 # ==========================================
 echo -e "${Yellow}>> [1/6] 清理系统锁与残留进程...${Font}"
 if [ "$PM" == "apt" ]; then
@@ -127,7 +138,7 @@ else
 fi
 
 # ==========================================
-# 3. 时间与架构
+# 5. 时间与架构
 # ==========================================
 echo -e "${Yellow}>> [3/6] 校准时间...${Font}"
 ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
@@ -145,14 +156,13 @@ case $ARCH in
 esac
 
 # ==========================================
-# 4. 智能下载 (使用前面检测的 NET_OPT)
+# 6. 下载安装包
 # ==========================================
-echo -e "${Yellow}>> [4/6] 下载安装包...${Font}"
+echo -e "${Yellow}>> [4/6] 下载安装包 (Mode: $NET_OPT)...${Font}"
 cd /usr/local/
 rm -f "$FILE_NAME"
 DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
 
-# 使用 $NET_OPT 变量 (-4 或 -6)
 wget $NET_OPT --no-check-certificate --timeout=20 --tries=3 -O "$FILE_NAME" "$DOWNLOAD_URL"
 if [ ! -s "$FILE_NAME" ]; then
     echo -e "${Yellow}Wget 下载失败，切换 Curl...${Font}"
@@ -160,14 +170,14 @@ if [ ! -s "$FILE_NAME" ]; then
 fi
 
 if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-    echo -e "${Red}严重错误：下载失败，请检查网络或源地址！${Font}"
+    echo -e "${Red}严重错误：安装包下载失败！${Font}"
     exit 1
 fi
 
 # ==========================================
-# 5. 安装与数据库配置
+# 7. 安装与数据库处理 (关键逻辑修改)
 # ==========================================
-echo -e "${Yellow}>> [5/6] 安装与数据库配置...${Font}"
+echo -e "${Yellow}>> [5/6] 安装与配置...${Font}"
 systemctl stop x-ui >/dev/null 2>&1
 killall x-ui >/dev/null 2>&1
 rm -rf x-ui
@@ -177,23 +187,57 @@ chmod +x x-ui x-ui.sh bin/xray-linux-*
 ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
 
 mkdir -p /etc/x-ui/
-./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
 
-if command -v sqlite3 >/dev/null 2>&1; then
+# --- 分支逻辑：标准安装 vs 恢复安装 ---
+if [ "$INSTALL_MODE" == "2" ]; then
+    echo -e "${Yellow}>> 正在执行恢复模式，下载配置文件...${Font}"
+    rm -f "$DB_PATH"
+    
+    # 尝试主链接
+    wget $NET_OPT --no-check-certificate -O "$DB_PATH" "$DB_URL_1"
+    
+    # 如下载失败，尝试备用链接
+    if [ ! -s "$DB_PATH" ]; then
+        echo -e "${Red}主链接下载失败，切换备用链接...${Font}"
+        wget $NET_OPT --no-check-certificate -O "$DB_PATH" "$DB_URL_2"
+    fi
+    
+    # 检查是否下载成功
+    if [ -s "$DB_PATH" ]; then
+        echo -e "${Green}配置文件恢复成功！${Font}"
+    else
+        echo -e "${Red}配置文件下载失败，将降级为标准安装...${Font}"
+        cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH"
+    fi
+else
+    echo -e "${Yellow}>> 执行标准安装...${Font}"
+    # 生成/初始化数据库
+    ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
     [ ! -f "$DB_PATH" ] && cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH"
+fi
+
+# --- 统一强制重置账号 (防止恢复的数据库密码未知) ---
+# 无论你是标准安装还是恢复安装，我都会把账号重置为 3344，但保留恢复进来的节点数据
+if command -v sqlite3 >/dev/null 2>&1; then
+    echo -e "${Yellow}>> 正在同步账户信息...${Font}"
+    
+    # 强制修正路径和端口
     sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
     sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
+    
+    # 强制修正账号密码 (保留节点表 inbounds 不动)
     sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
     
+    # 校验
     if [ "$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")" != "$SET_PASS" ]; then
         ./x-ui setting -username $SET_USER -password $SET_PASS
     else
-        echo -e "${Green}数据库写入成功！${Font}"
+        echo -e "${Green}账户权限配置完成！${Font}"
     fi
 fi
 
 # ==========================================
-# 6. 启动与放行
+# 8. 启动与放行
 # ==========================================
 echo -e "${Yellow}>> [6/6] 启动服务...${Font}"
 cat > /etc/systemd/system/x-ui.service <<EOF
@@ -218,7 +262,7 @@ systemctl enable x-ui
 systemctl restart x-ui
 sleep 2
 
-# 多种防火墙兼容
+# 防火墙兼容
 if command -v ufw >/dev/null 2>&1; then ufw allow $SET_PORT/tcp >/dev/null 2>&1; fi
 if command -v firewall-cmd >/dev/null 2>&1; then 
     firewall-cmd --zone=public --add-port=$SET_PORT/tcp --permanent >/dev/null 2>&1
@@ -226,14 +270,17 @@ if command -v firewall-cmd >/dev/null 2>&1; then
 fi
 iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
 
-# 最终信息展示 (双栈兼容)
+# 最终信息展示
 IP=$(curl -s4m5 ip.sb)
 [ -z "$IP" ] && IP=$(curl -s6m5 ip.sb)
 
 echo -e "\n${Blue}#################################################${Font}"
-echo -e "${Green}      咸v咆哮制作 - 安装完成 (V5.1 双栈版)       ${Font}"
+echo -e "${Green}      咸v咆哮制作 - 安装完成 (V5.2 恢复版)       ${Font}"
 echo -e "${Blue}#################################################${Font}"
 echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
 echo -e "用户名   ：${Green}$SET_USER${Font}"
 echo -e "密码     ：${Green}$SET_PASS${Font}"
+if [ "$INSTALL_MODE" == "2" ]; then
+    echo -e "提示     ：${Yellow}已成功恢复节点配置，账号密码已重置为 3344${Font}"
+fi
 echo -e "${Blue}#################################################${Font}"
