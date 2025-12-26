@@ -110,9 +110,10 @@ bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/frps)
 ```
 bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/xu)
 ```
-
-
-
+# dock安装cf
+```
+bash <(curl -sSL https://github.com/xzx3344521/dock/raw/refs/heads/main/dock%E5%AE%89%E8%A3%85cf)
+```
 
 
 
