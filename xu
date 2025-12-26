@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # ==========================================
-# 标题：咸v咆哮制作 - X-UI 终极全能版 (V5.2)
-# 更新：新增“一键恢复配置”模式 (支持双源容灾下载)
-# 基底：V5.1 (双栈网络/多架构/防锁死/CentOS支持)
+# 标题：咸v咆哮制作 - X-UI 终极全能版 (V5.6 智能极速版)
+# 更新：1. 新增源自动测速选择 (Ping检测)
+#       2. 新增 Aria2 + Axel 双核多线程下载引擎
+# 基底：V5.5 (全兼容架构)
 # ==========================================
 
 # --- 颜色配置 ---
@@ -15,7 +16,6 @@ Font="\033[0m"
 
 # --- 核心配置 ---
 BASE_URL="https://freeyx.vps3344.dpdns.org/xui"
-# 备份数据库下载地址 (主/备)
 DB_URL_1="https://g1.vps7k7k.xyz/xui/x-ui%E6%A0%87%E5%87%86.db"
 DB_URL_2="https://pub-b69a7194f4ea42fba6aa990c49bded91.r2.dev/xui/x-ui%E6%A0%87%E5%87%86.db"
 
@@ -27,11 +27,11 @@ SET_PASS="3344"
 SET_PORT="8443"
 
 # ==========================================
-# 1. 模式选择 (新增功能)
+# 1. 模式选择
 # ==========================================
 clear
 echo -e "${Blue}#################################################${Font}"
-echo -e "${Blue}#     X-UI 自动安装脚本 (V5.2 备份恢复版)       #${Font}"
+echo -e "${Blue}#     X-UI 自动安装脚本 (V5.6 智能极速版)       #${Font}"
 echo -e "${Blue}#################################################${Font}"
 
 echo -e "${Yellow}请选择安装模式：${Font}"
@@ -43,25 +43,22 @@ read -p "请输入数字 [1-2] (默认1): " INSTALL_MODE
 [[ -z "$INSTALL_MODE" ]] && INSTALL_MODE="1"
 
 # ==========================================
-# 2. 网络环境智能检测 (V5.1核心 防御逻辑)
+# 2. 网络环境智能检测
 # ==========================================
 check_network() {
-    echo -e "${Yellow}>> [0/6] 正在检测网络环境...${Font}"
+    echo -e "${Yellow}>> [0/7] 正在检测网络环境...${Font}"
     HAS_IPV4=0
     HAS_IPV6=0
     
-    # 检测 IPv4
-    if curl -s4m3 https://www.google.com/generate_204 >/dev/null 2>&1 || curl -s4m3 https://www.baidu.com >/dev/null 2>&1; then
+    if curl -s4m2 https://www.google.com/generate_204 >/dev/null 2>&1 || curl -s4m2 https://www.baidu.com >/dev/null 2>&1; then
         HAS_IPV4=1
     fi
-    # 检测 IPv6
-    if curl -s6m3 https://www.google.com/generate_204 >/dev/null 2>&1; then
+    if curl -s6m2 https://www.google.com/generate_204 >/dev/null 2>&1; then
         HAS_IPV6=1
     fi
 
-    # 制定下载策略
     if [[ $HAS_IPV4 -eq 1 ]]; then
-        echo -e "${Green}检测到 IPv4 网络，将优先使用 IPv4 通道 (更稳)${Font}"
+        echo -e "${Green}检测到 IPv4 网络，将优先使用 IPv4 通道${Font}"
         NET_OPT="-4"
     elif [[ $HAS_IPV6 -eq 1 ]]; then
         echo -e "${Green}检测到纯 IPv6 网络，将自动切换至 IPv6 通道${Font}"
@@ -74,41 +71,69 @@ check_network() {
 check_network
 
 # ==========================================
-# 3. 换源菜单 (保留 V5.1 全系统兼容)
+# 3. 智能源选择 (自动测速版)
 # ==========================================
-echo -e "${Yellow}请选择服务器所在地 (优化系统源下载速度)：${Font}"
-echo -e "-------------------------------------------------"
-echo -e "1. ${Green}中国大陆${Font} (阿里云内网/公网源)"
-echo -e "2. ${Green}香港/海外${Font} (Cloudflare/官方源)"
-echo -e "3. ${Yellow}不换源${Font} (保持默认)"
-echo -e "-------------------------------------------------"
-read -p "请输入数字 [1-3] (默认2): " SOURCE_CHOICE
-[[ -z "$SOURCE_CHOICE" ]] && SOURCE_CHOICE="2"
+auto_select_source() {
+    echo -e "${Yellow}>> [1/7] 正在智能测速选择最佳软件源...${Font}"
+    
+    # 定义测试目标
+    ALIYUN_URL="https://mirrors.aliyun.com"
+    GOOGLE_URL="https://www.google.com"
+    
+    # 测速逻辑：获取 HTTP 状态码的时间 (超时设为 2秒)
+    # 1. 测国外 (Google)
+    echo -n "   测试国际连通性... "
+    SPEED_GLOBAL=$(curl -o /dev/null -s -w '%{time_total}' --connect-timeout 2 "$GOOGLE_URL")
+    if [ $? -ne 0 ]; then SPEED_GLOBAL=999; echo "超时/无法连接"; else echo "${SPEED_GLOBAL}秒"; fi
+    
+    # 2. 测国内 (Aliyun)
+    echo -n "   测试国内连通性... "
+    SPEED_CN=$(curl -o /dev/null -s -w '%{time_total}' --connect-timeout 2 "$ALIYUN_URL")
+    if [ $? -ne 0 ]; then SPEED_CN=999; echo "超时/无法连接"; else echo "${SPEED_CN}秒"; fi
 
-# 识别系统类型 (apt 或 yum)
+    # 3. 决策
+    # 逻辑：如果 Google 连不上(999) 或者 阿里云速度明显快于 Google，则选国内源
+    if (( $(echo "$SPEED_GLOBAL == 999" | bc -l) )); then
+        echo -e "${Green}>> 判定为中国大陆环境 (无法连接Google)，自动选择阿里云源${Font}"
+        SOURCE_CHOICE="1"
+    elif (( $(echo "$SPEED_CN < $SPEED_GLOBAL" | bc -l) )); then
+        echo -e "${Green}>> 阿里云响应更快 (CN:$SPEED_CN vs Global:$SPEED_GLOBAL)，自动选择阿里云源${Font}"
+        SOURCE_CHOICE="1"
+    else
+        echo -e "${Green}>> 国际网络良好 (Global:$SPEED_GLOBAL)，自动选择 Cloudflare/官方源${Font}"
+        SOURCE_CHOICE="2"
+    fi
+}
+
+# 执行自动选择
+if command -v bc >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    auto_select_source
+else
+    # 如果没有 bc 工具，默认给个提示让用户盲选，或者默认选2
+    echo -e "${Yellow}缺失测速工具，默认选择官方源...${Font}"
+    SOURCE_CHOICE="2"
+fi
+
+# 执行换源操作
 PM="apt"
-if [[ -f /etc/redhat-release ]]; then PM="yum"; fi
+if [[ -f /etc/redhat-release ]] || command -v yum >/dev/null 2>&1; then PM="yum"; fi
 
 if [ "$SOURCE_CHOICE" != "3" ]; then
     echo -e "${Yellow}>> 正在优化系统软件源...${Font}"
-    
     if [ "$PM" == "apt" ]; then
         if [ -f /etc/os-release ]; then . /etc/os-release; CODENAME=$VERSION_CODENAME; else CODENAME="bookworm"; fi
         cp /etc/apt/sources.list /etc/apt/sources.list.bak.$(date +%s)
-        
-        if [ "$SOURCE_CHOICE" == "1" ]; then # 阿里云
+        if [ "$SOURCE_CHOICE" == "1" ]; then
              DOMAIN="mirrors.aliyun.com"
-        else # Cloudflare
+        else
              DOMAIN="debian.cloudflare.mirrors.com"
         fi
-        
         cat > /etc/apt/sources.list <<EOF
 deb https://$DOMAIN/debian/ $CODENAME main non-free non-free-firmware contrib
 deb-src https://$DOMAIN/debian/ $CODENAME main non-free non-free-firmware contrib
 deb https://$DOMAIN/debian-security/ $CODENAME-security main
 deb https://$DOMAIN/debian/ $CODENAME-updates main non-free non-free-firmware contrib
 EOF
-    
     elif [ "$PM" == "yum" ]; then
         mkdir -p /etc/yum.repos.d/bak
         mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/bak/ 2>/dev/null
@@ -117,34 +142,70 @@ EOF
         else
              curl -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.edge.kernel.org/centos/7/os/x86_64/
         fi
-        yum makecache >/dev/null 2>&1
+        timeout 60 yum makecache >/dev/null 2>&1
     fi
 fi
 
 # ==========================================
-# 4. 系统环境处理 (防锁死)
+# 4. 系统环境处理 (双核下载引擎安装)
 # ==========================================
-echo -e "${Yellow}>> [1/6] 清理系统锁与残留进程...${Font}"
+echo -e "${Yellow}>> [2/7] 安装依赖与下载引擎...${Font}"
+
+install_soft() {
+    if [ "$PM" == "apt" ]; then
+        apt-get install -y $1 >/dev/null 2>&1
+    elif [ "$PM" == "yum" ]; then
+        yum install -y $1 >/dev/null 2>&1
+    fi
+}
+
 if [ "$PM" == "apt" ]; then
     pgrep -x "apt" && killall apt apt-get dpkg >/dev/null 2>&1
     rm -rf /var/lib/apt/lists/lock /var/lib/dpkg/lock*
     dpkg --configure -a >/dev/null 2>&1
-    echo -e "${Yellow}>> [2/6] 安装依赖...${Font}"
-    apt-get update -o Acquire::http::Timeout="20" || echo -e "${Red}源更新超时，跳过...${Font}"
-    apt-get install -y curl wget tar sqlite3 ca-certificates ntpdate
+    
+    apt-get update -o Acquire::http::Timeout="20" || echo -e "${Red}源更新超时，尝试继续...${Font}"
+    
+    # 核心工具
+    apt-get install -y curl wget tar ca-certificates bc
+    
+    # 容错安装功能工具
+    install_soft sqlite3
+    
+    # [新增] 双核下载引擎
+    echo -n "   安装 Axel 加速器... "
+    install_soft axel && echo "完成" || echo "失败(跳过)"
+    
+    echo -n "   安装 Aria2 加速器... "
+    install_soft aria2 && echo "完成" || echo "失败(跳过)"
+
+    # 时间同步
+    if ! apt-get install -y ntpdate >/dev/null 2>&1; then
+        apt-get install -y ntpsec-ntpdate >/dev/null 2>&1
+    fi
 else
-    echo -e "${Yellow}>> [2/6] 安装依赖 (CentOS)...${Font}"
-    yum install -y curl wget tar sqlite3 ntpdate
+    # CentOS
+    yum install -y epel-release >/dev/null 2>&1
+    yum install -y curl wget tar bc >/dev/null 2>&1
+    install_soft sqlite3
+    install_soft ntpdate
+    install_soft axel
+    install_soft aria2
 fi
 
 # ==========================================
 # 5. 时间与架构
 # ==========================================
-echo -e "${Yellow}>> [3/6] 校准时间...${Font}"
+echo -e "${Yellow}>> [3/7] 校准时间...${Font}"
+rm -f /etc/localtime
 ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-ntpdate pool.ntp.org >/dev/null 2>&1 || date -s "$(curl -sI g.cn | grep Date | cut -d' ' -f3-6)Z"
+if command -v ntpdate >/dev/null 2>&1; then
+    ntpdate pool.ntp.org >/dev/null 2>&1
+else
+    date -s "$(curl -sI g.cn | grep Date | cut -d' ' -f3-6)Z" >/dev/null 2>&1
+fi
 
-echo -e "${Yellow}>> [4/6] 识别架构...${Font}"
+echo -e "${Yellow}>> [4/7] 识别架构...${Font}"
 ARCH=$(uname -m)
 FILE_NAME=""
 case $ARCH in
@@ -156,28 +217,54 @@ case $ARCH in
 esac
 
 # ==========================================
-# 6. 下载安装包
+# 6. 智能下载管理器 (双核+自动回退)
 # ==========================================
-echo -e "${Yellow}>> [4/6] 下载安装包 (Mode: $NET_OPT)...${Font}"
+# 参数: $1=URL, $2=OutputFilename
+download_manager() {
+    local url=$1
+    local file=$2
+    rm -f "$file"
+    
+    # 优先级 1: Axel (轻量多线程)
+    if command -v axel >/dev/null 2>&1; then
+        echo -e "${Green}>> 启用 Axel 引擎 (16线程)...${Font}"
+        if axel -n 16 -k -q -o "$file" "$url"; then return 0; fi
+        echo -e "${Red}Axel 下载失败，切换备用引擎...${Font}"
+    fi
+    
+    # 优先级 2: Aria2 (强力多线程)
+    if command -v aria2c >/dev/null 2>&1; then
+        echo -e "${Green}>> 启用 Aria2 引擎 (16线程)...${Font}"
+        # -x16:16连接, -s16:16服务器, -k1M:分块
+        if aria2c -x 16 -s 16 -k 1M -o "$file" "$url" >/dev/null 2>&1; then return 0; fi
+        echo -e "${Red}Aria2 下载失败，切换单线程...${Font}"
+    fi
+    
+    # 优先级 3: Wget (稳定单线程)
+    echo -e "${Yellow}>> 启用 Wget (单线程)...${Font}"
+    if wget $NET_OPT --no-check-certificate --timeout=30 --tries=3 -O "$file" "$url"; then return 0; fi
+    
+    # 优先级 4: Curl (最后保底)
+    echo -e "${Yellow}>> 启用 Curl (最后保底)...${Font}"
+    curl $NET_OPT -L -k --connect-timeout 30 --retry 3 -o "$file" "$url"
+}
+
+echo -e "${Yellow}>> [5/7] 下载安装包 (Mode: $NET_OPT)...${Font}"
 cd /usr/local/
-rm -f "$FILE_NAME"
 DOWNLOAD_URL="${BASE_URL}/${FILE_NAME}"
 
-wget $NET_OPT --no-check-certificate --timeout=20 --tries=3 -O "$FILE_NAME" "$DOWNLOAD_URL"
-if [ ! -s "$FILE_NAME" ]; then
-    echo -e "${Yellow}Wget 下载失败，切换 Curl...${Font}"
-    curl $NET_OPT -L -k --connect-timeout 20 --retry 3 -o "$FILE_NAME" "$DOWNLOAD_URL"
-fi
+# 调用下载管理器
+download_manager "$DOWNLOAD_URL" "$FILE_NAME"
 
 if ! tar -tzf "$FILE_NAME" >/dev/null 2>&1; then
-    echo -e "${Red}严重错误：安装包下载失败！${Font}"
+    echo -e "${Red}严重错误：安装包下载失败或文件损坏！${Font}"
     exit 1
 fi
 
 # ==========================================
-# 7. 安装与数据库处理 (关键逻辑修改)
+# 7. 安装与配置
 # ==========================================
-echo -e "${Yellow}>> [5/6] 安装与配置...${Font}"
+echo -e "${Yellow}>> [6/7] 安装与配置...${Font}"
 systemctl stop x-ui >/dev/null 2>&1
 killall x-ui >/dev/null 2>&1
 rm -rf x-ui
@@ -185,24 +272,21 @@ tar zxvf "$FILE_NAME" >/dev/null
 cd x-ui
 chmod +x x-ui x-ui.sh bin/xray-linux-*
 ln -sf "$INSTALL_PATH/x-ui.sh" "$BIN_LINK"
-
 mkdir -p /etc/x-ui/
 
-# --- 分支逻辑：标准安装 vs 恢复安装 ---
 if [ "$INSTALL_MODE" == "2" ]; then
     echo -e "${Yellow}>> 正在执行恢复模式，下载配置文件...${Font}"
     rm -f "$DB_PATH"
     
-    # 尝试主链接
-    wget $NET_OPT --no-check-certificate -O "$DB_PATH" "$DB_URL_1"
+    # 尝试下载主备份 (使用智能下载器)
+    download_manager "$DB_URL_1" "$DB_PATH"
     
-    # 如下载失败，尝试备用链接
-    if [ ! -s "$DB_PATH" ]; then
-        echo -e "${Red}主链接下载失败，切换备用链接...${Font}"
-        wget $NET_OPT --no-check-certificate -O "$DB_PATH" "$DB_URL_2"
+    # 检查是否成功，失败则尝试备用
+    if [ ! -s "$DB_PATH" ] || [ $(stat -c%s "$DB_PATH") -lt 1000 ]; then
+        echo -e "${Red}主链接失败，尝试备用链接...${Font}"
+        download_manager "$DB_URL_2" "$DB_PATH"
     fi
     
-    # 检查是否下载成功
     if [ -s "$DB_PATH" ]; then
         echo -e "${Green}配置文件恢复成功！${Font}"
     else
@@ -211,35 +295,38 @@ if [ "$INSTALL_MODE" == "2" ]; then
     fi
 else
     echo -e "${Yellow}>> 执行标准安装...${Font}"
-    # 生成/初始化数据库
     ./x-ui setting -port $SET_PORT -username $SET_USER -password $SET_PASS >/dev/null 2>&1
     [ ! -f "$DB_PATH" ] && cp /usr/local/x-ui/bin/x-ui.db "$DB_PATH"
 fi
 
-# --- 统一强制重置账号 (防止恢复的数据库密码未知) ---
-# 无论你是标准安装还是恢复安装，我都会把账号重置为 3344，但保留恢复进来的节点数据
+# --- 统一强制重置账号 ---
+echo -e "${Yellow}>> 正在强制重置账户权限...${Font}"
+systemctl stop x-ui >/dev/null 2>&1
+killall x-ui >/dev/null 2>&1
+chmod 777 "$DB_PATH" >/dev/null 2>&1
+
+RESET_SUCCESS=0
 if command -v sqlite3 >/dev/null 2>&1; then
-    echo -e "${Yellow}>> 正在同步账户信息...${Font}"
-    
-    # 强制修正路径和端口
-    sqlite3 "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
-    sqlite3 "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
-    
-    # 强制修正账号密码 (保留节点表 inbounds 不动)
-    sqlite3 "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
-    
-    # 校验
-    if [ "$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")" != "$SET_PASS" ]; then
-        ./x-ui setting -username $SET_USER -password $SET_PASS
-    else
-        echo -e "${Green}账户权限配置完成！${Font}"
+    sqlite3 -cmd ".timeout 2000" "$DB_PATH" "UPDATE settings SET value='/' WHERE key='webBasePath';"
+    sqlite3 -cmd ".timeout 2000" "$DB_PATH" "UPDATE settings SET value='$SET_PORT' WHERE key='webPort';"
+    sqlite3 -cmd ".timeout 2000" "$DB_PATH" "UPDATE users SET username='$SET_USER', password='$SET_PASS' WHERE id=1;"
+    CURRENT_PASS=$(sqlite3 "$DB_PATH" "SELECT password FROM users WHERE id=1;")
+    if [ "$CURRENT_PASS" == "$SET_PASS" ]; then
+        echo -e "${Green}账户权限重置成功 (SQL模式)${Font}"
+        RESET_SUCCESS=1
     fi
 fi
+
+if [ $RESET_SUCCESS -eq 0 ]; then
+    echo -e "${Yellow}使用官方接口重置账号...${Font}"
+    ./x-ui setting -username "$SET_USER" -password "$SET_PASS" -port "$SET_PORT" >/dev/null 2>&1
+fi
+chmod 644 "$DB_PATH" >/dev/null 2>&1
 
 # ==========================================
 # 8. 启动与放行
 # ==========================================
-echo -e "${Yellow}>> [6/6] 启动服务...${Font}"
+echo -e "${Yellow}>> [7/7] 启动服务...${Font}"
 cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
@@ -262,7 +349,6 @@ systemctl enable x-ui
 systemctl restart x-ui
 sleep 2
 
-# 防火墙兼容
 if command -v ufw >/dev/null 2>&1; then ufw allow $SET_PORT/tcp >/dev/null 2>&1; fi
 if command -v firewall-cmd >/dev/null 2>&1; then 
     firewall-cmd --zone=public --add-port=$SET_PORT/tcp --permanent >/dev/null 2>&1
@@ -270,12 +356,11 @@ if command -v firewall-cmd >/dev/null 2>&1; then
 fi
 iptables -I INPUT -p tcp --dport $SET_PORT -j ACCEPT 2>/dev/null
 
-# 最终信息展示
 IP=$(curl -s4m5 ip.sb)
 [ -z "$IP" ] && IP=$(curl -s6m5 ip.sb)
 
 echo -e "\n${Blue}#################################################${Font}"
-echo -e "${Green}      咸v咆哮制作 - 安装完成 (V5.2 恢复版)       ${Font}"
+echo -e "${Green}      咸v咆哮制作 - 安装完成 (V5.6 智能极速版)   ${Font}"
 echo -e "${Blue}#################################################${Font}"
 echo -e "访问地址 ：${Green}http://$IP:$SET_PORT${Font}"
 echo -e "用户名   ：${Green}$SET_USER${Font}"
