@@ -1,0 +1,25 @@
+cat << 'EOF' > find_xui.sh
+#!/bin/bash
+
+echo "正在 Debian 12 系统中搜寻 X-UI 相关安装包..."
+echo "-----------------------------------------------"
+
+# 定义搜索关键词
+KEYWORDS=("x-ui" "xray" "3x-ui")
+
+for key in "${KEYWORDS[@]}"; do
+    echo -e "\n🔎 正在搜索包含 '$key' 的压缩包和脚本..."
+    
+    # 搜索常见的下载和临时目录，限制在常见的几个地方以提高速度
+    # 如果你想全盘搜索，可以将路径改为 /
+    find /root /home /tmp /var/cache -type f \( -name "*$key*.tar.gz" -o -name "*$key*.sh" -o -name "*$key*.zip" \) 2>/dev/null | while read -r line; do
+        echo -e "找到文件: \033[0;32m$line\033[0m"
+        ls -lh "$line"
+    done
+done
+
+echo "-----------------------------------------------"
+echo "搜索完成。如果上方没有显示结果，说明安装包可能在安装后被脚本自动删除了（很多一键脚本会清理缓存）。"
+EOF
+
+chmod +x find_xui.sh && ./find_xui.sh
