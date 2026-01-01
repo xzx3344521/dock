@@ -1,25 +1,42 @@
-cat << 'EOF' > find_xui.sh
+cat << 'EOF' > deep_search_xui.sh
 #!/bin/bash
 
-echo "正在 Debian 12 系统中搜寻 X-UI 相关安装包..."
-echo "-----------------------------------------------"
+echo "========================================================"
+echo "   正在进行 Debian 12 深度地毯式搜索 (X-UI/Xray)"
+echo "========================================================"
 
-# 定义搜索关键词
-KEYWORDS=("x-ui" "xray" "3x-ui")
+# 1. 🕵️‍♂️ 侦探模式：查操作历史 (最可能找到线索的地方)
+echo -e "\n[1/4] 正在分析命令历史 (.bash_history)..."
+HISTORY_MATCH=$(grep -E "wget|curl" ~/.bash_history | grep "x-ui" | tail -n 5)
+if [ -n "$HISTORY_MATCH" ]; then
+    echo -e "\033[0;32m发现曾经执行过的下载命令：\033[0m"
+    echo "$HISTORY_MATCH"
+    echo -e "👆 (如果上面是 curl | bash 格式，说明没保存安装包，是直接运行的)"
+else
+    echo "历史记录中未发现明显的下载命令。"
+fi
 
-for key in "${KEYWORDS[@]}"; do
-    echo -e "\n🔎 正在搜索包含 '$key' 的压缩包和脚本..."
-    
-    # 搜索常见的下载和临时目录，限制在常见的几个地方以提高速度
-    # 如果你想全盘搜索，可以将路径改为 /
-    find /root /home /tmp /var/cache -type f \( -name "*$key*.tar.gz" -o -name "*$key*.sh" -o -name "*$key*.zip" \) 2>/dev/null | while read -r line; do
-        echo -e "找到文件: \033[0;32m$line\033[0m"
-        ls -lh "$line"
-    done
+# 2. 📂 全盘搜索：不放过任何角落 (排除系统虚拟目录)
+echo -e "\n[2/4] 正在全盘搜索文件名包含 'x-ui' 的文件 (可能需要一点时间)..."
+# 排除 /proc, /sys, /run, /dev 避免报错
+find / -path /proc -prune -o -path /sys -prune -o -path /run -prune -o -path /dev -prune -o -type f -name "*x-ui*" -print 2>/dev/null | grep -vE "(/usr/local/x-ui|/var/lib/docker)" | head -n 20
+# (grep -v 是为了屏蔽掉已经安装好的程序文件，只找安装包)
+
+# 3. 📝 内容搜索：查找名字是 install.sh 但内容是 X-UI 的文件
+echo -e "\n[3/4] 正在检查常见的 install.sh 脚本内容..."
+# 搜索 /root 和 /home 下所有的 .sh 文件
+find /root /home /tmp -maxdepth 3 -name "*.sh" -type f 2>/dev/null | while read -r script; do
+    if grep -q "x-ui" "$script"; then
+        echo -e "\033[0;33m疑似目标脚本 (内容包含 x-ui): $script\033[0m"
+    fi
 done
 
-echo "-----------------------------------------------"
-echo "搜索完成。如果上方没有显示结果，说明安装包可能在安装后被脚本自动删除了（很多一键脚本会清理缓存）。"
+# 4. 📦 大文件搜索：查找可能是压缩包的残留
+echo -e "\n[4/4] 正在搜索最近修改过的压缩包 (tar.gz/zip)..."
+find /root /home /tmp -type f \( -name "*.tar.gz" -o -name "*.zip" \) -mtime -365 -size +1M 2>/dev/null | head -n 10
+
+echo -e "\n========================================================"
+echo "搜索结束。"
 EOF
 
-chmod +x find_xui.sh && ./find_xui.sh
+chmod +x deep_search_xui.sh && ./deep_search_xui.sh
