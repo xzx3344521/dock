@@ -1,0 +1,85 @@
+bash -c 'set -euo pipefail
+
+echo "==> [1/7] 检测系统..."
+. /etc/os-release || true
+echo "ID=${ID:-unknown} VERSION_CODENAME=${VERSION_CODENAME:-unknown}"
+if [ "${ID:-}" != "debian" ]; then
+  echo "❌ 该脚本仅针对 Debian。当前: ${ID:-unknown}"
+  exit 1
+fi
+
+echo "==> [2/7] 停止并清理可能已安装/混装的 Docker..."
+systemctl stop docker 2>/dev/null || true
+systemctl stop containerd 2>/dev/null || true
+
+apt-get remove -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin 2>/dev/null || true
+apt-get purge  -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
+
+# 清理可能残留的二进制（避免 docker 命令指向错误版本）
+rm -f /usr/bin/docker /usr/local/bin/docker /usr/bin/dockerd /usr/local/bin/dockerd 2>/dev/null || true
+
+echo "==> [3/7] 清理/修复 APT 断裂依赖..."
+apt-get clean || true
+apt-get update -y || true
+apt-get -y --fix-broken install || true
+
+echo "==> [4/7] 修复 Debian 源（优先官方 deb.debian.org，失败则切阿里云）..."
+backup="/etc/apt/sources.list.bak.$(date +%F_%H%M%S)"
+cp -a /etc/apt/sources.list "$backup" 2>/dev/null || true
+
+write_sources() {
+  local base="$1"
+  cat >/etc/apt/sources.list <<EOF
+deb ${base}/debian bullseye main contrib non-free
+deb ${base}/debian bullseye-updates main contrib non-free
+deb ${base}/debian-security bullseye-security main contrib non-free
+EOF
+}
+
+# 先写官方源
+write_sources "http://deb.debian.org"
+if ! apt-get update -y; then
+  echo "⚠️ 官方源不可用，切换到阿里云镜像..."
+  write_sources "http://mirrors.aliyun.com"
+  apt-get update -y
+fi
+
+echo "==> [5/7] 移除任何 bookworm 源（避免再次装到 Debian 12 包）..."
+mkdir -p /root/apt-list-backup
+for f in /etc/apt/sources.list.d/*.list; do
+  [ -e "$f" ] || continue
+  if grep -qi "bookworm" "$f"; then
+    echo "  - 发现 bookworm 源: $f -> 移到 /root/apt-list-backup/"
+    mv -f "$f" /root/apt-list-backup/
+  fi
+done
+
+apt-get update -y
+apt-get -y --fix-broken install
+
+echo "==> [6/7] 添加 Docker 官方源（强制 bullseye）并安装..."
+apt-get install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+
+curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+cat >/etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bullseye stable
+EOF
+
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+systemctl enable --now docker
+
+echo "==> [7/7] 验证安装..."
+docker --version
+docker run --rm hello-world >/dev/null 2>&1 && echo "✅ Docker 已安装并验证通过（hello-world 成功）" || {
+  echo "⚠️ Docker 已安装，但 hello-world 未通过。请执行：journalctl -u docker -n 200 --no-pager"
+  exit 1
+}
+
+echo "完成。"
+'
