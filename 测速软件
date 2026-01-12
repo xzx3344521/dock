@@ -1,51 +1,72 @@
-#!/bin/bash
-echo "Docker 测速工具安装脚本 - 稳定版"
+cat > librespeed_install.sh << 'EOF'
+#!/usr/bin/env bash
+set -e
 
-# 使用与RustDesk相同的目录结构
-BASE_DIR="/data/speedtest"
-mkdir -p $BASE_DIR
+APP_NAME="librespeed"
+DEFAULT_PORT=8000
+WORKDIR="/root/librespeed"
 
-# 停止并删除旧容器
-docker stop librespeed 2>/dev/null
-docker rm librespeed 2>/dev/null
+echo "======================================="
+echo " LibreSpeed 内网测速 Docker 一键部署"
+echo "======================================="
 
-echo "正在安装 LibreSpeed..."
-
-# 创建目录结构
-mkdir -p $BASE_DIR/{config,results,logs}
-
-# 使用稳定的 linuxserver/librespeed 镜像
-docker run -d \
-    --name librespeed \
-    -p 8080:80 \
-    -p 8081:81 \
-    -e PUID=1000 \
-    -e PGID=1000 \
-    -e TZ=Asia/Shanghai \
-    # 按照RustDesk的挂载模式
-    -v $BASE_DIR/config:/config \
-    -v $BASE_DIR/results:/results \
-    -v $BASE_DIR/logs:/logs \
-    --restart=unless-stopped \
-    linuxserver/librespeed:latest
-
-echo "等待容器启动..."
-sleep 10
-
-# 检查安装状态
-if docker ps -f name=librespeed | grep -q librespeed; then
-    echo "✅ LibreSpeed 安装成功!"
-    echo "📊 访问地址: http://你的服务器IP:8080"
-    echo "💾 数据目录: $BASE_DIR/"
-else
-    echo "❌ 安装失败，查看日志:"
-    docker logs librespeed
+# root 检查
+if [ "$(id -u)" -ne 0 ]; then
+  echo "❌ 请使用 root 运行"
+  exit 1
 fi
 
-echo ""
-echo "目录结构:"
-ls -la $BASE_DIR/
+# 端口选择
+read -p "请输入访问端口（默认 ${DEFAULT_PORT}，直接回车使用默认）: " PORT
+PORT=${PORT:-$DEFAULT_PORT}
 
-echo ""
-echo "容器状态:"
-docker ps -f name=librespeed --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+# 端口简单校验
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "❌ 端口不合法"
+  exit 1
+fi
+
+echo "▶ 使用端口: $PORT"
+
+# Docker 检查
+if ! command -v docker >/dev/null 2>&1; then
+  echo "❌ 未检测到 Docker，请先安装 Docker"
+  exit 1
+fi
+
+# docker compose 检查
+if ! docker compose version >/dev/null 2>&1; then
+  echo "❌ 未检测到 docker compose 插件"
+  exit 1
+fi
+
+# 创建目录
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
+
+# 生成 docker-compose.yml
+cat > docker-compose.yml <<YAML
+version: '3'
+services:
+  librespeed:
+    image: librespeed/speedtest:latest
+    container_name: librespeed
+    restart: always
+    ports:
+      - "${PORT}:80"
+YAML
+
+# 启动
+echo "▶ 启动 LibreSpeed 容器..."
+docker compose up -d
+
+# 验证
+sleep 1
+if docker ps | grep -q librespeed; then
+  echo "✅ LibreSpeed 启动成功"
+  echo "🌐 访问地址: http://$(hostname -I | awk '{print $1}'):${PORT}"
+else
+  echo "❌ LibreSpeed 启动失败"
+  docker compose logs
+fi
+EOF
