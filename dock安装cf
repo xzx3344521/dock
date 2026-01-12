@@ -1,3 +1,6 @@
+mkdir -p /data
+
+cat > /data/install_docker_offline.sh << 'EOF'
 cat > /data/install_docker_offline.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
