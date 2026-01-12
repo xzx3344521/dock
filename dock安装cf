@@ -1,220 +1,145 @@
-mkdir -p /data
-
-cat > /data/install_docker_offline.sh << 'EOF'
-cat > /data/install_docker_offline.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 仅使用你提供的离线包（Docker 本体来源固定为 ZIP）
+# ===============================
+# 仅使用你指定的 Docker 离线包
+# ===============================
 URL_PRIMARY="https://pub-b69a7194f4ea42fba6aa990c49bded91.r2.dev/xui/dockde12.zip"
 URL_BACKUP="https://freeyx.vps3344.dpdns.org/xui/dockde12.zip"
 
-WORKDIR="/tmp/docker_offline_install"
+WORKDIR="/root/docker_offline_install"
 ZIP_FILE="$WORKDIR/dockde12.zip"
 
-log(){ echo "[*] $*"; }
-warn(){ echo "[!] $*"; }
-die(){ echo "[X] $*"; exit 1; }
+log(){ echo -e "\033[32m[✔]\033[0m $*"; }
+warn(){ echo -e "\033[33m[!]\033[0m $*"; }
+err(){ echo -e "\033[31m[✘]\033[0m $*"; }
 
-need_root() {
-  [ "$(id -u)" -eq 0 ] || die "请使用 root 运行（sudo -i 后再执行）"
-}
+# ===============================
+# 基础检查
+# ===============================
+[ "$(id -u)" -eq 0 ] || { err "请使用 root 运行"; exit 1; }
+[ "$(uname -m)" = "x86_64" ] || { err "仅支持 x86_64 架构"; exit 1; }
 
-arch_check() {
-  [ "$(uname -m)" = "x86_64" ] || die "仅支持 x86_64（AMD64）架构"
-}
-
-wait_dpkg_locks() {
-  log "检查 dpkg/apt 锁..."
-  local i
-  for i in $(seq 1 60); do
+# ===============================
+# dpkg / apt 锁等待
+# ===============================
+wait_lock() {
+  for i in {1..60}; do
     if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
        fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
        fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
       sleep 2
-      continue
+    else
+      return
     fi
-    return 0
   done
-  die "dpkg/apt 锁持续占用（可能正在自动更新）。请稍后再运行。"
-}
-
-env_sanity_check() {
-  # systemd 检查：没有 systemd 的环境，docker.service 无法按常规启动
-  if ! command -v systemctl >/dev/null 2>&1; then
-    warn "检测不到 systemctl（可能不是标准 Debian 主机环境）。安装可能完成，但无法以 systemd 方式启动。"
-  else
-    if ! systemctl is-system-running >/dev/null 2>&1; then
-      warn "systemd 可能未正常运行（容器/精简环境常见）。即使安装成功，docker 服务也可能无法启动。"
-    fi
-  fi
-
-  # 容器环境提示（不强制退出，但给出风险提示）
-  if command -v systemd-detect-virt >/dev/null 2>&1; then
-    local virt
-    virt="$(systemd-detect-virt || true)"
-    if [ "$virt" != "none" ] && [ -n "$virt" ]; then
-      warn "检测到虚拟化/容器环境：$virt。若是非特权 LXC/OpenVZ，Docker 可能无法运行（需要特权/开启 nesting）。"
-    fi
-  fi
-}
-
-install_tools_if_missing() {
-  # 仅安装“解压/下载必要工具”，不涉及 Docker 包来源
-  wait_dpkg_locks
-
-  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    log "安装下载工具 curl..."
-    apt-get update -y >/dev/null 2>&1 || true
-    apt-get install -y curl >/dev/null 2>&1 || die "无法安装 curl（网络或源不可用）"
-  fi
-
-  if ! command -v unzip >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
-    log "安装解压工具 unzip（或 python3）..."
-    apt-get update -y >/dev/null 2>&1 || true
-    apt-get install -y unzip >/dev/null 2>&1 || true
-    if ! command -v unzip >/dev/null 2>&1; then
-      apt-get install -y python3 >/dev/null 2>&1 || die "缺少 unzip/python3 且无法安装（网络或源不可用）"
-    fi
-  fi
-}
-
-stop_old_services() {
-  log "停止可能存在的旧服务..."
-  systemctl stop docker >/dev/null 2>&1 || true
-  systemctl stop containerd >/dev/null 2>&1 || true
-}
-
-purge_conflicts() {
-  log "清理可能冲突的旧包（尽量保证可重复安装）..."
-  # 这些包会与离线 docker-ce / containerd.io / runc 冲突
-  local PKGS="docker.io docker-doc docker-compose podman-docker containerd runc docker-ce docker-ce-cli containerd.io"
-  wait_dpkg_locks
-  apt-get remove -y $PKGS >/dev/null 2>&1 || true
-  apt-get purge -y  $PKGS >/dev/null 2>&1 || true
-  apt-get autoremove -y >/dev/null 2>&1 || true
-
-  # 关键：旧 containerd 配置经常导致新版本 containerd 启动失败
-  if [ -f /etc/containerd/config.toml ]; then
-    log "备份并移除旧 /etc/containerd/config.toml（避免 containerd 启动冲突）"
-    mv /etc/containerd/config.toml "/etc/containerd/config.toml.bak.$(date +%s)" || true
-  fi
-}
-
-download_zip() {
-  log "准备下载离线包（双线路）..."
-  rm -rf "$WORKDIR"
-  mkdir -p "$WORKDIR"
-
-  local ok=0
-  if command -v curl >/dev/null 2>&1; then
-    curl -L -k --retry 3 --connect-timeout 10 -o "$ZIP_FILE" "$URL_PRIMARY" && ok=1 || true
-    if [ "$ok" -ne 1 ]; then
-      curl -L -k --retry 3 --connect-timeout 10 -o "$ZIP_FILE" "$URL_BACKUP" && ok=1 || true
-    fi
-  else
-    wget --no-check-certificate -t 3 -T 10 -O "$ZIP_FILE" "$URL_PRIMARY" && ok=1 || true
-    if [ "$ok" -ne 1 ]; then
-      wget --no-check-certificate -t 3 -T 10 -O "$ZIP_FILE" "$URL_BACKUP" && ok=1 || true
-    fi
-  fi
-
-  [ "$ok" -eq 1 ] || die "离线包下载失败（两条线路都失败）"
-  [ -s "$ZIP_FILE" ] || die "离线包下载为空文件"
-}
-
-extract_debs() {
-  log "解压离线包..."
-  cd "$WORKDIR"
-
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -oq "$ZIP_FILE" || die "unzip 解压失败"
-  else
-    python3 - <<PY
-import zipfile, sys
-try:
-  zipfile.ZipFile("$ZIP_FILE").extractall("$WORKDIR")
-except Exception as e:
-  print(e)
-  sys.exit(1)
-PY
-  fi
-
-  # 防止套娃目录：把所有 deb 收拢到 WORKDIR 根目录
-  find "$WORKDIR" -name "*.deb" -exec mv -f {} "$WORKDIR" \; 2>/dev/null || true
-
-  ls "$WORKDIR"/*.deb >/dev/null 2>&1 || die "解压后未找到 .deb 文件（可能压缩包结构变化或损坏）"
-}
-
-install_debs_with_fix() {
-  log "安装离线 deb 包..."
-  cd "$WORKDIR"
-
-  # 第一次安装可能会失败（依赖缺失），不直接退出
-  set +e
-  dpkg -i --force-overwrite ./*.deb >/dev/null 2>&1
-  local rc=$?
-  set -e
-
-  if [ "$rc" -ne 0 ]; then
-    warn "dpkg 首次安装遇到依赖/冲突，尝试 apt 自动修复依赖..."
-    wait_dpkg_locks
-    apt-get update -y >/dev/null 2>&1 || true
-    apt-get -f install -y || die "依赖自动修复失败（可能网络/源不可用或系统依赖严重缺失）"
-
-    log "依赖修复完成，重试安装 deb..."
-    dpkg -i --force-overwrite ./*.deb >/dev/null 2>&1 || die "重试 dpkg 安装仍失败"
-  fi
-}
-
-start_and_verify() {
-  log "启动 Docker..."
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl unmask docker >/dev/null 2>&1 || true
-    systemctl enable docker >/dev/null 2>&1 || true
-    systemctl restart docker >/dev/null 2>&1 || true
-    sleep 1
-  else
-    warn "没有 systemctl，跳过 docker.service 启动（需要你自行以非 systemd 方式启动）"
-  fi
-
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    log "Docker 安装并运行成功：$(docker --version 2>/dev/null || true)"
-    if docker compose version >/dev/null 2>&1; then
-      log "Compose 可用：$(docker compose version 2>/dev/null || true)"
-    fi
-    return 0
-  fi
-
-  warn "Docker 未能正常运行。常见原因：容器环境/内核特性缺失/systemd 不可用。"
-  if command -v systemctl >/dev/null 2>&1; then
-    warn "可用命令：journalctl -xeu docker.service"
-    systemctl status docker --no-pager >/dev/null 2>&1 || true
-  fi
+  err "dpkg/apt 锁长期占用，请稍后再试"
   exit 1
 }
 
-cleanup() {
-  rm -rf "$WORKDIR" >/dev/null 2>&1 || true
-}
+# ===============================
+# 环境提示（不强退）
+# ===============================
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+  virt=$(systemd-detect-virt || true)
+  if [ "$virt" != "none" ] && [ -n "$virt" ]; then
+    warn "检测到虚拟化/容器环境：$virt（非特权容器可能无法运行 Docker）"
+  fi
+fi
 
-main() {
-  need_root
-  arch_check
-  env_sanity_check
-  install_tools_if_missing
-  stop_old_services
-  purge_conflicts
-  download_zip
-  extract_debs
-  install_debs_with_fix
-  start_and_verify
-  cleanup
-}
+# ===============================
+# 准备工具（不涉及 Docker 来源）
+# ===============================
+wait_lock
+apt-get update -y >/dev/null 2>&1 || true
+apt-get install -y curl wget unzip python3 >/dev/null 2>&1 || true
 
-main
-EOF
+# ===============================
+# 停服务 + 清理冲突
+# ===============================
+log "停止旧 Docker / containerd"
+systemctl stop docker >/dev/null 2>&1 || true
+systemctl stop containerd >/dev/null 2>&1 || true
 
-chmod +x /data/install_docker_offline.sh
-bash /data/install_docker_offline.sh
+log "清理可能冲突的旧包"
+wait_lock
+apt-get remove -y docker.io docker-doc docker-compose podman-docker \
+  docker-ce docker-ce-cli containerd containerd.io runc >/dev/null 2>&1 || true
+apt-get purge -y docker.io docker-doc docker-compose podman-docker \
+  docker-ce docker-ce-cli containerd containerd.io runc >/dev/null 2>&1 || true
+apt-get autoremove -y >/dev/null 2>&1 || true
+
+# containerd 老配置是最大坑，直接备份移走
+if [ -f /etc/containerd/config.toml ]; then
+  warn "发现旧 containerd 配置，已备份并移除"
+  mv /etc/containerd/config.toml /etc/containerd/config.toml.bak.$(date +%s)
+fi
+
+# ===============================
+# 下载离线包（双线路）
+# ===============================
+rm -rf "$WORKDIR"
+mkdir -p "$WORKDIR"
+
+log "下载 Docker 离线包（主线路）"
+if ! curl -L -k --retry 3 --connect-timeout 10 -o "$ZIP_FILE" "$URL_PRIMARY"; then
+  warn "主线路失败，切换备用线路"
+  curl -L -k --retry 3 --connect-timeout 10 -o "$ZIP_FILE" "$URL_BACKUP" \
+    || { err "离线包下载失败"; exit 1; }
+fi
+
+[ -s "$ZIP_FILE" ] || { err "下载的 ZIP 文件为空"; exit 1; }
+
+# ===============================
+# 解压并整理 deb
+# ===============================
+log "解压离线包"
+cd "$WORKDIR"
+unzip -oq "$ZIP_FILE" || python3 - <<PY
+import zipfile
+zipfile.ZipFile("$ZIP_FILE").extractall("$WORKDIR")
+PY
+
+find "$WORKDIR" -name "*.deb" -exec mv -f {} "$WORKDIR" \; 2>/dev/null
+ls *.deb >/dev/null 2>&1 || { err "未找到 deb 文件"; exit 1; }
+
+# ===============================
+# 安装（两段式，保证成功率）
+# ===============================
+log "安装 Docker（第一次 dpkg）"
+set +e
+dpkg -i --force-overwrite *.deb >/dev/null 2>&1
+set -e
+
+log "修复依赖"
+wait_lock
+apt-get -f install -y || { err "依赖修复失败"; exit 1; }
+
+log "重新安装 Docker（第二次 dpkg）"
+dpkg -i --force-overwrite *.deb >/dev/null 2>&1 || { err "dpkg 安装失败"; exit 1; }
+
+# ===============================
+# 启动并验证
+# ===============================
+log "启动 Docker"
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl unmask docker >/dev/null 2>&1 || true
+systemctl enable docker >/dev/null 2>&1 || true
+systemctl restart docker >/dev/null 2>&1 || true
+sleep 1
+
+if docker info >/dev/null 2>&1; then
+  log "Docker 安装成功"
+  docker --version
+  docker compose version >/dev/null 2>&1 && docker compose version
+else
+  err "Docker 启动失败"
+  journalctl -xeu docker.service | tail -n 30
+  exit 1
+fi
+
+# ===============================
+# 清理
+# ===============================
+rm -rf "$WORKDIR"
+log "完成"
