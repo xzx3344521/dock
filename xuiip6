@@ -1,32 +1,58 @@
-bash << 'EOF'
-set -e
+#!/usr/bin/env bash
+# SOCKS5 自动 kill → 测速 → 恢复 一体脚本
+# 适配：x-ui / Xray SOCKS5
+# 目标：杜绝 0 延迟假活
 
-echo "=== [1/5] 安装依赖 ==="
-apt update -y >/dev/null 2>&1 || true
-apt install -y jq >/dev/null 2>&1 || true
+### ====== 配置区 ======
+SOCKS_HOST="127.0.0.1"
+SOCKS_PORT=32238
+SOCKS_USER="88888888"
+SOCKS_PASS="88888888"
+TEST_URL="https://ipv6.google.com"
+TIMEOUT=15
+### ====================
 
-XRAY_CONF="/usr/local/x-ui/bin/config.json"
+echo "==============================="
+echo " SOCKS5 自动真实测速开始"
+echo "==============================="
 
-echo "=== [2/5] 备份 Xray 配置 ==="
-cp "$XRAY_CONF" "${XRAY_CONF}.bak.$(date +%s)"
+echo "[1/5] 清理 SOCKS5 旧会话..."
+ss -K sport = :$SOCKS_PORT >/dev/null 2>&1 || true
+sleep 1
 
-echo "=== [3/5] 强制 SOCKS5 出站为 IPv6 + 禁止复用 ==="
-jq '
-(.outbounds[] | select(.protocol=="freedom")) |=
-  (.settings.domainStrategy="UseIPv6"
-   | .settings.redirect=null
-   | .mux.enabled=false)
-|
-(.inbounds[] | select(.protocol=="socks")) |=
-  (.sniffing.enabled=false)
-' "$XRAY_CONF" > /tmp/xray.json && mv /tmp/xray.json "$XRAY_CONF"
+echo "[2/5] 等待端口稳定..."
+sleep 2
 
-echo "=== [4/5] 清空所有现有 TCP 会话（防假活）==="
-ss -K dst :32238 || true
+echo "[3/5] 进行真实 SOCKS5 出站测速..."
+START_TIME=$(date +%s%3N)
 
-echo "=== [5/5] 重启服务 ==="
-systemctl restart x-ui || true
-systemctl restart xray || true
+HTTP_CODE=$(curl \
+  --socks5-hostname ${SOCKS_USER}:${SOCKS_PASS}@${SOCKS_HOST}:${SOCKS_PORT} \
+  --connect-timeout $TIMEOUT \
+  --max-time $TIMEOUT \
+  -o /tmp/socks5_test.html \
+  -s -w "%{http_code}" \
+  $TEST_URL)
 
-echo "=== 完成：SOCKS5 已进入“非假活”模式 ==="
-EOF
+END_TIME=$(date +%s%3N)
+ELAPSED=$((END_TIME - START_TIME))
+
+echo "[4/5] 校验测速结果..."
+
+if [ "$HTTP_CODE" = "200" ]; then
+  echo "--------------------------------"
+  echo " SOCKS5 出站：成功"
+  echo " HTTP 状态码：$HTTP_CODE"
+  echo " 实际耗时  ：${ELAPSED} ms"
+  echo " 结果      ：真实出站（非假活）"
+  echo "--------------------------------"
+else
+  echo "--------------------------------"
+  echo " SOCKS5 出站：失败"
+  echo " HTTP 状态码：$HTTP_CODE"
+  echo " 结果      ：出口异常"
+  echo "--------------------------------"
+fi
+
+echo "[5/5] 恢复完成（无需人工操作）"
+echo "==============================="
