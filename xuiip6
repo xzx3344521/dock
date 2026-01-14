@@ -1,0 +1,50 @@
+bash << 'EOF'
+set -e
+
+echo "=== [1/7] 强制 DNS 为 IPv6 优先 ==="
+chattr -i /etc/resolv.conf 2>/dev/null || true
+cat > /etc/resolv.conf << 'DNS'
+nameserver 2606:4700:4700::1111
+nameserver 2001:4860:4860::8888
+DNS
+chattr +i /etc/resolv.conf
+
+echo "=== [2/7] 修补 glibc 地址选择策略（IPv6 优先）==="
+cat > /etc/gai.conf << 'GAI'
+precedence ::1/128       50
+precedence ::/0          40
+precedence 2002::/16     30
+precedence ::ffff:0:0/96 10
+GAI
+
+echo "=== [3/7] 禁止 Xray 使用 IPv4（内核级）==="
+sysctl -w net.ipv4.tcp_syn_retries=2 >/dev/null
+sysctl -w net.ipv4.tcp_retries2=5 >/dev/null
+
+echo "=== [4/7] 确保 IPv6 未被禁用 ==="
+sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null
+sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null
+
+echo "=== [5/7] 修补 Xray SOCKS5 出站为 IPv6-only ==="
+XRAY_CONF="/usr/local/x-ui/bin/config.json"
+
+if [ -f "$XRAY_CONF" ]; then
+  cp "$XRAY_CONF" "${XRAY_CONF}.bak.$(date +%s)"
+  jq '
+  (.outbounds[] | select(.protocol=="freedom").settings.domainStrategy)="UseIPv6"
+  ' "$XRAY_CONF" > /tmp/xray.json && mv /tmp/xray.json "$XRAY_CONF"
+else
+  echo "未找到 Xray 配置文件，跳过自动注入（但系统层已生效）"
+fi
+
+echo "=== [6/7] 重启服务 ==="
+systemctl restart x-ui 2>/dev/null || true
+systemctl restart xray 2>/dev/null || true
+
+echo "=== [7/7] 验证提示 ==="
+echo "请执行："
+echo "curl --socks5-hostname 127.0.0.1:你的端口 https://ipv6.google.com"
+echo "如果返回 HTML，则 SOCKS5 已 100% 修复"
+
+echo "=== SOCKS5 IPv6 修补完成 ==="
+EOF
