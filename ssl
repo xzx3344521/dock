@@ -1,0 +1,187 @@
+cat >/usr/local/bin/issue_cert.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ===== 可调参数 =====
+INSTALL_BASE="/data"               # 证书安装目录根路径
+ACME="${HOME}/.acme.sh/acme.sh"    # acme.sh 路径（默认安装位置）
+CA_SERVER="letsencrypt"            # 默认使用 Let's Encrypt
+KEY_NAME="key.pem"
+FULLCHAIN_NAME="fullchain.pem"
+
+# ===== 工具函数 =====
+log() { printf "\n[%s] %s\n" "$(date '+%F %T')" "$*"; }
+die() { printf "\n[ERROR] %s\n" "$*" >&2; exit 1; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1，请先安装。"
+}
+
+usage() {
+  cat <<USAGE
+用法:
+  issue_cert.sh <domain> [--email you@example.com] [--force] [--wildcard]
+
+说明:
+  - 自动尝试多种签发机制（Cloudflare DNS API -> standalone 80 -> 手动DNS保底）
+  - 证书安装到: ${INSTALL_BASE}/<domain>/${KEY_NAME} 与 ${FULLCHAIN_NAME}
+  - 自动续期: DNS API/standalone 都会被 acme.sh cron 管理（手动DNS无法自动续期）
+
+参数:
+  --email     指定邮箱（首次安装 acme.sh 时用过也可不填）
+  --force     强制重签
+  --wildcard  同时签发通配符 *.domain（仅DNS方式支持；standalone不支持）
+USAGE
+}
+
+# ===== 解析参数 =====
+if [[ $# -lt 1 ]]; then usage; exit 1; fi
+
+DOMAIN=""
+EMAIL=""
+FORCE="0"
+WILDCARD="0"
+
+DOMAIN="$1"; shift || true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --email) EMAIL="${2:-}"; shift 2;;
+    --force) FORCE="1"; shift;;
+    --wildcard) WILDCARD="1"; shift;;
+    -h|--help) usage; exit 0;;
+    *) die "未知参数: $1";;
+  esac
+done
+
+# ===== 前置检查 =====
+need_cmd curl
+need_cmd mkdir
+need_cmd awk
+need_cmd sed
+
+if [[ ! -x "$ACME" ]]; then
+  log "未发现 acme.sh，开始安装..."
+  if [[ -n "${EMAIL}" ]]; then
+    curl -fsSL https://get.acme.sh | sh -s email="${EMAIL}"
+  else
+    curl -fsSL https://get.acme.sh | sh
+  fi
+fi
+
+# 兼容 alias 未生效情况
+if [[ ! -x "$ACME" ]]; then
+  die "acme.sh 安装后仍未找到: $ACME。请确认是否安装在 ${HOME}/.acme.sh/ 下。"
+fi
+
+# 设定默认 CA
+log "设置默认 CA 为: ${CA_SERVER}"
+"$ACME" --set-default-ca --server "${CA_SERVER}" >/dev/null
+
+INSTALL_DIR="${INSTALL_BASE}/${DOMAIN}"
+mkdir -p "${INSTALL_DIR}"
+
+KEY_PATH="${INSTALL_DIR}/${KEY_NAME}"
+FULLCHAIN_PATH="${INSTALL_DIR}/${FULLCHAIN_NAME}"
+
+ISSUE_ARGS=(--issue -d "${DOMAIN}")
+if [[ "${WILDCARD}" == "1" ]]; then
+  # 通配符只适用于 DNS 验证
+  ISSUE_ARGS=(--issue -d "${DOMAIN}" -d "*.${DOMAIN}")
+fi
+if [[ "${FORCE}" == "1" ]]; then
+  ISSUE_ARGS+=("--force")
+fi
+
+install_cert() {
+  log "安装证书到: ${INSTALL_DIR}"
+  "$ACME" --install-cert -d "${DOMAIN}" \
+    --key-file "${KEY_PATH}" \
+    --fullchain-file "${FULLCHAIN_PATH}" \
+    --reloadcmd "echo cert_installed_for_${DOMAIN}" >/dev/null
+
+  log "完成。证书文件："
+  ls -l "${KEY_PATH}" "${FULLCHAIN_PATH}" || true
+
+  if command -v openssl >/dev/null 2>&1; then
+    log "证书信息："
+    openssl x509 -in "${FULLCHAIN_PATH}" -noout -subject -issuer -dates || true
+  fi
+}
+
+try_cloudflare_dns() {
+  # 若 WILDCARD=1 必须 DNS，且 Cloudflare 是最稳之一
+  if [[ -n "${CF_Token:-}" ]]; then
+    log "检测到 CF_Token，尝试 Cloudflare DNS API（dns_cf）签发..."
+    "$ACME" "${ISSUE_ARGS[@]}" --dns dns_cf && return 0
+    log "Cloudflare DNS API 签发失败，将尝试其他方式。"
+    return 1
+  fi
+  return 1
+}
+
+try_standalone_80() {
+  if [[ "${WILDCARD}" == "1" ]]; then
+    log "通配符证书不支持 standalone 80 验证，跳过。"
+    return 1
+  fi
+
+  # 仅做基础检查：80 端口本地可监听（不等于公网可达，但能过滤一部分情况）
+  if command -v ss >/dev/null 2>&1; then
+    if ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE '(:80$)|(\[::\]:80$)'; then
+      log "检测到本机已有服务占用 80 端口，standalone 可能失败（仍会尝试）。"
+    fi
+  fi
+
+  log "尝试 standalone 80（需要公网 80 可达）..."
+  "$ACME" "${ISSUE_ARGS[@]}" --standalone && return 0
+  log "standalone 80 签发失败。"
+  return 1
+}
+
+try_manual_dns() {
+  log "进入保底：手动 DNS TXT 验证（--dns）。"
+  log "注意：这种模式无法自动续期；续期时仍需要你手动添加 TXT。"
+  "$ACME" "${ISSUE_ARGS[@]}" --dns
+  log "上面输出了 TXT 记录，请去 DNS 面板添加后，等待生效。"
+  log "添加完成后，执行下面命令完成签发/续期："
+  echo "  ${ACME} --renew -d ${DOMAIN} --force"
+  echo
+  log "当你确认 TXT 已生效后，也可以直接回车继续（脚本会尝试 renew）。"
+  read -r -p "按回车继续（或 Ctrl+C 退出）: " _
+
+  "$ACME" --renew -d "${DOMAIN}" --force
+  return 0
+}
+
+main() {
+  log "开始签发域名证书：${DOMAIN}"
+  log "安装目录：${INSTALL_DIR}"
+
+  # 1) Cloudflare DNS API（最稳）
+  if try_cloudflare_dns; then
+    install_cert
+    log "提示：DNS API 模式支持自动续期（acme.sh cronjob 已自动管理）。"
+    exit 0
+  fi
+
+  # 2) standalone 80
+  if try_standalone_80; then
+    install_cert
+    log "提示：standalone 模式支持自动续期，但续期时仍需要 80 可用且公网可达。"
+    exit 0
+  fi
+
+  # 3) 手动 DNS 保底
+  if try_manual_dns; then
+    install_cert
+    log "提示：手动 DNS 模式不支持自动续期。建议尽快切换到 DNS API（如 Cloudflare Token）。"
+    exit 0
+  fi
+
+  die "所有方式都失败了。建议使用：${ACME} --issue -d ${DOMAIN} --debug 2 查看详细日志。"
+}
+
+main
+EOF
+
+chmod +x /usr/local/bin/issue_cert.sh
