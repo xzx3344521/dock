@@ -1,202 +1,75 @@
-cat >/usr/local/bin/issue_cert.sh <<'EOF'
-#!/bin/sh
-# POSIX sh script: compatible with Debian/Ubuntu/Alpine/busybox
-set -eu
+cat << 'EOF' > cert_apply.sh
+#!/bin/bash
 
-INSTALL_BASE="/data"
-KEY_NAME="key.pem"
-FULLCHAIN_NAME="fullchain.pem"
-CA_SERVER="letsencrypt"
-DEBUG_LEVEL="${DEBUG_LEVEL:-0}"   # 0=off, 1=--debug, 2=--debug 2
-ACME_SH="${ACME_SH:-}"           # allow override: ACME_SH=/path/to/acme.sh issue_cert.sh xxx
+# --- 1. 获取用户输入 ---
+read -p "请输入您要申请的域名 (例如: ui.shanghi.net): " DOMAIN
 
-log() { printf '\n[%s] %s\n' "$(date '+%F %T')" "$*"; }
-err() { printf '\n[ERROR] %s\n' "$*" >&2; }
-
-usage() {
-  cat <<USAGE
-用法:
-  issue_cert.sh <domain> [--email you@example.com] [--force] [--wildcard]
-
-说明:
-  1) 优先 Cloudflare DNS API（检测到 CF_Token 时自动启用，支持自动续期）
-  2) 再尝试 standalone 80（需要公网80可达，支持自动续期但续期仍需80）
-  3) 最后保底手动 DNS（可签发但无法自动续期）
-
-输出:
-  /data/<domain>/key.pem
-  /data/<domain>/fullchain.pem
-
-可选环境变量:
-  ACME_SH=/root/.acme.sh/acme.sh     # 指定 acme.sh 路径
-  DEBUG_LEVEL=1 或 2                  # 打开调试输出（对应 acme.sh --debug 或 --debug 2）
-
-示例:
-  issue_cert.sh ui.shanghi.net
-  CF_Token=xxx issue_cert.sh ui.shanghi.net
-  DEBUG_LEVEL=2 issue_cert.sh ui.shanghi.net --force
-USAGE
-}
-
-# ---- parse args ----
-[ $# -ge 1 ] || { usage; exit 1; }
-DOMAIN="$1"; shift
-
-EMAIL=""
-FORCE="0"
-WILDCARD="0"
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --email) EMAIL="${2:-}"; [ -n "$EMAIL" ] || { err "--email 缺少参数"; exit 1; }; shift 2;;
-    --force) FORCE="1"; shift;;
-    --wildcard) WILDCARD="1"; shift;;
-    -h|--help) usage; exit 0;;
-    *) err "未知参数: $1"; usage; exit 1;;
-  esac
-done
-
-# ---- find acme.sh ----
-find_acme() {
-  if [ -n "${ACME_SH}" ] && [ -x "${ACME_SH}" ]; then
-    echo "${ACME_SH}"; return 0
-  fi
-
-  # Common locations
-  if [ -x "$HOME/.acme.sh/acme.sh" ]; then echo "$HOME/.acme.sh/acme.sh"; return 0; fi
-  if [ -x "/root/.acme.sh/acme.sh" ]; then echo "/root/.acme.sh/acme.sh"; return 0; fi
-
-  # Try to locate in PATH
-  if command -v acme.sh >/dev/null 2>&1; then
-    command -v acme.sh; return 0
-  fi
-
-  return 1
-}
-
-ACME="$(find_acme || true)"
-
-# ---- install acme.sh if missing ----
-if [ -z "$ACME" ]; then
-  log "未发现 acme.sh，开始安装..."
-  if ! command -v curl >/dev/null 2>&1; then
-    err "系统没有 curl，请先安装 curl。"; exit 1
-  fi
-
-  if [ -n "$EMAIL" ]; then
-    curl -fsSL https://get.acme.sh | sh -s email="$EMAIL"
-  else
-    curl -fsSL https://get.acme.sh | sh
-  fi
-
-  ACME="$(find_acme || true)"
+# 简单的非空检查
+if [ -z "$DOMAIN" ]; then
+    echo "错误：域名不能为空！"
+    exit 1
 fi
 
-[ -n "$ACME" ] || { err "仍未找到 acme.sh。请确认安装用户与执行用户一致，或用 ACME_SH 指定路径。"; exit 1; }
+# 确认信息
+echo "----------------------------------------"
+echo "准备为域名: $DOMAIN 申请证书"
+echo "存放路径: /data/$DOMAIN.key"
+echo "----------------------------------------"
+read -p "确认无误请按回车继续，取消请按 Ctrl+C ..."
 
-log "使用 acme.sh: $ACME"
+# --- 2. 基础配置 ---
+CERT_BASE_DIR="/data"
+EMAIL="my@example.com" # 默认邮箱，不需要每次改
 
-# ---- prepare debug flags ----
-DBG=""
-if [ "$DEBUG_LEVEL" = "1" ]; then DBG="--debug"; fi
-if [ "$DEBUG_LEVEL" = "2" ]; then DBG="--debug 2"; fi
+# 确保目录存在
+mkdir -p $CERT_BASE_DIR
 
-# ---- set CA ----
-log "设置默认 CA 为: $CA_SERVER"
-# shellcheck disable=SC2086
-$ACME --set-default-ca --server "$CA_SERVER" $DBG >/dev/null 2>&1 || true
-
-# ---- prepare install dir ----
-INSTALL_DIR="${INSTALL_BASE}/${DOMAIN}"
-mkdir -p "$INSTALL_DIR"
-
-KEY_PATH="${INSTALL_DIR}/${KEY_NAME}"
-FULLCHAIN_PATH="${INSTALL_DIR}/${FULLCHAIN_NAME}"
-
-# ---- build issue args ----
-ISSUE_DOMAINS="-d $DOMAIN"
-if [ "$WILDCARD" = "1" ]; then
-  # 注意：通配符只适用于 DNS 验证。并且对 ui.shanghi.net 这样的子域，
-  # 通配符 *.ui.shanghi.net 通常没意义。一般通配符用于 shanghi.net -> *.shanghi.net
-  ISSUE_DOMAINS="-d $DOMAIN -d *.$DOMAIN"
+# --- 3. 环境检查 (安装 socat) ---
+# 只有未安装时才尝试安装
+if ! command -v socat &> /dev/null; then
+    echo "正在安装 socat (Standalone模式依赖)..."
+    if [ -f /usr/bin/apt ]; then
+        apt update && apt install socat -y
+    elif [ -f /usr/bin/yum ]; then
+        yum install socat -y
+    fi
+else
+    echo "检测到 socat 已安装，跳过安装步骤。"
 fi
 
-FORCE_FLAG=""
-[ "$FORCE" = "1" ] && FORCE_FLAG="--force"
-
-install_cert() {
-  log "安装证书到: $INSTALL_DIR"
-  # shellcheck disable=SC2086
-  $ACME --install-cert -d "$DOMAIN" \
-    --key-file "$KEY_PATH" \
-    --fullchain-file "$FULLCHAIN_PATH" \
-    --reloadcmd "echo cert_installed_for_$DOMAIN" $DBG
-
-  log "证书文件已生成："
-  ls -l "$KEY_PATH" "$FULLCHAIN_PATH" 2>/dev/null || true
-
-  if command -v openssl >/dev/null 2>&1; then
-    log "证书信息："
-    openssl x509 -in "$FULLCHAIN_PATH" -noout -subject -issuer -dates 2>/dev/null || true
-  fi
-}
-
-try_cf_dns() {
-  if [ -n "${CF_Token:-}" ]; then
-    log "检测到 CF_Token，尝试 Cloudflare DNS API（dns_cf）..."
-    # shellcheck disable=SC2086
-    $ACME --issue $ISSUE_DOMAINS --dns dns_cf $FORCE_FLAG $DBG && return 0
-    log "Cloudflare DNS API 失败，继续尝试其他方式。"
-  fi
-  return 1
-}
-
-try_standalone() {
-  if [ "$WILDCARD" = "1" ]; then
-    log "通配符不支持 standalone 80，跳过。"
-    return 1
-  fi
-
-  log "尝试 standalone 80（需要公网80可达，且本机可绑定80）..."
-  # shellcheck disable=SC2086
-  $ACME --issue $ISSUE_DOMAINS --standalone $FORCE_FLAG $DBG && return 0
-  log "standalone 80 失败。"
-  return 1
-}
-
-try_manual_dns() {
-  log "进入保底：手动 DNS TXT 验证（--dns）。"
-  log "提示：手动 DNS 无法自动续期（续期仍需手动加 TXT）。"
-  # shellcheck disable=SC2086
-  $ACME --issue $ISSUE_DOMAINS --dns $FORCE_FLAG $DBG || return 1
-
-  log "上面已输出 TXT 记录，请去 DNS 面板添加，等待生效后再执行："
-  echo "  $ACME --renew -d $DOMAIN --force $DBG"
-  return 0
-}
-
-log "开始签发：$DOMAIN"
-log "输出目录：$INSTALL_DIR"
-
-if try_cf_dns; then
-  install_cert
-  log "完成：DNS API 模式支持自动续期（acme.sh 自带 cronjob 管理）。"
-  exit 0
+# --- 4. 核心申请逻辑 ---
+# 检查 80 端口是否被占用 (简单的防呆检查)
+if lsof -Pi :80 -sTCP:LISTEN -t >/dev/null ; then
+    echo "警告：检测到 80 端口被占用！"
+    echo "Standalone 模式需要占用 80 端口。请先停止 Nginx/Apache，或确保没有服务占用 80。"
+    read -p "是否强制尝试继续? (y/n): " force_run
+    if [ "$force_run" != "y" ]; then
+        echo "脚本已终止。"
+        exit 1
+    fi
 fi
 
-if try_standalone; then
-  install_cert
-  log "完成：standalone 模式支持自动续期，但续期时仍需要 80 可用且公网可达。"
-  exit 0
-fi
+echo "正在向 CA 机构申请证书..."
+~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --email "$EMAIL" --force \
+--install-cert -d "$DOMAIN" \
+--key-file       "$CERT_BASE_DIR/$DOMAIN.key" \
+--fullchain-file "$CERT_BASE_DIR/$DOMAIN.crt" \
+--reloadcmd      "echo \"\$(date): 证书 $DOMAIN 已更新\" >> /var/log/acme_renewal.log"
 
-if try_manual_dns; then
-  log "已进入手动 DNS 模式：按提示添加 TXT 后续期/完成。"
-  exit 0
+# --- 5. 结果反馈 ---
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "========================================================"
+    echo " ✅  证书申请成功！"
+    echo " 域名: $DOMAIN"
+    echo " 公钥 (crt): $CERT_BASE_DIR/$DOMAIN.crt"
+    echo " 私钥 (key): $CERT_BASE_DIR/$DOMAIN.key"
+    echo "========================================================"
+else
+    echo ""
+    echo " ❌  申请失败。"
+    echo "请检查：1. 域名解析是否生效？ 2. 防火墙是否放行了 80 端口？"
 fi
-
-err "全部方式失败。建议：DEBUG_LEVEL=2 issue_cert.sh $DOMAIN --force 观察详细日志。"
-exit 1
 EOF
 
-chmod +x /usr/local/bin/issue_cert.sh
+chmod +x cert_apply.sh
