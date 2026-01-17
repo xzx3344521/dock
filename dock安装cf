@@ -1,3 +1,8 @@
+# ==========================================
+# 这一段是放在服务器上的“加载器”脚本
+# ==========================================
+
+# 1. 把真正的安装脚本写入到本地文件
 cat > /root/docker-install-zip.sh <<'EOF'
 #!/bin/bash
 
@@ -48,7 +53,7 @@ else
     log_info "unzip 已存在，准备就绪。"
 fi
 
-# 2. 目录检查与创建 (你的需求)
+# 2. 目录检查与创建
 log_info "[2/7] 初始化工作目录..."
 if [ -d "$WORKDIR" ]; then
     log_warn "目录已存在: $WORKDIR"
@@ -125,4 +130,9 @@ else
 fi
 EOF
 
+# 2. 赋予执行权限
 chmod +x /root/docker-install-zip.sh
+
+# 3. 【关键修改】立即执行这个脚本！
+# 如果不加这行，它只会生成文件然后静默退出
+bash /root/docker-install-zip.sh
